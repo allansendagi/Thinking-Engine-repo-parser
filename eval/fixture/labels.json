@@ -1,0 +1,57 @@
+{
+  "_comment": "Ground truth for eval/fixture/conversations.json. N is small by design (this is a mechanics smoke test, not a statistically meaningful sample) -- see README for why the real gate numbers only mean something against a real export at the 50-100 conversation scale.",
+
+  "excludedNodeIds": ["c1_u1_orig", "c1_a1_orig"],
+  "expectedCanonicalEventCount": 14,
+
+  "substantiveEvents": [
+    {
+      "sourceEventId": "c1_u1",
+      "required": true,
+      "acceptableTypes": ["new_idea", "claim"],
+      "evidenceContains": "explicit authority boundaries",
+      "identityGroup": "authority",
+      "isFirstInGroup": true
+    },
+    {
+      "sourceEventId": "c1_u2",
+      "required": false,
+      "acceptableTypes": ["refinement", "claim", "new_idea"],
+      "evidenceContains": "per-agent",
+      "identityGroup": "authority"
+    },
+    {
+      "sourceEventId": "c2_u1",
+      "required": true,
+      "acceptableTypes": ["refinement"],
+      "evidenceContains": "executable",
+      "identityGroup": "authority"
+    },
+    {
+      "sourceEventId": "c3_u1",
+      "required": true,
+      "acceptableTypes": ["new_idea", "claim"],
+      "evidenceContains": "trust verification",
+      "identityGroup": "payments"
+    },
+    {
+      "sourceEventId": "c4_u1",
+      "required": true,
+      "acceptableTypes": ["refinement", "contradiction"],
+      "evidenceContains": "independently verifiable",
+      "identityGroup": "authority"
+    }
+  ],
+
+  "expectedOpenLoop": {
+    "sourceEventId": "c4_u1",
+    "evidenceContains": "who performs",
+    "identityGroup": "authority"
+  },
+
+  "noiseSourceEventIds": ["c5_u1", "c5_u2"],
+
+  "criticalNonMatches": [
+    { "sourceEventId": "c3_u1", "mustNotMatchGroup": "authority" }
+  ]
+}

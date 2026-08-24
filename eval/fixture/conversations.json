@@ -1,0 +1,247 @@
+[
+  {
+    "id": "conv_1",
+    "title": "Agent authority",
+    "current_node": "c1_a2",
+    "mapping": {
+      "c1_root": { "id": "c1_root", "message": null, "parent": null, "children": ["c1_u1_orig", "c1_u1"] },
+
+      "c1_u1_orig": {
+        "id": "c1_u1_orig",
+        "parent": "c1_root",
+        "children": ["c1_a1_orig"],
+        "message": {
+          "id": "c1_u1_orig",
+          "author": { "role": "user" },
+          "content": { "content_type": "text", "parts": ["agents need boundaries i guess"] },
+          "create_time": 1755000000
+        }
+      },
+      "c1_a1_orig": {
+        "id": "c1_a1_orig",
+        "parent": "c1_u1_orig",
+        "children": [],
+        "message": {
+          "id": "c1_a1_orig",
+          "author": { "role": "assistant" },
+          "content": { "content_type": "text", "parts": ["Can you say more about what kind of boundaries you mean?"] },
+          "create_time": 1755000030
+        }
+      },
+
+      "c1_u1": {
+        "id": "c1_u1",
+        "parent": "c1_root",
+        "children": ["c1_a1"],
+        "message": {
+          "id": "c1_u1",
+          "author": { "role": "user" },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "I think AI agents need explicit authority boundaries -- without them you can't reason about what an agent is allowed to do."
+            ]
+          },
+          "create_time": 1755000090
+        }
+      },
+      "c1_a1": {
+        "id": "c1_a1",
+        "parent": "c1_u1",
+        "children": ["c1_u2"],
+        "message": {
+          "id": "c1_a1",
+          "author": { "role": "assistant" },
+          "content": { "content_type": "text", "parts": ["That makes sense -- how would those boundaries be defined?"] },
+          "create_time": 1755000120
+        }
+      },
+      "c1_u2": {
+        "id": "c1_u2",
+        "parent": "c1_a1",
+        "children": ["c1_a2"],
+        "message": {
+          "id": "c1_u2",
+          "author": { "role": "user" },
+          "content": {
+            "content_type": "text",
+            "parts": ["Probably per-agent, not a single global policy. Each agent's scope should be spelled out on its own."]
+          },
+          "create_time": 1755000150
+        }
+      },
+      "c1_a2": {
+        "id": "c1_a2",
+        "parent": "c1_u2",
+        "children": [],
+        "message": {
+          "id": "c1_a2",
+          "author": { "role": "assistant" },
+          "content": { "content_type": "text", "parts": ["Got it, per-agent scoping."] },
+          "create_time": 1755000180
+        }
+      }
+    }
+  },
+
+  {
+    "id": "conv_2",
+    "title": "Agent authority, continued",
+    "current_node": "c2_a1",
+    "mapping": {
+      "c2_root": { "id": "c2_root", "message": null, "parent": null, "children": ["c2_u1"] },
+      "c2_u1": {
+        "id": "c2_u1",
+        "parent": "c2_root",
+        "children": ["c2_a1"],
+        "message": {
+          "id": "c2_u1",
+          "author": { "role": "user" },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Been thinking more about the authority boundaries idea. Writing them down as policy isn't enough -- those boundaries need to be executable, something an agent's runtime can actually enforce."
+            ]
+          },
+          "create_time": 1755180000
+        }
+      },
+      "c2_a1": {
+        "id": "c2_a1",
+        "parent": "c2_u1",
+        "children": [],
+        "message": {
+          "id": "c2_a1",
+          "author": { "role": "assistant" },
+          "content": { "content_type": "text", "parts": ["Executable authority -- that's a much stronger requirement than a policy doc."] },
+          "create_time": 1755180040
+        }
+      }
+    }
+  },
+
+  {
+    "id": "conv_3",
+    "title": "Payments reconciliation",
+    "current_node": "c3_a1",
+    "mapping": {
+      "c3_root": { "id": "c3_root", "message": null, "parent": null, "children": ["c3_u1"] },
+      "c3_u1": {
+        "id": "c3_u1",
+        "parent": "c3_root",
+        "children": ["c3_a1"],
+        "message": {
+          "id": "c3_u1",
+          "author": { "role": "user" },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "For the payments reconciliation flow, we need trust verification between the ledger and the bank feed before a transaction gets marked settled."
+            ]
+          },
+          "create_time": 1755260000
+        }
+      },
+      "c3_a1": {
+        "id": "c3_a1",
+        "parent": "c3_u1",
+        "children": [],
+        "message": {
+          "id": "c3_a1",
+          "author": { "role": "assistant" },
+          "content": { "content_type": "text", "parts": ["What's the source of truth if the ledger and bank feed disagree?"] },
+          "create_time": 1755260030
+        }
+      }
+    }
+  },
+
+  {
+    "id": "conv_4",
+    "title": "Agent authority, verification",
+    "current_node": "c4_a1",
+    "mapping": {
+      "c4_root": { "id": "c4_root", "message": null, "parent": null, "children": ["c4_u1"] },
+      "c4_u1": {
+        "id": "c4_u1",
+        "parent": "c4_root",
+        "children": ["c4_a1"],
+        "message": {
+          "id": "c4_u1",
+          "author": { "role": "user" },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Actually, execution isn't enough either. Authority also needs to be independently verifiable -- some separate party has to be able to check the agent actually stayed inside its scope. I'm not sure who performs that verification though."
+            ]
+          },
+          "create_time": 1755520000
+        }
+      },
+      "c4_a1": {
+        "id": "c4_a1",
+        "parent": "c4_u1",
+        "children": [],
+        "message": {
+          "id": "c4_a1",
+          "author": { "role": "assistant" },
+          "content": { "content_type": "text", "parts": ["That's a real open question -- an internal audit function, or something external?"] },
+          "create_time": 1755520030
+        }
+      }
+    }
+  },
+
+  {
+    "id": "conv_5",
+    "title": "Scheduling",
+    "current_node": "c5_a2",
+    "mapping": {
+      "c5_root": { "id": "c5_root", "message": null, "parent": null, "children": ["c5_u1"] },
+      "c5_u1": {
+        "id": "c5_u1",
+        "parent": "c5_root",
+        "children": ["c5_a1"],
+        "message": {
+          "id": "c5_u1",
+          "author": { "role": "user" },
+          "content": { "content_type": "text", "parts": ["can you reformat this as a bullet list"] },
+          "create_time": 1755600000
+        }
+      },
+      "c5_a1": {
+        "id": "c5_a1",
+        "parent": "c5_u1",
+        "children": ["c5_u2"],
+        "message": {
+          "id": "c5_a1",
+          "author": { "role": "assistant" },
+          "content": { "content_type": "text", "parts": ["Sure, here it is as a bullet list."] },
+          "create_time": 1755600020
+        }
+      },
+      "c5_u2": {
+        "id": "c5_u2",
+        "parent": "c5_a1",
+        "children": ["c5_a2"],
+        "message": {
+          "id": "c5_u2",
+          "author": { "role": "user" },
+          "content": { "content_type": "text", "parts": ["thanks, that's perfect"] },
+          "create_time": 1755600040
+        }
+      },
+      "c5_a2": {
+        "id": "c5_a2",
+        "parent": "c5_u2",
+        "children": [],
+        "message": {
+          "id": "c5_a2",
+          "author": { "role": "assistant" },
+          "content": { "content_type": "text", "parts": ["Glad that helps!"] },
+          "create_time": 1755600050
+        }
+      }
+    }
+  }
+]

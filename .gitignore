@@ -1,0 +1,6 @@
+node_modules/
+.env
+*.db
+*.db-journal
+data/
+eval/out/
