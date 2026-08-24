@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import Anthropic from "@anthropic-ai/sdk";
 import { parseChatGptExport } from "../src/parser/chatgpt";
-import { runPipeline } from "../src/state/pipeline";
+import { runPipeline, persistPipelineResult } from "../src/state/pipeline";
+import { openDb, resetDb } from "../src/db/client";
+import { createExtractionProvider, createReasoningProvider } from "../src/providers/anthropic";
 import type { CanonicalEvent, CognitiveEvent, IdeaNode, IdentityResolution } from "../src/types";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -85,8 +86,14 @@ export async function runEval(): Promise<void> {
   console.log("PASS\n");
 
   // --- Run the pipeline --------------------------------------------------------------------
-  const client = new Anthropic();
-  const result = await runPipeline(canonicalEvents, client);
+  const providers = { extraction: createExtractionProvider(), reasoning: createReasoningProvider() };
+  const result = await runPipeline(canonicalEvents, providers);
+
+  const db = openDb(join(__dirname, "out/eval.db"));
+  resetDb(db);
+  persistPipelineResult(db, canonicalEvents, result);
+  db.close();
+  console.log(`(Persisted to eval/out/eval.db -- inspect with the MCP tools or sqlite3 directly.)\n`);
 
   // --- Idea-attribution precision / recall --------------------------------------------------
   const requiredLabels = labels.substantiveEvents.filter((s) => s.required);

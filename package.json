@@ -6,10 +6,13 @@
   "scripts": {
     "cli": "bun src/cli.ts",
     "eval": "bun src/cli.ts eval",
-    "lint": "tsc --noEmit"
+    "mcp": "bun src/mcp/server.ts",
+    "lint": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",
+    "@modelcontextprotocol/sdk": "^1.0.4",
     "zod": "^3.25.76"
   },
   "devDependencies": {

@@ -1,13 +1,14 @@
 # Thinking Engine (V0.1)
 
 The Thinking Reconstruction Engine for Thread. This is the hard gate: before any capture layer,
-browser extension, MCP server, or UI gets built, this has to prove it can reconstruct how a
-person's ideas actually evolved -- accurately enough that they'd trust it over searching their
-own chat history.
+browser extension, or human UI gets built, this has to prove it can reconstruct how a person's
+ideas actually evolved -- accurately enough that they'd trust it over searching their own chat
+history.
 
 See the parent product spec (`THREAD.md` in the `mind-stream-continuity` repo) for the full
-architecture. This repo is deliberately narrow: **parse -> extract -> resolve identity -> build
-idea state -> eval**. No capture, no MCP, no UI, no Postgres yet.
+architecture. This repo covers: **parse -> extract -> resolve identity -> build idea state ->
+Thinking State -> MCP access**. Explicitly not here: a human UI (side panel), browser/desktop
+capture, and Postgres/pgvector (SQLite for now, by design -- see below).
 
 ## The gate
 
@@ -22,30 +23,75 @@ Agreed thresholds, scored separately:
 | Hallucinated attribution rate | < 2% |
 
 Precision matters more than recall: a false attribution destroys trust in a way a missed one
-doesn't. Identity resolution is treated as the highest-risk piece in the whole pipeline --
-everything downstream (evolution, recovery, "continue my thinking") is only as good as knowing
-that *this* statement is a refinement of *that* one, not a new idea, not an unrelated idea from a
-different project that happens to share vocabulary.
+doesn't.
 
-**Important caveat:** `eval/fixture` is a small, hand-authored fixture (~6 substantive events). It
-proves the pipeline's *mechanics* work -- branch resolution, grounding, the authority/payments
-non-merge -- not that the gate is actually met at a statistically meaningful sample size. The gate
-numbers only mean something once this runs against a real export at the 50-100 conversation scale.
-Run `bun run eval` against the fixture now; re-run it against a real export once one is available
-and treat *that* run as the real result.
+**The gate is still unmeasured.** `eval/fixture` is a small, hand-authored fixture (~6 substantive
+events) that proves the pipeline's *mechanics* -- branch resolution, grounding, the
+authority/payments non-merge, candidate narrowing -- not that the gate is met at a statistically
+meaningful sample size. No `ANTHROPIC_API_KEY` has been available in this environment, so no LLM
+call in this pipeline has been observed to run against a live model. Every extraction, identity
+resolution, and gate number is unverified until `bun run eval` is actually run with a real key.
+
+## What's verified vs. what isn't
+
+This matters more than a features list. Split by what can be checked without a live API call:
+
+**Verified** (25 tests, `bun test`, zero API key, zero network calls):
+- Branch resolution on the fixture's hand-crafted edited-message branch (abandoned branch
+  excluded, correct text kept, correct per-conversation ordering)
+- Cyclical-mapping guard (throws instead of infinite-looping)
+- Lexical / entity / temporal signal functions, and that a cross-topic vocabulary-overlap idea
+  survives candidate narrowing among 30 distractors (the specific case that must not be silently
+  excluded -- see "Why identity resolution is the gate" below)
+- The merge-threshold behavior in `buildIdeaNode` (never merges below threshold even when a
+  `matchedIdeaId` is set; decisions flip state and record a `Decision`; connections link two
+  ideas symmetrically without merging them)
+- `ThinkingState` aggregation (current ideas, decisions, open loops, contradictions by source
+  event type, recency window, topic filtering, related-ideas-outside-the-filtered-set)
+- The full pipeline end-to-end via `FakeProvider` (scripted JSON, no network): a new idea
+  correctly threading through a refinement and a decision; an unrelated event correctly *not*
+  triggering an identity-resolution call at all (empty candidate set); a fabricated evidence
+  quote correctly rejected by the grounding check, not silently kept
+- The MCP tool logic (`search_ideas`, `get_idea`, `trace_idea`, `get_thread_state`,
+  `get_open_loops`, `get_recent_changes`) against a real persisted SQLite database -- this is
+  also how a real bug got caught: `persistPipelineResult` was inserting `identity_resolutions`
+  before `idea_nodes`, tripping the foreign key. Fixed; the test is what caught it, not review.
+
+**Not verified** (needs a live API key):
+- Whether extraction actually produces good cognitive events from real conversation text
+- Whether identity resolution's *judgment* is any good -- the tests above prove the pipeline
+  correctly *applies* whatever the model decides (including a scripted "this is not the same
+  idea" response), not that a real model would decide correctly
+- `continue_thinking` (the one MCP tool that needs synthesis, not just retrieval)
+- The MCP server's protocol wiring (`src/mcp/server.ts`) against a real MCP client -- the tool
+  *logic* is tested directly against SQLite (see above); the SDK call shapes in the thin wiring
+  file have not been exercised
+- The gate itself, at any sample size
+
+To get real numbers: put `ANTHROPIC_API_KEY` in `.env` and run `bun run eval`.
 
 ## Why identity resolution is the gate, not extraction
 
-An LLM extracting "the user proposed an idea here" is comparatively easy. Knowing that a
-statement made three weeks later in a different conversation is a refinement of that same idea --
-and *not* a coincidentally similar idea from an unrelated project -- is genuinely hard, and wrong
-in a way that's hard to notice from the outside (a bad merge silently corrupts an idea's history).
-So the pipeline is conservative by construction: `resolveIdentity` returns a raw confidence
-alongside its match/non-match decision, and `applyCognitiveEvent`
-(`src/state/buildIdeaNode.ts`) only merges into an existing idea above
-`IDENTITY_RESOLUTION_MERGE_THRESHOLD` (0.75). Below that, the event always becomes a new idea. A
-missed merge just leaves a duplicate a human can correct later; a wrong merge corrupts the idea's
-history and is much harder to catch.
+Knowing that a statement made three weeks later in a different conversation is a refinement of an
+existing idea -- and *not* a coincidentally similar idea from an unrelated project -- is hard, and
+wrong in a way that's difficult to notice from outside (a bad merge silently corrupts an idea's
+history). So the pipeline is conservative by construction:
+
+1. **Candidate narrowing is deterministic and generous** (`src/identity/signals.ts`): lexical
+   overlap, entity overlap, temporal proximity, and a mild relationship prior narrow the full
+   idea set before the model ever sees it -- this is what makes the approach scale past a handful
+   of ideas, per THREAD.md §9/§12's multi-signal description. It leans toward including too much
+   rather than too little: a false positive here just means the model correctly rejects a
+   candidate; a false negative means the model never gets the chance. A semantic (embeddings)
+   signal slot exists in the same ranker but is unconfigured -- Anthropic doesn't serve
+   embeddings, so this needs a separate provider decision (Voyage AI, OpenAI, etc.) before it can
+   be enabled. See `src/providers/embeddings.ts`.
+2. **The model makes the final call**, but only over the narrowed set, and returns a raw
+   confidence separate from any merge decision.
+3. **`applyCognitiveEvent` only merges above `IDENTITY_RESOLUTION_MERGE_THRESHOLD`** (0.75).
+   Below that, the event always becomes a new idea, regardless of what the model returned. A
+   missed merge leaves a correctable duplicate; a wrong merge corrupts an idea's history and is
+   much harder to catch.
 
 ## The branch-resolution landmine
 
@@ -54,37 +100,54 @@ ChatGPT's export stores each conversation as a tree (`mapping`: node id ->
 sibling branches off the same parent. Only the path ending at `current_node` is the conversation
 the user actually kept. `src/parser/chatgpt.ts` walks that path explicitly; flattening by
 timestamp instead would feed abandoned branches into extraction as if the user had actually said
-them, and those near-duplicate abandoned turns are indistinguishable from genuine idea-forks
-downstream. The fixture includes a hand-crafted edited-message branch specifically to test this
-(`eval/fixture/conversations.json`, `conv_1`) -- the eval harness fails loudly if an excluded node
-leaks through.
+them, indistinguishable downstream from genuine idea-forks.
 
 ## Pipeline
 
 ```
 conversations.json (export format)
         |
-        v  src/parser/chatgpt.ts        (branch resolution)
+        v  src/parser/chatgpt.ts          (branch resolution)
 CanonicalEvent[]
         |
-        v  src/extraction/extract.ts    (per-conversation, Claude + Zod, grounding check)
+        v  src/extraction/extract.ts      (fast provider, per-conversation, grounding check)
 CognitiveEvent[]
         |
-        v  src/identity/resolve.ts      (per-event, chronological across ALL conversations)
+        v  src/identity/signals.ts        (deterministic candidate narrowing)
+        v  src/identity/resolve.ts        (strong provider, chronological across ALL conversations)
 IdentityResolution[]
         |
-        v  src/state/buildIdeaNode.ts   (merge-threshold applied here)
-IdeaNode[] (with evolution, open loops)
+        v  src/state/buildIdeaNode.ts     (merge-threshold applied here)
+IdeaNode[] (evolution, open loops, decisions, related ideas)
         |
-        v  src/db  (SQLite for V0.1 -- schema mirrors the eventual Postgres shape)
+        v  src/db                         (SQLite; schema mirrors the eventual Postgres shape)
+        v  src/state/thinkingState.ts     (pure aggregation view, computed on demand)
+        v  src/mcp/                       (read tools + continue_thinking over the same state)
 ```
+
+Every LLM call goes through `CompletionProvider` (`src/providers/types.ts`), never the SDK
+directly -- `AnthropicProvider` is one implementation, `FakeProvider` (scripted responses, used
+throughout the test suite) is another. Extraction uses the fast/cheap model tier, identity
+resolution and `continue_thinking` use the strong tier (`src/providers/anthropic.ts`), per
+THREAD.md §15. Model IDs are read from env with fallbacks that have **not** been verified against
+a live call in this environment -- check them against current Anthropic API docs first.
+
+## MCP
+
+`bun run mcp` starts a stdio MCP server exposing `search_ideas`, `get_idea`, `trace_idea`,
+`get_thread_state`, `get_open_loops`, `get_recent_changes`, and `continue_thinking` over
+`THREAD_DB_PATH` (default `data/thread.db`). The first six are pure reads and need no model call;
+`continue_thinking` does. As noted above, the protocol wiring itself hasn't been run against a
+real MCP client -- verify with one (Claude Desktop, the MCP inspector) before relying on it.
 
 ## Setup
 
 ```
 bun install
 cp .env.example .env   # add your ANTHROPIC_API_KEY (zero-retention tier)
-bun run eval
+bun test                # verifies everything that doesn't need a key -- do this first
+bun run eval            # needs a key; produces the real gate numbers
+bun run mcp              # starts the MCP server against data/thread.db
 ```
 
 ## Storage
@@ -94,14 +157,22 @@ SQLite (`bun:sqlite`, zero external dependencies) for V0.1, not Postgres + pgvec
 approach is actually validated -- no point standing up Postgres before knowing if identity
 resolution clears the gate.
 
-## What's deliberately not here yet
+## What's deliberately not here
 
-- Real ChatGPT export ingestion (parser is ready; no real export has been run through it yet)
-- Claude export parsing (needed for the cross-model identity-resolution case, which is harder
-  than same-model evolution -- different lexical style, no shared IDs)
-- Postgres + pgvector
-- Embeddings / semantic retrieval
-- MCP server, recovery API, any UI
-- Decisions and connections as first-class objects (both currently fold into evolution steps --
-  a real "this idea connects to that other idea" link needs a richer extraction schema that names
-  both ideas, which the current single-candidate-match identity resolution doesn't support)
+- **Human UI (side panel, THREAD.md §23).** A separate frontend surface; out of scope for this
+  repo, and the spec's own build order (§34) puts it in Phase 1, after the engine is proven.
+- **Browser/desktop capture (§19-20).** Same reasoning -- capture is deferred until the engine
+  is proven; this repo is import-only.
+- **Postgres + pgvector.** SQLite until the approach is validated (see Storage above).
+- **A live embeddings provider.** The semantic-similarity slot in identity resolution exists
+  structurally (`src/providers/embeddings.ts`) but is unconfigured -- needs a provider decision
+  Anthropic can't fulfill.
+- **Real ChatGPT export ingestion.** The parser is ready and tested against the fixture; no real
+  export has been run through it yet.
+- **Claude export parsing.** Needed for the cross-model identity-resolution case (harder than
+  same-model evolution -- different lexical style, no shared IDs). Only ChatGPT's export format
+  is supported so far.
+- **Query understanding / multi-signal *recovery* retrieval (THREAD.md §11-12) as a full system.**
+  `get_thread_state`'s topic filter is a plain substring match, not the semantic + lexical +
+  entity + temporal + relationship ensemble the spec describes for recovery -- that's the same
+  missing embeddings signal, applied to a different part of the pipeline.

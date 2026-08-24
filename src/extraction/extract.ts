@@ -1,9 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
 import type { CanonicalEvent, CognitiveEvent } from "../types";
+import type { CompletionProvider } from "../providers/types";
 import { EXTRACTION_SYSTEM_PROMPT, buildTranscriptPrompt } from "./prompt";
 import { extractionResultSchema, type ExtractedEvent } from "./schema";
-
-const MODEL = "claude-sonnet-4-5";
 
 function parseJsonResponse(text: string): unknown {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -31,39 +29,35 @@ export interface ExtractionOutcome {
 
 export async function extractCognitiveEvents(
   conversationEvents: CanonicalEvent[],
-  client: Anthropic = new Anthropic(),
+  provider: CompletionProvider,
 ): Promise<ExtractionOutcome> {
   const eventsById = new Map(conversationEvents.map((e) => [e.id, e]));
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 4096,
-    system: EXTRACTION_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: buildTranscriptPrompt(conversationEvents) }],
-  });
+  const raw = await provider.complete(
+    EXTRACTION_SYSTEM_PROMPT,
+    buildTranscriptPrompt(conversationEvents),
+    4096,
+  );
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("Extraction response contained no text block");
-  }
-
-  const parsed = extractionResultSchema.parse(parseJsonResponse(textBlock.text));
+  const parsed = extractionResultSchema.parse(parseJsonResponse(raw));
 
   const events: CognitiveEvent[] = [];
   const rejected: ExtractionOutcome["rejected"] = [];
 
-  for (const [i, raw] of parsed.events.entries()) {
-    if (!isGrounded(raw, eventsById)) {
-      rejected.push({ event: raw, reason: "evidence_quote not found verbatim in source_event_id" });
+  for (const [i, candidate] of parsed.events.entries()) {
+    if (!isGrounded(candidate, eventsById)) {
+      rejected.push({ event: candidate, reason: "evidence_quote not found verbatim in source_event_id" });
       continue;
     }
     events.push({
-      id: `cog_${raw.source_event_id}_${i}`,
-      type: raw.type,
-      statement: raw.statement,
-      confidence: raw.confidence,
-      sourceEventId: raw.source_event_id,
-      evidenceQuote: raw.evidence_quote,
+      id: `cog_${candidate.source_event_id}_${i}`,
+      type: candidate.type,
+      statement: candidate.statement,
+      confidence: candidate.confidence,
+      sourceEventId: candidate.source_event_id,
+      evidenceQuote: candidate.evidence_quote,
+      whyItMatters: candidate.why_it_matters ?? undefined,
+      additionalSourceEventIds: candidate.additional_source_event_ids ?? [],
     });
   }
 

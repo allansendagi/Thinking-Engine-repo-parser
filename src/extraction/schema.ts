@@ -19,6 +19,14 @@ export const extractedEventSchema = z.object({
   confidence: z.number().min(0).max(1),
   source_event_id: z.string().min(1),
   evidence_quote: z.string().min(1),
+  /** Only meaningful for new_idea: why this idea matters, in the model's own words. Optional. */
+  why_it_matters: z.string().min(1).nullable().optional(),
+  /**
+   * Other source events that contributed context to this event (e.g. earlier turns that framed
+   * a connection) without being the primary evidence quote. NOT grounding-checked -- only
+   * source_event_id + evidence_quote carry the hallucination guarantee. Optional.
+   */
+  additional_source_event_ids: z.array(z.string()).optional(),
 });
 
 export const extractionResultSchema = z.object({

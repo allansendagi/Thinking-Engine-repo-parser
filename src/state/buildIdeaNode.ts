@@ -6,6 +6,11 @@ function deriveTitle(statement: string): string {
   return words.length < statement.length ? `${words}…` : words;
 }
 
+function linkRelated(a: IdeaNode, b: IdeaNode): void {
+  if (!a.relatedIdeaIds.includes(b.id)) a.relatedIdeaIds.push(b.id);
+  if (!b.relatedIdeaIds.includes(a.id)) b.relatedIdeaIds.push(a.id);
+}
+
 /**
  * Applies one (cognitive event, identity resolution) pair to the idea-node collection, mutating
  * `ideas` in place and returning the idea that was created or updated.
@@ -24,13 +29,15 @@ export function applyCognitiveEvent(
       ? ideas.get(resolution.matchedIdeaId)
       : undefined;
 
+  const now = new Date().toISOString();
+
   if (!confidentMatch) {
-    const now = new Date().toISOString();
     const idea: IdeaNode = {
       id: `idea_${event.id}`,
       title: deriveTitle(event.statement),
       state: "developing",
       currentFormulation: event.statement,
+      whyItMatters: event.whyItMatters,
       evolution: [
         {
           cognitiveEventId: event.id,
@@ -43,6 +50,10 @@ export function applyCognitiveEvent(
         event.type === "question" || event.type === "open_loop"
           ? [{ id: `loop_${event.id}`, statement: event.statement, createdAt: now, resolved: false }]
           : [],
+      decisions:
+        event.type === "decision"
+          ? [{ id: `dec_${event.id}`, statement: event.statement, decidedAt: now, sourceEventId: event.sourceEventId }]
+          : [],
       relatedIdeaIds: [],
       createdAt: now,
       updatedAt: now,
@@ -51,7 +62,6 @@ export function applyCognitiveEvent(
     return idea;
   }
 
-  const now = new Date().toISOString();
   const idea = confidentMatch;
 
   idea.evolution.push({
@@ -62,10 +72,17 @@ export function applyCognitiveEvent(
   });
   idea.currentFormulation = event.statement;
   idea.updatedAt = now;
+  if (event.whyItMatters && !idea.whyItMatters) idea.whyItMatters = event.whyItMatters;
 
   switch (event.type) {
     case "decision":
       idea.state = "established";
+      idea.decisions.push({
+        id: `dec_${event.id}`,
+        statement: event.statement,
+        decidedAt: now,
+        sourceEventId: event.sourceEventId,
+      });
       break;
     case "rejection":
       idea.state = "rejected";
@@ -81,6 +98,12 @@ export function applyCognitiveEvent(
       break;
     case "resolution":
       for (const loop of idea.openLoops) loop.resolved = true;
+      break;
+    case "connection":
+      if (resolution.alsoRelatedIdeaId) {
+        const other = ideas.get(resolution.alsoRelatedIdeaId);
+        if (other) linkRelated(idea, other);
+      }
       break;
     default:
       break;

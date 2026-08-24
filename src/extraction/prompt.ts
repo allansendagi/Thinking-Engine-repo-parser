@@ -23,9 +23,15 @@ Rules:
   not how confident you are in the extraction mechanics. Casual remarks, pleasantries, and
   exploratory "what if" musing that isn't actually a claim should score low or be omitted.
 - Do not invent events not grounded in the transcript. When in doubt, omit.
+- For new_idea events, optionally include why_it_matters: one sentence on why this idea matters,
+  grounded in the transcript. Omit it if it isn't clear.
+- If other messages earlier in this transcript contributed context to an event (without being the
+  primary evidence), you may list their ids in additional_source_event_ids. These are NOT
+  fact-checked the way evidence_quote is -- only use it for genuine contributing context, not as a
+  way to attach more evidence.
 
 Respond with JSON matching this shape exactly:
-{"events": [{"type": "...", "statement": "...", "confidence": 0.0-1.0, "source_event_id": "...", "evidence_quote": "..."}]}`;
+{"events": [{"type": "...", "statement": "...", "confidence": 0.0-1.0, "source_event_id": "...", "evidence_quote": "...", "why_it_matters": "... (optional)", "additional_source_event_ids": ["... (optional)"]}]}`;
 
 export function buildTranscriptPrompt(events: CanonicalEvent[]): string {
   const lines = events.map(

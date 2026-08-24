@@ -40,9 +40,14 @@ export interface CognitiveEvent {
   /** The candidate statement, in the extractor's words grounded in the source text. */
   statement: string;
   confidence: number; // 0..1
+  /** Primary source -- the ONLY one covered by the grounding/hallucination guarantee. */
   sourceEventId: string;
   /** Verbatim quote from the source CanonicalEvent that grounds this extraction. */
   evidenceQuote: string;
+  /** Only meaningful for new_idea. Not fact-checked the way evidenceQuote is. */
+  whyItMatters?: string;
+  /** Other messages that contributed context. NOT covered by the grounding check. */
+  additionalSourceEventIds: string[];
 }
 
 export type IdeaState = "developing" | "established" | "rejected" | "dormant";
@@ -61,13 +66,22 @@ export interface OpenLoop {
   resolved: boolean;
 }
 
+export interface Decision {
+  id: string;
+  statement: string;
+  decidedAt: string;
+  sourceEventId: string;
+}
+
 export interface IdeaNode {
   id: string;
   title: string;
   state: IdeaState;
   currentFormulation: string;
+  whyItMatters?: string;
   evolution: EvolutionStep[];
   openLoops: OpenLoop[];
+  decisions: Decision[];
   relatedIdeaIds: string[];
   createdAt: string;
   updatedAt: string;
@@ -80,6 +94,26 @@ export interface IdentityResolution {
   matchedIdeaId: string | null;
   confidence: number; // 0..1
   reasoning: string;
+  /**
+   * Only populated for type "connection": a second existing idea this event links to the
+   * matched idea. Establishes a relation, not a merge -- both ideas keep separate identities.
+   */
+  alsoRelatedIdeaId?: string | null;
 }
 
 export const IDENTITY_RESOLUTION_MERGE_THRESHOLD = 0.75;
+
+/**
+ * The aggregation the spec calls the primary object handed to a human or an AI (THREAD.md §10).
+ * Built fresh from IdeaNode[] + CognitiveEvent[] on every request -- it is a view, not a stored
+ * object, so it can never drift out of sync with the underlying ideas.
+ */
+export interface ThinkingState {
+  topic: string | null;
+  currentIdeas: { id: string; title: string; state: IdeaState; currentFormulation: string }[];
+  recentChanges: { ideaId: string; ideaTitle: string; formulation: string; createdAt: string }[];
+  decisions: { ideaId: string; ideaTitle: string; statement: string; decidedAt: string }[];
+  openLoops: { ideaId: string; ideaTitle: string; loopId: string; statement: string; resolved: boolean }[];
+  contradictions: { ideaId: string; ideaTitle: string; formulation: string; createdAt: string }[];
+  relatedIdeas: { id: string; title: string }[];
+}

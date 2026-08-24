@@ -17,7 +17,16 @@ CREATE TABLE IF NOT EXISTS cognitive_events (
   statement TEXT NOT NULL,
   confidence REAL NOT NULL,
   source_event_id TEXT NOT NULL REFERENCES canonical_events(id),
-  evidence_quote TEXT NOT NULL
+  evidence_quote TEXT NOT NULL,
+  why_it_matters TEXT
+);
+
+-- Contributing context beyond the primary (source_event_id, evidence_quote) pair. NOT covered
+-- by the grounding/hallucination guarantee -- see CognitiveEvent.additionalSourceEventIds.
+CREATE TABLE IF NOT EXISTS cognitive_event_sources (
+  cognitive_event_id TEXT NOT NULL REFERENCES cognitive_events(id),
+  canonical_event_id TEXT NOT NULL REFERENCES canonical_events(id),
+  PRIMARY KEY (cognitive_event_id, canonical_event_id)
 );
 
 CREATE TABLE IF NOT EXISTS idea_nodes (
@@ -25,6 +34,7 @@ CREATE TABLE IF NOT EXISTS idea_nodes (
   title TEXT NOT NULL,
   state TEXT NOT NULL,
   current_formulation TEXT NOT NULL,
+  why_it_matters TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -46,6 +56,16 @@ CREATE TABLE IF NOT EXISTS open_loops (
   resolved INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS decisions (
+  id TEXT PRIMARY KEY,
+  idea_id TEXT NOT NULL REFERENCES idea_nodes(id),
+  statement TEXT NOT NULL,
+  decided_at TEXT NOT NULL,
+  source_event_id TEXT NOT NULL REFERENCES canonical_events(id)
+);
+
+-- Symmetric: a connection between idea A and idea B is stored as both (A,B) and (B,A) so either
+-- side's relatedIdeaIds can be read with a single-direction query.
 CREATE TABLE IF NOT EXISTS related_ideas (
   idea_id TEXT NOT NULL REFERENCES idea_nodes(id),
   related_idea_id TEXT NOT NULL REFERENCES idea_nodes(id),
