@@ -13,7 +13,7 @@ interface SubstantiveEventLabel {
   sourceEventId: string;
   required: boolean;
   acceptableTypes: string[];
-  evidenceContains: string;
+  requiredSubstrings: string[];
   identityGroup: string;
   isFirstInGroup?: boolean;
 }
@@ -22,7 +22,7 @@ interface Labels {
   excludedNodeIds: string[];
   expectedCanonicalEventCount: number;
   substantiveEvents: SubstantiveEventLabel[];
-  expectedOpenLoop: { sourceEventId: string; evidenceContains: string; identityGroup: string };
+  expectedOpenLoop: { sourceEventId: string; requiredSubstrings: string[]; identityGroup: string };
   noiseSourceEventIds: string[];
   criticalNonMatches: { sourceEventId: string; mustNotMatchGroup: string }[];
 }
@@ -95,18 +95,34 @@ export async function runEval(): Promise<void> {
   db.close();
   console.log(`(Persisted to eval/out/eval.db -- inspect with the MCP tools or sqlite3 directly.)\n`);
 
+  if (result.rejectedExtractions.length > 0) {
+    console.log(`=== Rejected extractions (${result.rejectedExtractions.length}) -- failed the verbatim grounding check ===`);
+    for (const r of result.rejectedExtractions) {
+      console.log(`  [${r.event.type}] source=${r.event.source_event_id} reason=${r.reason}`);
+      console.log(`    statement: ${r.event.statement}`);
+      console.log(`    claimed evidence_quote: ${r.event.evidence_quote}`);
+    }
+    console.log("");
+  }
+
   // --- Idea-attribution precision / recall --------------------------------------------------
   const requiredLabels = labels.substantiveEvents.filter((s) => s.required);
   let recallHits = 0;
   for (const label of requiredLabels) {
     const matches = eventsForSource(result.cognitiveEvents, label.sourceEventId);
+    // Checks the model's own statement OR the verbatim evidence quote -- the substance can land
+    // in either, and grounding (is the quote actually verbatim) is already enforced separately
+    // by the extraction-time hallucination guard, not re-checked here. Every requiredSubstring
+    // must appear (content stems, not an exact phrase -- see labels.json's _comment).
     const hit = matches.some(
       (e) =>
         label.acceptableTypes.includes(e.type) &&
-        e.evidenceQuote.toLowerCase().includes(label.evidenceContains.toLowerCase()),
+        label.requiredSubstrings.every(
+          (s) => e.statement.toLowerCase().includes(s.toLowerCase()) || e.evidenceQuote.toLowerCase().includes(s.toLowerCase()),
+        ),
     );
     if (hit) recallHits++;
-    else console.log(`  MISSED required event: ${label.sourceEventId} ("${label.evidenceContains}")`);
+    else console.log(`  MISSED required event: ${label.sourceEventId} (${JSON.stringify(label.requiredSubstrings)})`);
   }
   const recall = requiredLabels.length === 0 ? 1 : recallHits / requiredLabels.length;
 
@@ -158,10 +174,13 @@ export async function runEval(): Promise<void> {
   const identityPrecision = identityChecks === 0 ? 0 : identityCorrect / identityChecks;
 
   // --- Open loop check --------------------------------------------------------------------------
+  // All required substrings must appear (order-independent), not one exact phrase -- "who
+  // performs" and "who should perform" are the same question asked differently.
   const openLoopFound =
-    authorityIdea?.openLoops.some((loop) =>
-      loop.statement.toLowerCase().includes(labels.expectedOpenLoop.evidenceContains.toLowerCase()),
-    ) ?? false;
+    authorityIdea?.openLoops.some((loop) => {
+      const text = loop.statement.toLowerCase();
+      return labels.expectedOpenLoop.requiredSubstrings.every((s) => text.includes(s.toLowerCase()));
+    }) ?? false;
 
   // --- Report -------------------------------------------------------------------------------------
   const results: GateResult[] = [

@@ -18,18 +18,28 @@ function linkRelated(a: IdeaNode, b: IdeaNode): void {
  * Below IDENTITY_RESOLUTION_MERGE_THRESHOLD, the event always becomes a new idea, regardless of
  * matchedIdeaId -- never silently merge on a low-confidence guess. A missed merge just leaves a
  * duplicate a human can correct later; a wrong merge corrupts that idea's history.
+ *
+ * `sourceCreatedAt` is the ORIGINATING CONVERSATION's timestamp, not wall-clock processing time.
+ * Using `new Date()` here was a real bug: identity resolution's temporal-proximity signal
+ * (identity/signals.ts) compares an idea's last-touched time against a new event's time to judge
+ * how close together they happened in the user's timeline. If "last touched" means "whenever this
+ * batch happened to run" instead of "when the user actually said it," that comparison is
+ * meaningless for any historical import -- which is the actual use case -- and gets worse the
+ * longer the import happens after the fact. Confirmed against a live run: with evolution
+ * timestamps on wall-clock "now" and fixture conversations dated over a year in the past, temporal
+ * proximity collapsed to ~0 and pushed a genuine match below the candidate-narrowing floor,
+ * producing a real missed merge (see git history / eval run for the diagnosis).
  */
 export function applyCognitiveEvent(
   ideas: Map<string, IdeaNode>,
   event: CognitiveEvent,
   resolution: IdentityResolution,
+  sourceCreatedAt: string,
 ): IdeaNode {
   const confidentMatch =
     resolution.matchedIdeaId !== null && resolution.confidence >= IDENTITY_RESOLUTION_MERGE_THRESHOLD
       ? ideas.get(resolution.matchedIdeaId)
       : undefined;
-
-  const now = new Date().toISOString();
 
   if (!confidentMatch) {
     const idea: IdeaNode = {
@@ -42,21 +52,28 @@ export function applyCognitiveEvent(
         {
           cognitiveEventId: event.id,
           formulation: event.statement,
-          createdAt: now,
+          createdAt: sourceCreatedAt,
           sourceEventId: event.sourceEventId,
         },
       ],
       openLoops:
         event.type === "question" || event.type === "open_loop"
-          ? [{ id: `loop_${event.id}`, statement: event.statement, createdAt: now, resolved: false }]
+          ? [{ id: `loop_${event.id}`, statement: event.statement, createdAt: sourceCreatedAt, resolved: false }]
           : [],
       decisions:
         event.type === "decision"
-          ? [{ id: `dec_${event.id}`, statement: event.statement, decidedAt: now, sourceEventId: event.sourceEventId }]
+          ? [
+              {
+                id: `dec_${event.id}`,
+                statement: event.statement,
+                decidedAt: sourceCreatedAt,
+                sourceEventId: event.sourceEventId,
+              },
+            ]
           : [],
       relatedIdeaIds: [],
-      createdAt: now,
-      updatedAt: now,
+      createdAt: sourceCreatedAt,
+      updatedAt: sourceCreatedAt,
     };
     ideas.set(idea.id, idea);
     return idea;
@@ -67,11 +84,11 @@ export function applyCognitiveEvent(
   idea.evolution.push({
     cognitiveEventId: event.id,
     formulation: event.statement,
-    createdAt: now,
+    createdAt: sourceCreatedAt,
     sourceEventId: event.sourceEventId,
   });
   idea.currentFormulation = event.statement;
-  idea.updatedAt = now;
+  idea.updatedAt = sourceCreatedAt;
   if (event.whyItMatters && !idea.whyItMatters) idea.whyItMatters = event.whyItMatters;
 
   switch (event.type) {
@@ -80,7 +97,7 @@ export function applyCognitiveEvent(
       idea.decisions.push({
         id: `dec_${event.id}`,
         statement: event.statement,
-        decidedAt: now,
+        decidedAt: sourceCreatedAt,
         sourceEventId: event.sourceEventId,
       });
       break;
@@ -92,7 +109,7 @@ export function applyCognitiveEvent(
       idea.openLoops.push({
         id: `loop_${event.id}`,
         statement: event.statement,
-        createdAt: now,
+        createdAt: sourceCreatedAt,
         resolved: false,
       });
       break;

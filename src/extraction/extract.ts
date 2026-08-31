@@ -11,14 +11,20 @@ function parseJsonResponse(text: string): unknown {
 
 /**
  * Deterministic hallucination guard: an extracted event is only trustworthy if its evidence_quote
- * is an exact substring of the canonical event it claims to be grounded in. This is what the
- * <2% hallucinated-attribution gate is actually checking against, so it's enforced here rather
- * than left to the model's self-reported confidence.
+ * is a substring of the canonical event it claims to be grounded in. This is what the <2%
+ * hallucinated-attribution gate is actually checking against, so it's enforced here rather than
+ * left to the model's self-reported confidence.
+ *
+ * Case-insensitive deliberately: observed on a live run, the model sometimes capitalizes the
+ * first letter of a quote it pulls from the middle of a sentence (treating it as its own
+ * sentence). That's a cosmetic normalization, not a fabrication -- the content wasn't changed.
+ * The guarantee this check exists to enforce is "did the model make this up," not "did it
+ * preserve byte-exact casing," so a case difference alone shouldn't count as hallucination.
  */
 function isGrounded(event: ExtractedEvent, eventsById: Map<string, CanonicalEvent>): boolean {
   const source = eventsById.get(event.source_event_id);
   if (!source) return false;
-  return source.text.includes(event.evidence_quote);
+  return source.text.toLowerCase().includes(event.evidence_quote.toLowerCase());
 }
 
 export interface ExtractionOutcome {

@@ -74,7 +74,7 @@ export async function runPipeline(
 
     const resolution = await resolveIdentity(event, narrowed, providers.reasoning);
     resolutions.push(resolution);
-    applyCognitiveEvent(ideas, event, resolution);
+    applyCognitiveEvent(ideas, event, resolution, sourceEvent.createdAt);
   }
 
   return { ideas, cognitiveEvents: allCognitiveEvents, resolutions, rejectedExtractions: allRejected };
