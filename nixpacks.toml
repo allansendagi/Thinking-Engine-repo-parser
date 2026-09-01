@@ -1,0 +1,7 @@
+# Nixpacks auto-detected both nodejs_18 and bun for the setup phase (likely from seeing
+# package.json alongside bun.lock) and failed because nodejs_18 has been pruned from the pinned
+# nixpkgs snapshot Railway's builder uses (Node 18 is EOL). This backend only needs Bun --
+# bun:sqlite, the whole runtime, everything -- so pin the setup phase to exactly that instead of
+# trusting auto-detection to not reach for a legacy Node alongside it.
+[phases.setup]
+nixPkgs = ["bun"]
