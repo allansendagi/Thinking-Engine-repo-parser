@@ -2,12 +2,23 @@ import type { SiteAdapter, RawMessage } from "../common/siteAdapter";
 import { cleanText, matchFirst } from "../common/domUtils";
 
 /**
- * UNVERIFIED against the live site -- built from general knowledge of ChatGPT's DOM structure,
- * not a live inspection. ChatGPT has historically rendered each turn with a
- * `data-message-author-role` attribute (values "user" | "assistant" | "system" | "tool"), which
- * is the primary strategy here. If that stops matching, this needs to be updated against the
- * real, current page -- see extension/README.md.
+ * Verified against a real live chatgpt.com conversation (2026-09-01): `data-message-author-role`
+ * is present and correctly valued ("user" | "assistant" | "system" | "tool"). ChatGPT also
+ * exposes a parallel `data-turn` attribute with the same "user" | "assistant" values on the same
+ * turns -- kept here as a fallback strategy (tried only if the primary attribute finds nothing),
+ * same multi-selector-fallback pattern as the Claude adapter, so a future rename of one attribute
+ * doesn't immediately break capture. See extension/README.md.
  */
+const ROLE_ATTRS = ["data-message-author-role", "data-turn"];
+
+function collect(root: ParentNode): HTMLElement[] {
+  for (const attr of ROLE_ATTRS) {
+    const found = Array.from(root.querySelectorAll<HTMLElement>(`[${attr}]`));
+    if (found.length > 0) return found;
+  }
+  return [];
+}
+
 export const chatGptAdapter: SiteAdapter = {
   source: "chatgpt",
 
@@ -16,11 +27,11 @@ export const chatGptAdapter: SiteAdapter = {
   },
 
   extractMessages(root: ParentNode): RawMessage[] {
-    const nodes = root.querySelectorAll<HTMLElement>("[data-message-author-role]");
+    const nodes = collect(root);
     const messages: RawMessage[] = [];
 
     for (const node of nodes) {
-      const role = node.getAttribute("data-message-author-role");
+      const role = node.getAttribute("data-message-author-role") ?? node.getAttribute("data-turn");
       if (role !== "user" && role !== "assistant") continue;
       const text = cleanText(node.textContent);
       if (text.length === 0) continue;
