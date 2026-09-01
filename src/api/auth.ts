@@ -25,6 +25,9 @@ function registryPath(): string {
   return "data/registry.db";
 }
 
+/** Days of free trial granted at account creation. */
+export const TRIAL_DAYS = 7;
+
 function openRegistry(): Database {
   const path = registryPath();
   mkdirSync(dirname(path), { recursive: true });
@@ -36,7 +39,90 @@ function openRegistry(): Database {
       created_at TEXT NOT NULL
     );`,
   );
+  // Billing columns, added idempotently so an existing registry.db upgrades in place.
+  for (const col of [
+    "stripe_customer_id TEXT",
+    "subscription_status TEXT NOT NULL DEFAULT 'trialing'",
+    "trial_ends_at TEXT",
+    "current_period_end TEXT",
+  ]) {
+    try {
+      db.exec(`ALTER TABLE users ADD COLUMN ${col};`);
+    } catch {
+      // column already exists
+    }
+  }
   return db;
+}
+
+export type SubscriptionStatus = "trialing" | "active" | "past_due" | "canceled" | "incomplete";
+
+export interface Account {
+  userId: string;
+  status: SubscriptionStatus;
+  trialEndsAt: string | null;
+  currentPeriodEnd: string | null;
+  stripeCustomerId: string | null;
+}
+
+function rowToAccount(row: Record<string, unknown>): Account {
+  return {
+    userId: row.id as string,
+    status: (row.subscription_status as SubscriptionStatus) ?? "trialing",
+    trialEndsAt: (row.trial_ends_at as string | null) ?? null,
+    currentPeriodEnd: (row.current_period_end as string | null) ?? null,
+    stripeCustomerId: (row.stripe_customer_id as string | null) ?? null,
+  };
+}
+
+export function getAccount(userId: string): Account | null {
+  const db = openRegistry();
+  try {
+    const row = db.query("SELECT * FROM users WHERE id = ?").get(userId) as Record<string, unknown> | null;
+    return row ? rowToAccount(row) : null;
+  } finally {
+    db.close();
+  }
+}
+
+export function findAccountByStripeCustomer(customerId: string): Account | null {
+  const db = openRegistry();
+  try {
+    const row = db.query("SELECT * FROM users WHERE stripe_customer_id = ?").get(customerId) as
+      | Record<string, unknown>
+      | null;
+    return row ? rowToAccount(row) : null;
+  } finally {
+    db.close();
+  }
+}
+
+export function updateSubscription(
+  userId: string,
+  patch: { status?: SubscriptionStatus; stripeCustomerId?: string; currentPeriodEnd?: string | null },
+): void {
+  const db = openRegistry();
+  try {
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    if (patch.status !== undefined) {
+      sets.push("subscription_status = ?");
+      args.push(patch.status);
+    }
+    if (patch.stripeCustomerId !== undefined) {
+      sets.push("stripe_customer_id = ?");
+      args.push(patch.stripeCustomerId);
+    }
+    if (patch.currentPeriodEnd !== undefined) {
+      sets.push("current_period_end = ?");
+      args.push(patch.currentPeriodEnd);
+    }
+    if (sets.length === 0) return;
+    args.push(userId);
+    db.prepare(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`).run(...(args as never[]));
+  } finally {
+    db.close();
+  }
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -63,11 +149,11 @@ export async function createUser(): Promise<CreatedUser> {
     const userId = `user_${randomBytes(12).toString("hex")}`;
     const token = randomBytes(32).toString("hex");
     const tokenHash = await sha256Hex(token);
-    db.prepare("INSERT INTO users (id, token_hash, created_at) VALUES (?, ?, ?)").run(
-      userId,
-      tokenHash,
-      new Date().toISOString(),
-    );
+    const now = Date.now();
+    const trialEndsAt = new Date(now + TRIAL_DAYS * 86_400_000).toISOString();
+    db.prepare(
+      "INSERT INTO users (id, token_hash, created_at, subscription_status, trial_ends_at) VALUES (?, ?, ?, 'trialing', ?)",
+    ).run(userId, tokenHash, new Date(now).toISOString(), trialEndsAt);
     return { userId, token };
   } finally {
     db.close();

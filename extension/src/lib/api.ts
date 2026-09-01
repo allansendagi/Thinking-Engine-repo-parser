@@ -15,6 +15,11 @@ export function isUnauthorized(err: unknown): boolean {
   return err instanceof ApiError && err.status === 401;
 }
 
+/** True when the account is valid but out of trial / unsubscribed -- capture is gated, not broken. */
+export function isPaymentRequired(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 402;
+}
+
 /** Cheap authenticated round-trip used to confirm a set of credentials still works. */
 export async function verifyCredentials(): Promise<void> {
   await request("/v1/thinking-state");

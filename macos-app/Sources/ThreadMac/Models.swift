@@ -119,6 +119,29 @@ struct CreatedUser: Codable {
     let token: String
 }
 
+/// GET /v1/account -- trial / subscription state for the footer + paywall.
+struct AccountStatus: Codable {
+    let status: String          // trialing | active | past_due | canceled | incomplete
+    let entitled: Bool          // may this account still capture?
+    let trialDaysLeft: Int?
+    let currentPeriodEnd: String?
+    let billingEnabled: Bool     // is Stripe configured on the backend at all?
+
+    var footerLabel: String {
+        if !billingEnabled { return "Cloud" }
+        switch status {
+        case "active", "past_due": return "Pro"
+        case "trialing": return "Trial · \(trialDaysLeft ?? 0)d"
+        case "canceled": return entitled ? "Pro (ending)" : "Trial ended"
+        default: return "Trial ended"
+        }
+    }
+}
+
+struct BillingURL: Codable {
+    let url: String
+}
+
 struct ContinueResponse: Codable {
     let text: String
 }

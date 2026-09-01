@@ -222,4 +222,61 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     );
     expect(res.status).toBe(404);
   });
+
+  test("GET /v1/account reports the 7-day trial for a fresh user", async () => {
+    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const { userId, token } = await createTestUser(handler);
+    const res = await handler(
+      new Request("http://x/v1/account", { headers: { authorization: `Bearer ${userId}:${token}` } }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      status: string;
+      entitled: boolean;
+      trialDaysLeft: number;
+      billingEnabled: boolean;
+    };
+    expect(body.status).toBe("trialing");
+    expect(body.entitled).toBe(true);
+    expect(body.trialDaysLeft).toBe(7);
+    expect(body.billingEnabled).toBe(false); // no STRIPE_* env in tests
+  });
+
+  test("capture gate: 402 once the trial is over (only when billing is configured); reads still work", async () => {
+    const { updateSubscription } = await import("./auth");
+    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const { userId, token } = await createTestUser(handler);
+    const authHeader = { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" };
+
+    updateSubscription(userId, {
+      status: "canceled",
+      currentPeriodEnd: new Date(Date.now() - 1000).toISOString(),
+    });
+
+    const capture = () =>
+      handler(
+        new Request("http://x/v1/conversations", {
+          method: "POST",
+          headers: authHeader,
+          body: JSON.stringify({ conversationId: "c1", source: "chatgpt", messages: [] }),
+        }),
+      );
+
+    // Billing not configured -> gate is a no-op (request gets past the gate).
+    expect((await capture()).status).not.toBe(402);
+
+    process.env.STRIPE_SECRET_KEY = "sk_test";
+    process.env.STRIPE_PRICE_ID = "price_test";
+    try {
+      const gated = await capture();
+      expect(gated.status).toBe(402);
+      expect(((await gated.json()) as { code: string }).code).toBe("subscription_required");
+
+      const read = await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }));
+      expect(read.status).toBe(200);
+    } finally {
+      delete process.env.STRIPE_SECRET_KEY;
+      delete process.env.STRIPE_PRICE_ID;
+    }
+  });
 });

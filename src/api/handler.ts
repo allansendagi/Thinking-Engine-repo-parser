@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { createUser, verifyToken } from "./auth";
+import { createUser, getAccount, verifyToken } from "./auth";
+import {
+  accountView,
+  applyStripeEvent,
+  billingConfigured,
+  createCheckoutSession,
+  createPortalSession,
+  isEntitled,
+  verifyStripeSignature,
+} from "./billing";
 import { openUserDb } from "../db/tenancy";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
@@ -57,10 +66,66 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       return json(user, 201);
     }
 
+    // Stripe calls this -- no Thread bearer token. Verified by signature instead.
+    if (req.method === "POST" && pathname === "/v1/stripe/webhook") {
+      const secret = process.env.STRIPE_WEBHOOK_SECRET;
+      const sig = req.headers.get("stripe-signature") ?? "";
+      const raw = await req.text();
+      if (!secret || !verifyStripeSignature(raw, sig, secret)) {
+        return error(400, "Bad signature");
+      }
+      try {
+        applyStripeEvent(JSON.parse(raw));
+      } catch (e) {
+        console.error("[Thread] stripe webhook handling failed:", e);
+        return error(500, "Webhook handling failed");
+      }
+      return json({ received: true });
+    }
+
     // Every route below requires auth.
     const auth = await authenticate(req);
     if (auth instanceof Response) return auth;
     const userId = auth;
+
+    if (req.method === "GET" && pathname === "/v1/account") {
+      const account = getAccount(userId);
+      if (!account) return error(404, "Account not found");
+      return json({ userId, billingEnabled: billingConfigured(), ...accountView(account) });
+    }
+
+    if (req.method === "POST" && pathname === "/v1/billing/checkout") {
+      if (!billingConfigured()) return error(501, "Billing is not configured");
+      const account = getAccount(userId);
+      if (!account) return error(404, "Account not found");
+      try {
+        return json({ url: await createCheckoutSession(userId, account) });
+      } catch (e) {
+        return error(502, e instanceof Error ? e.message : "Checkout failed");
+      }
+    }
+
+    if (req.method === "GET" && pathname === "/v1/billing/portal") {
+      const account = getAccount(userId);
+      if (!account?.stripeCustomerId) return error(409, "No billing account yet -- subscribe first");
+      try {
+        return json({ url: await createPortalSession(account) });
+      } catch (e) {
+        return error(502, e instanceof Error ? e.message : "Portal failed");
+      }
+    }
+
+    // Soft lock: capture routes require an active trial or subscription. Reads are never gated.
+    // No-op until billing is actually configured, so deploying this changes nothing on its own.
+    const isCaptureRoute =
+      req.method === "POST" && (pathname === "/v1/conversations" || pathname === "/v1/paste");
+    if (isCaptureRoute && billingConfigured() && !isEntitled(getAccount(userId))) {
+      return json(
+        { error: "Your Thread trial has ended. Subscribe to keep capturing.", code: "subscription_required" },
+        402,
+      );
+    }
+
     const db = openUserDb(userId);
 
     try {

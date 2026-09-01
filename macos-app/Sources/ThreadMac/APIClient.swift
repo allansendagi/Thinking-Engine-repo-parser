@@ -116,4 +116,20 @@ final class APIClient {
         let body = try JSONEncoder().encode(["text": text])
         return try await request("/v1/paste", method: "POST", body: body)
     }
+
+    func getAccount() async throws -> AccountStatus {
+        try await request("/v1/account")
+    }
+
+    func billingCheckoutURL() async throws -> URL {
+        let r: BillingURL = try await request("/v1/billing/checkout", method: "POST", body: Data("{}".utf8))
+        guard let u = URL(string: r.url) else { throw APIError.http(status: 0, message: "Bad checkout URL") }
+        return u
+    }
+
+    func billingPortalURL() async throws -> URL {
+        let r: BillingURL = try await request("/v1/billing/portal")
+        guard let u = URL(string: r.url) else { throw APIError.http(status: 0, message: "Bad portal URL") }
+        return u
+    }
 }

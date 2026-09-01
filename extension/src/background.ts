@@ -6,7 +6,7 @@ import {
   setCredentials,
   setPairingState,
 } from "./lib/storage";
-import { ApiError, ingestConversation, isUnauthorized, verifyCredentials } from "./lib/api";
+import { ApiError, ingestConversation, isPaymentRequired, isUnauthorized, verifyCredentials } from "./lib/api";
 import { fetchDesktopPairing } from "./lib/pairing";
 import type { CaptureMessage, PairingState } from "./lib/types";
 
@@ -130,6 +130,15 @@ async function handleCapture(
         return { ok: true, result };
       }
       return { ok: false, error: "Credentials expired -- reconnect Thread for Mac." };
+    }
+    if (isPaymentRequired(err)) {
+      // Account is fine, just out of trial -- keep credentials, surface it, stop hammering.
+      await setPairingState({
+        status: "paired",
+        detail: "Trial ended. Subscribe in Thread for Mac to keep capturing.",
+      });
+      await setBadge(true);
+      return { ok: false, error: "Thread trial ended -- subscribe to keep capturing." };
     }
     const detail = err instanceof ApiError ? `${err.status} ${err.message}` : String(err);
     console.error(`[Thread] ingest failed for ${message.conversationId}:`, detail);

@@ -22,6 +22,10 @@ final class AppState: ObservableObject {
     /// loopback pairing server. Drives the footer's "capturing" indicator.
     @Published var lastExtensionHandshake: Date?
 
+    /// Trial / subscription state. nil until first fetched.
+    @Published var account: AccountStatus?
+    @Published var billingBusy = false
+
     var client: APIClient {
         APIClient(baseURL: apiBaseUrl, credentials: CredentialStore.credentials)
     }
@@ -43,10 +47,37 @@ final class AppState: ObservableObject {
         lastExtensionHandshake = Date()
     }
 
-    /// The footer's privacy indicator. Only one mode exists today: conversations are extracted by
-    /// the hosted backend. Local / zero-knowledge modes are a future capability, not a toggle to
-    /// surface as if it worked.
-    var privacyMode: String { "Cloud" }
+    /// Footer's third slot: "Trial · Nd" / "Pro" / "Trial ended" once billing is live, else "Cloud".
+    var planLabel: String { account?.footerLabel ?? "Cloud" }
+
+    /// True when billing is on AND this account can no longer capture. Reads still work.
+    var isLocked: Bool { (account?.billingEnabled ?? false) && !(account?.entitled ?? true) }
+
+    func refreshAccount() async {
+        guard isPaired else { return }
+        account = try? await client.getAccount()
+    }
+
+    func openCheckout() async {
+        billingBusy = true
+        defer { billingBusy = false }
+        do {
+            NSWorkspace.shared.open(try await client.billingCheckoutURL())
+        } catch {
+            errorMessage = "Couldn't start checkout: \(error.localizedDescription)"
+        }
+    }
+
+    func openBillingPortal() async {
+        billingBusy = true
+        defer { billingBusy = false }
+        do {
+            NSWorkspace.shared.open(try await client.billingPortalURL())
+        } catch {
+            // No customer yet -> send them to checkout instead.
+            await openCheckout()
+        }
+    }
 
     /// The one-line credential the browser extension needs when the automatic local handshake
     /// isn't available. Format matches the extension's `parsePairingString`.
@@ -74,6 +105,7 @@ final class AppState: ObservableObject {
                 _ = try await APIClient(baseURL: apiBaseUrl, credentials: cred).getThinkingState()
                 userId = cred.userId
                 await refresh()
+                await refreshAccount()
                 return
             } catch let APIError.http(status, _) where status == 401 {
                 CredentialStore.clear() // stale account -- fall through and re-pair
@@ -128,6 +160,7 @@ final class AppState: ObservableObject {
             errorMessage = error.localizedDescription
         }
         isLoading = false
+        await refreshAccount()
     }
 
     func search() async {

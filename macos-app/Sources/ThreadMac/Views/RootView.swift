@@ -11,6 +11,10 @@ struct RootView: View {
             header
             Divider()
 
+            if appState.isPaired && appState.isLocked && appState.selectedIdeaId == nil {
+                PaywallBanner()
+            }
+
             Group {
                 if !appState.isPaired {
                     PairingView()
@@ -108,7 +112,9 @@ struct StatusFooter: View {
             Text(captureLabel).font(.system(size: 11)).foregroundStyle(.secondary)
             if appState.isPaired {
                 dot
-                Text(appState.privacyMode).font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(appState.planLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(appState.isLocked ? Color.orange : .secondary)
                 if let n = appState.thinkingState?.currentIdeas.count {
                     dot
                     Text("\(n) idea\(n == 1 ? "" : "s")").font(.system(size: 11)).foregroundStyle(.secondary)
