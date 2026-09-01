@@ -58,6 +58,9 @@ describe("mcp/tools against a real persisted db", () => {
     expect(trace?.provenance).toHaveLength(2);
     expect(trace?.provenance[0]?.sourceText).toBe("Authority needs explicit boundaries.");
     expect(trace?.provenance[1]?.sourceText).toBe("Authority boundaries need to be executable, per-agent.");
+    // Each step carries the tool it was captured from.
+    expect(trace?.provenance[0]?.source).toBe("fixture");
+    expect(trace?.provenance[1]?.source).toBe("fixture");
   });
 
   test("getThreadState and getOpenLoops/getRecentChanges are consistent with each other", async () => {

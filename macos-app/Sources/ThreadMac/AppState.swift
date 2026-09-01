@@ -223,31 +223,100 @@ final class AppState: ObservableObject {
     }
 
     @Published var continueCopied = false
+    /// Set briefly after "Send to X" so the view can show "Context ready — press ⌘V".
+    @Published var sentToTool: AITool?
 
-    /// The payoff action. Fetches the synthesised "where this stands + next step" and also puts a
-    /// clean, paste-ready context block on the clipboard so you can drop it into any AI tool.
-    func continueThinkingOnSelected() async {
+    enum AITool: String, CaseIterable, Identifiable {
+        case claude, chatgpt, gemini, cursor
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .claude: return "Claude"
+            case .chatgpt: return "ChatGPT"
+            case .gemini: return "Gemini"
+            case .cursor: return "Cursor"
+            }
+        }
+        /// A "new chat" URL, or nil for tools with no web target (Cursor -> clipboard only).
+        var newChatURL: URL? {
+            switch self {
+            case .claude: return URL(string: "https://claude.ai/new")
+            case .chatgpt: return URL(string: "https://chatgpt.com/")
+            case .gemini: return URL(string: "https://gemini.google.com/app")
+            case .cursor: return nil
+            }
+        }
+        static func from(source: String?) -> AITool? { source.flatMap { AITool(rawValue: $0) } }
+    }
+
+    private let preferredKey = "thread.preferredAI"
+
+    /// The tool the user last developed this idea in, or an explicit preference, else Claude.
+    var preferredTool: AITool {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: preferredKey), let t = AITool(rawValue: raw) { return t }
+            if let last = selectedTrace?.provenance.last?.source, let t = AITool.from(source: last) { return t }
+            return .claude
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: preferredKey) }
+    }
+
+    /// A clean, paste-ready Markdown context block: current idea, evolution, open question,
+    /// and (once fetched) the synthesised "where this stands".
+    func contextMarkdown(for trace: IdeaTrace, synthesis: String?) -> String {
+        var out = "### Current Idea: \(trace.idea.title)\n\n"
+        out += "**Current formulation:**\n\(trace.idea.currentFormulation)\n\n"
+        if !trace.provenance.isEmpty {
+            out += "**Evolution:**\n"
+            for step in trace.provenance { // chronological, oldest first
+                let date = Theme.relative(step.createdAt)
+                let src = step.sourceLabel.map { " _(\($0))_" } ?? ""
+                out += "- \(date): \(step.formulation)\(src)\n"
+            }
+            out += "\n"
+        }
+        let loops = trace.idea.openLoops.filter { !$0.resolved }
+        if !loops.isEmpty {
+            out += "**Open question\(loops.count == 1 ? "" : "s"):**\n"
+            for l in loops { out += "- \(l.statement)\n" }
+            out += "\n"
+        }
+        if let synthesis, !synthesis.isEmpty {
+            out += "**Where this stands:**\n\(synthesis)\n\n"
+        }
+        out += "---\nPlease continue from here."
+        return out
+    }
+
+    private func copyContext(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        continueCopied = true
+    }
+
+    /// The payoff. Fetches the synthesis, copies the full context block, and (for a web tool)
+    /// opens a fresh chat so the user just presses Cmd+V.
+    func continueThinking(sendTo tool: AITool?) async {
         guard let trace = selectedTrace else { return }
         continueResult = "Thinking…"
         continueCopied = false
+        sentToTool = nil
+
+        var synthesis: String?
         do {
-            let result = try await client.continueThinking(topic: trace.idea.title)
-            continueResult = result.text
-
-            let block = """
-            Context from Thread — resuming "\(trace.idea.title)"
-
-            Current formulation: \(trace.idea.currentFormulation)
-
-            Where this stands:
-            \(result.text)
-            """
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(block, forType: .string)
-            continueCopied = true
+            synthesis = try await client.continueThinking(topic: trace.idea.title).text
+            continueResult = synthesis
         } catch {
             continueResult = nil
             errorMessage = error.localizedDescription
+        }
+
+        copyContext(contextMarkdown(for: trace, synthesis: synthesis))
+
+        if let tool {
+            preferredTool = tool
+            if let url = tool.newChatURL { NSWorkspace.shared.open(url) }
+            sentToTool = tool
         }
     }
 }

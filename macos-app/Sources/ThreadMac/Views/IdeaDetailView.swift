@@ -20,23 +20,45 @@ struct IdeaDetailView: View {
                         .foregroundStyle(.primary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Button {
-                        Task { await appState.continueThinkingOnSelected() }
+                    // Split button: click = recommended flow (copy + open preferred tool);
+                    // the chevron opens the full menu.
+                    Menu {
+                        Button {
+                            Task { await appState.continueThinking(sendTo: nil) }
+                        } label: { Label("Copy context to clipboard", systemImage: "doc.on.clipboard") }
+                        Divider()
+                        ForEach(AppState.AITool.allCases) { tool in
+                            Button {
+                                Task { await appState.continueThinking(sendTo: tool) }
+                            } label: {
+                                Label(tool == .cursor ? "Copy for Cursor" : "Send to \(tool.label)",
+                                      systemImage: tool == .cursor ? "curlybraces" : "arrow.up.forward.app")
+                            }
+                        }
                     } label: {
                         Label("Continue this idea", systemImage: "arrow.right.circle.fill")
                             .frame(maxWidth: .infinity)
+                    } primaryAction: {
+                        Task { await appState.continueThinking(sendTo: appState.preferredTool) }
                     }
+                    .menuStyle(.borderlessButton)
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
                     .controlSize(.large)
 
-                    if let result = appState.continueResult {
+                    if appState.continueResult != nil || appState.continueCopied {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(result)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if appState.continueCopied {
+                            if let result = appState.continueResult {
+                                Text(result)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if let tool = appState.sentToTool {
+                                Label("\(tool.label) opened · context ready — press ⌘V",
+                                      systemImage: "checkmark.circle")
+                                    .font(.system(size: 10)).foregroundStyle(Theme.accent)
+                            } else if appState.continueCopied {
                                 Label("Context copied to clipboard", systemImage: "checkmark.circle")
                                     .font(.system(size: 10)).foregroundStyle(Theme.accent)
                             }
@@ -48,6 +70,13 @@ struct IdeaDetailView: View {
                     }
 
                     section("Evolution") {
+                        if let origin = trace.provenance.first?.sourceLabel,
+                           let latest = trace.provenance.last?.sourceLabel {
+                            Text(latest == origin
+                                 ? "Developed in \(latest)"
+                                 : "Last developed in \(latest) · originally from \(origin)")
+                                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        }
                         // Newest first, matching the spec and the marketing site's recovery view.
                         ForEach(Array(trace.provenance.reversed())) { step in
                             HStack(alignment: .top, spacing: 9) {
@@ -63,6 +92,10 @@ struct IdeaDetailView: View {
                                             .font(.system(size: 10)).foregroundStyle(.tertiary)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
+                                }
+                                Spacer(minLength: 6)
+                                if let label = step.sourceLabel {
+                                    Text(label).font(.system(size: 9)).foregroundStyle(.tertiary)
                                 }
                             }
                         }

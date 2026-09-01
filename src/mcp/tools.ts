@@ -48,6 +48,8 @@ export interface ProvenanceStep {
   createdAt: string;
   sourceText: string | null;
   sourceRole: string | null;
+  /** Which tool this step was captured from -- "chatgpt" | "claude" | "gemini" | "cursor" | "paste". */
+  source: string | null;
 }
 
 export interface IdeaTrace {
@@ -67,6 +69,7 @@ export function traceIdea(db: Database, id: string): IdeaTrace | null {
       createdAt: step.createdAt,
       sourceText: source?.text ?? null,
       sourceRole: source?.role ?? null,
+      source: source?.source ?? null,
     };
   });
 

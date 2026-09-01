@@ -86,7 +86,20 @@ struct ProvenanceStep: Codable, Identifiable {
     let createdAt: String
     let sourceText: String?
     let sourceRole: String?
+    /// Tool this step was captured from: "chatgpt" | "claude" | "gemini" | "cursor" | "paste".
+    let source: String?
     var id: String { formulation + createdAt }
+
+    var sourceLabel: String? {
+        switch source {
+        case "chatgpt": return "ChatGPT"
+        case "claude": return "Claude"
+        case "gemini": return "Gemini"
+        case "cursor": return "Cursor"
+        case "paste": return "Pasted"
+        default: return nil
+        }
+    }
 }
 
 struct IdeaTrace: Codable {
