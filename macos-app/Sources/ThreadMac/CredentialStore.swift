@@ -19,8 +19,21 @@ enum CredentialStore {
     }
 
     static var apiBaseUrl: String {
-        get { UserDefaults.standard.string(forKey: apiBaseUrlKey) ?? defaultApiBaseUrl }
-        set { UserDefaults.standard.set(newValue, forKey: apiBaseUrlKey) }
+        get {
+            let stored = UserDefaults.standard.string(forKey: apiBaseUrlKey)?.trimmingCharacters(in: .whitespaces)
+            // An empty string is not nil, so `??` won't catch a blank saved by an earlier build --
+            // treat blank / scheme-less as unset. A blank here becomes URL(string:) -> "unsupported URL".
+            guard let stored, stored.hasPrefix("http") else { return defaultApiBaseUrl }
+            return stored
+        }
+        set {
+            let v = newValue.trimmingCharacters(in: .whitespaces)
+            if v.hasPrefix("http") {
+                UserDefaults.standard.set(v, forKey: apiBaseUrlKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: apiBaseUrlKey)
+            }
+        }
     }
 
     static var credential: Credential? {

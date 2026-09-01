@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.openWindow) private var openWindow
     @State private var showSettings = false
     @State private var showPaste = false
 
@@ -39,6 +40,11 @@ struct RootView: View {
         .task { await appState.refresh() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
+        // Escape: step back out of a detail view; from the list, let the panel close itself.
+        .onExitCommand {
+            if appState.selectedIdeaId != nil { appState.closeIdea() }
+            else { NSApp.keyWindow?.orderOut(nil) }
+        }
     }
 
     private var header: some View {
@@ -59,6 +65,11 @@ struct RootView: View {
                 Button(action: { Task { await appState.refresh() } }) { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain)
                     .help("Refresh")
+                Button(action: { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }) {
+                    Image(systemName: "macwindow")
+                }
+                .buttonStyle(.plain)
+                .help("Open in Window")
             }
             Button(action: { showSettings = true }) { Image(systemName: "gearshape") }
                 .buttonStyle(.plain)
@@ -82,26 +93,34 @@ struct StatusFooter: View {
         }
     }
 
-    private var label: String {
+    private var captureLabel: String {
         switch appState.captureStatus {
-        case .capturing: return "Capturing from your browser"
-        case .idle: return "Connected · open a browser tab to capture"
+        case .capturing: return "Capturing"
+        case .idle: return "Connected"
         case .unpaired: return "Not paired"
         }
     }
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 6) {
             Circle().fill(dotColor).frame(width: 7, height: 7)
-            Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
-            Spacer()
-            if let id = appState.userId {
-                Text(id.replacingOccurrences(of: "user_", with: "").prefix(6) + "…")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+            // capture status · privacy mode · idea count -- the three the spec asks to always show
+            Text(captureLabel).font(.system(size: 11)).foregroundStyle(.secondary)
+            if appState.isPaired {
+                dot
+                Text(appState.privacyMode).font(.system(size: 11)).foregroundStyle(.secondary)
+                if let n = appState.thinkingState?.currentIdeas.count {
+                    dot
+                    Text("\(n) idea\(n == 1 ? "" : "s")").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
             }
+            Spacer()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
+    }
+
+    private var dot: some View {
+        Text("·").font(.system(size: 11)).foregroundStyle(.tertiary)
     }
 }

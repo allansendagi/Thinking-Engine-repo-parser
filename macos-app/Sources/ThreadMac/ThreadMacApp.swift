@@ -48,5 +48,13 @@ struct ThreadMacApp: App {
                 .environmentObject(appDelegate.appState)
         }
         .menuBarExtraStyle(.window)
+
+        // The optional Full Window (spec §4). Opened with "Open in Window" from the panel, or
+        // Cmd+Shift+W. Single instance.
+        Window("Thread", id: "main") {
+            MainWindowView()
+                .environmentObject(appDelegate.appState)
+        }
+        .keyboardShortcut("w", modifiers: [.command, .shift])
     }
 }

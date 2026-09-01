@@ -42,6 +42,11 @@ final class AppState: ObservableObject {
         lastExtensionHandshake = Date()
     }
 
+    /// The footer's privacy indicator. Only one mode exists today: conversations are extracted by
+    /// the hosted backend. Local / zero-knowledge modes are a future capability, not a toggle to
+    /// surface as if it worked.
+    var privacyMode: String { "Cloud" }
+
     /// The one-line credential the browser extension needs when the automatic local handshake
     /// isn't available. Format matches the extension's `parsePairingString`.
     var pairingString: String? {

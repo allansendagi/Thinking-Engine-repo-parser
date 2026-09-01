@@ -42,9 +42,13 @@ struct IdeaDetailView: View {
                     }
 
                     section("Evolution") {
-                        ForEach(trace.provenance) { step in
+                        // Newest first, matching the spec and the marketing site's recovery view.
+                        ForEach(Array(trace.provenance.reversed())) { step in
                             HStack(alignment: .top, spacing: 9) {
-                                Rectangle().fill(Theme.cardStroke).frame(width: 2)
+                                Text(Theme.relative(step.createdAt))
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 40, alignment: .leading)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(step.formulation).font(.system(size: 12))
                                         .fixedSize(horizontal: false, vertical: true)
@@ -56,6 +60,11 @@ struct IdeaDetailView: View {
                                 }
                             }
                         }
+                    }
+
+                    if !trace.idea.relatedIdeaIds.isEmpty {
+                        Text("Related: \(trace.idea.relatedIdeaIds.count) idea\(trace.idea.relatedIdeaIds.count == 1 ? "" : "s")")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
 
                     section("Open loops") {
@@ -101,6 +110,9 @@ struct IdeaDetailView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 Spacer()
+                Text(trace.idea.state)
+                    .font(.system(size: 9, weight: .medium)).textCase(.uppercase).kerning(0.4)
+                    .foregroundStyle(Theme.accent)
                 Menu {
                     Button("Rename…") { titleDraft = trace.idea.title; editingTitle = true }
                     Picker("State", selection: Binding(

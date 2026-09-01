@@ -8,6 +8,16 @@ struct MenuBarListView: View {
         !appState.searchQuery.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// ideaId -> most recent change timestamp, so the list can show "2h" / "3d".
+    private var lastChange: [String: String] {
+        var map: [String: String] = [:]
+        for c in appState.thinkingState?.recentChanges ?? [] {
+            if let existing = map[c.ideaId], existing >= c.createdAt { continue }
+            map[c.ideaId] = c.createdAt
+        }
+        return map
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -19,6 +29,8 @@ struct MenuBarListView: View {
                 if searching {
                     Button(action: { appState.searchQuery = "" }) { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundStyle(.tertiary)
+                } else {
+                    Text("⌘⇧T").font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
                 }
             }
             .padding(.horizontal, 12)
@@ -31,8 +43,8 @@ struct MenuBarListView: View {
                     if searching {
                         results
                     } else {
-                        openLoops
                         currentIdeas
+                        openLoops
                     }
                 }
                 .padding(14)
@@ -48,29 +60,16 @@ struct MenuBarListView: View {
             emptyLine("No matching ideas.")
         } else {
             ForEach(appState.searchResults) { r in
-                IdeaCard(title: displayTitle(r.title, fallback: r.currentFormulation), state: r.state) {
+                IdeaCard(title: displayTitle(r.title, fallback: r.currentFormulation),
+                         formulation: r.currentFormulation, state: r.state,
+                         when: lastChange[r.id]) {
                     Task { await appState.openIdea(r.id) }
                 }
             }
         }
     }
 
-    @ViewBuilder private var openLoops: some View {
-        let loops = (appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }
-        Text("Open loops").sectionHeader()
-        if loops.isEmpty {
-            emptyLine("Nothing unresolved.")
-        } else {
-            ForEach(loops) { loop in
-                LoopCard(question: loop.statement, idea: ideaSubtitle(loop.ideaTitle, question: loop.statement)) {
-                    Task { await appState.openIdea(loop.ideaId) }
-                }
-            }
-        }
-    }
-
     @ViewBuilder private var currentIdeas: some View {
-        // Ideas already surfaced as an open loop aren't repeated here.
         let loopIdeaIds = Set((appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }.map(\.ideaId))
         let ideas = (appState.thinkingState?.currentIdeas ?? []).filter { !loopIdeaIds.contains($0.id) }
 
@@ -81,9 +80,30 @@ struct MenuBarListView: View {
             emptyLine("Nothing captured yet. Talk to ChatGPT, Claude, or Gemini and it shows up here.")
         } else {
             ForEach(ideas) { idea in
-                IdeaCard(title: displayTitle(idea.title, fallback: idea.currentFormulation), state: idea.state) {
+                IdeaCard(title: displayTitle(idea.title, fallback: idea.currentFormulation),
+                         formulation: idea.currentFormulation, state: idea.state,
+                         when: lastChange[idea.id]) {
                     Task { await appState.openIdea(idea.id) }
                 }
+            }
+        }
+    }
+
+    @ViewBuilder private var openLoops: some View {
+        let loops = (appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }
+        if !loops.isEmpty {
+            Text("Open loops").sectionHeader()
+            ForEach(loops) { loop in
+                Button(action: { Task { await appState.openIdea(loop.ideaId) } }) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("•").foregroundStyle(Theme.accent)
+                        Text(loop.statement).font(.system(size: 12)).foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -93,69 +113,59 @@ struct MenuBarListView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// Backend titles are often a truncated sentence ending in "…". Prefer a clean fallback.
+    /// Clean up a backend-generated title. The extraction prompt currently produces narration
+    /// ("The user is asking why…") rather than declarative idea names -- the real fix is in the
+    /// prompt (src/extraction); this makes the current output presentable.
     private func displayTitle(_ title: String, fallback: String) -> String {
-        let t = title.trimmingCharacters(in: .whitespaces)
+        let t = deNarrate(title.trimmingCharacters(in: .whitespaces))
         if t.isEmpty || t.hasSuffix("…") || t.hasSuffix("...") {
             let clause = fallback.split(whereSeparator: { ".?!".contains($0) }).first.map(String.init) ?? fallback
-            return clause.trimmingCharacters(in: .whitespaces)
+            return deNarrate(clause.trimmingCharacters(in: .whitespaces))
         }
         return t
     }
 
-    /// The idea a loop belongs to, shown small under the question -- but only when it actually
-    /// adds information (not a truncated stub, not just the question restated).
-    private func ideaSubtitle(_ ideaTitle: String, question: String) -> String? {
-        let t = ideaTitle.trimmingCharacters(in: .whitespaces)
-        guard !t.isEmpty, !t.hasSuffix("…"), !t.hasSuffix("...") else { return nil }
-        let q = question.lowercased()
-        if q.hasPrefix(t.lowercased()) || t.lowercased().hasPrefix(String(q.prefix(24))) { return nil }
-        return t
+    private func deNarrate(_ s: String) -> String {
+        let prefixes = [
+            "The user is asking why ", "The user is asking whether ", "The user is asking what ",
+            "The user is asking how ", "The user is asking for ", "The user is asking ",
+            "The user is questioning ", "The user is seeking ", "The user is proposing ",
+            "The user is claiming ", "The user decides to ", "The user claims ", "The user wants to ",
+            "The human is asking why ", "The human is asking whether ", "The human is asking ",
+            "The human is questioning ", "The assistant is ", "The user is ", "The human is ",
+        ]
+        for p in prefixes where s.lowercased().hasPrefix(p.lowercased()) {
+            let rest = String(s.dropFirst(p.count))
+            return rest.prefix(1).capitalized + rest.dropFirst()
+        }
+        return s
     }
 }
 
 private struct IdeaCard: View {
     let title: String
+    let formulation: String
     let state: String
+    let when: String?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(alignment: .top, spacing: 8) {
-                Text(title).font(.system(size: 13)).foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let when, !when.isEmpty {
+                        Text(Theme.relative(when)).font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                    StatePill(state: state)
+                }
+                Text(formulation).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                StatePill(state: state)
             }
             .threadCard()
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct LoopCard: View {
-    let question: String
-    let idea: String?
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 0) {
-                Rectangle().fill(Theme.accent).frame(width: 2)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(question).font(.system(size: 13)).foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let idea {
-                        Text(idea).font(.system(size: 10)).foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.leading, 9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.vertical, 9)
-            .padding(.trailing, 10)
-            .background(Theme.cardFill)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.cardCorner))
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
