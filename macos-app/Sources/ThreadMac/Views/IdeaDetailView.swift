@@ -31,14 +31,20 @@ struct IdeaDetailView: View {
                     .controlSize(.large)
 
                     if let result = appState.continueResult {
-                        Text(result)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.cardFill)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.cardCorner))
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(result)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if appState.continueCopied {
+                                Label("Context copied to clipboard", systemImage: "checkmark.circle")
+                                    .font(.system(size: 10)).foregroundStyle(Theme.accent)
+                            }
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.cardFill)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.cardCorner))
                     }
 
                     section("Evolution") {

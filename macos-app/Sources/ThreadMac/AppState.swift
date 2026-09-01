@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -221,12 +222,29 @@ final class AppState: ObservableObject {
         }
     }
 
+    @Published var continueCopied = false
+
+    /// The payoff action. Fetches the synthesised "where this stands + next step" and also puts a
+    /// clean, paste-ready context block on the clipboard so you can drop it into any AI tool.
     func continueThinkingOnSelected() async {
         guard let trace = selectedTrace else { return }
         continueResult = "Thinking…"
+        continueCopied = false
         do {
             let result = try await client.continueThinking(topic: trace.idea.title)
             continueResult = result.text
+
+            let block = """
+            Context from Thread — resuming "\(trace.idea.title)"
+
+            Current formulation: \(trace.idea.currentFormulation)
+
+            Where this stands:
+            \(result.text)
+            """
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(block, forType: .string)
+            continueCopied = true
         } catch {
             continueResult = nil
             errorMessage = error.localizedDescription
