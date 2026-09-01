@@ -31,7 +31,7 @@ struct MenuBarListView: View {
     private var orderedRowIDs: [String] {
         searching
             ? appState.searchResults.map(\.id)
-            : loops.map { "loop:" + $0.loopId } + ideas.map(\.id)
+            : ideas.map(\.id) + loops.map { "loop:" + $0.loopId }
     }
 
     var body: some View {
@@ -80,8 +80,8 @@ struct MenuBarListView: View {
                     resultsSection
                 } else {
                     if !appState.onboardingDismissed { onboardingRow }
-                    loopsSection
                     ideasSection
+                    loopsSection
                 }
             }
             .listStyle(.plain)
@@ -107,18 +107,9 @@ struct MenuBarListView: View {
             Section {
                 ForEach(appState.searchResults) { r in
                     IdeaRow(title: displayTitle(r.title, fallback: r.currentFormulation),
-                            formulation: r.currentFormulation, state: r.state, when: nil)
+                            formulation: r.currentFormulation, state: r.state, when: nil,
+                            onOpen: { Task { await appState.openIdea(r.id) } })
                         .tag(r.id)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private var loopsSection: some View {
-        if !loops.isEmpty {
-            Section(header: SectionLabel("Open loops")) {
-                ForEach(loops) { loop in
-                    LoopRow(question: loop.statement).tag("loop:" + loop.loopId)
                 }
             }
         }
@@ -130,8 +121,21 @@ struct MenuBarListView: View {
                 ForEach(ideas) { idea in
                     IdeaRow(title: displayTitle(idea.title, fallback: idea.currentFormulation),
                             formulation: idea.currentFormulation, state: idea.state,
-                            when: lastChange[idea.id])
+                            when: lastChange[idea.id],
+                            onOpen: { Task { await appState.openIdea(idea.id) } })
                         .tag(idea.id)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var loopsSection: some View {
+        if !loops.isEmpty {
+            Section(header: SectionLabel("Open loops")) {
+                ForEach(loops) { loop in
+                    LoopRow(question: loop.statement,
+                            onOpen: { Task { await appState.openIdea(loop.ideaId) } })
+                        .tag("loop:" + loop.loopId)
                 }
             }
         }
@@ -192,35 +196,44 @@ private struct IdeaRow: View {
     let formulation: String
     let state: String
     let when: String?
+    let onOpen: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if let when, !when.isEmpty {
-                    Text(Theme.relative(when)).font(.system(size: 10)).foregroundStyle(.tertiary)
+        Button(action: onOpen) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let when, !when.isEmpty {
+                        Text(Theme.relative(when)).font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                    StatePill(state: state)
                 }
-                StatePill(state: state)
+                Text(formulation).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
             }
-            Text(formulation).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 5)
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
         .listRowSeparator(.hidden)
     }
 }
 
 private struct LoopRow: View {
     let question: String
+    let onOpen: () -> Void
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "circle.dashed").font(.system(size: 11)).foregroundStyle(Theme.accent)
-                .padding(.top, 1)
-            Text(question).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+        Button(action: onOpen) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "circle.dashed").font(.system(size: 11)).foregroundStyle(Theme.accent)
+                    .padding(.top, 1)
+                Text(question).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
         .listRowSeparator(.hidden)
     }
 }

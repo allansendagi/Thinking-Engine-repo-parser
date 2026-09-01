@@ -68,6 +68,14 @@ struct EvolutionStep: Codable, Identifiable {
     var id: String { formulation + createdAt }
 }
 
+/// A decision as it appears *inside an idea* (GET /v1/ideas/:id or /trace). Distinct from
+/// ThinkingStateResponse.Decision, which is the top-level shape and carries ideaId/ideaTitle.
+struct IdeaDecision: Codable, Identifiable {
+    let id: String
+    let statement: String
+    let decidedAt: String
+}
+
 struct IdeaDetail: Codable, Identifiable {
     let id: String
     let title: String
@@ -75,7 +83,7 @@ struct IdeaDetail: Codable, Identifiable {
     let currentFormulation: String
     let evolution: [EvolutionStep]
     let openLoops: [OpenLoop]
-    let decisions: [ThinkingStateResponse.Decision]
+    let decisions: [IdeaDecision]
     let relatedIdeaIds: [String]
     let createdAt: String
     let updatedAt: String

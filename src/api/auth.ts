@@ -66,10 +66,16 @@ export interface Account {
 }
 
 function rowToAccount(row: Record<string, unknown>): Account {
+  // Accounts created before the billing migration have trial_ends_at = NULL. Derive it from
+  // created_at so they still get a full trial window rather than showing as expired.
+  let trialEndsAt = (row.trial_ends_at as string | null) ?? null;
+  if (!trialEndsAt && row.created_at) {
+    trialEndsAt = new Date(new Date(row.created_at as string).getTime() + TRIAL_DAYS * 86_400_000).toISOString();
+  }
   return {
     userId: row.id as string,
     status: (row.subscription_status as SubscriptionStatus) ?? "trialing",
-    trialEndsAt: (row.trial_ends_at as string | null) ?? null,
+    trialEndsAt,
     currentPeriodEnd: (row.current_period_end as string | null) ?? null,
     stripeCustomerId: (row.stripe_customer_id as string | null) ?? null,
   };
