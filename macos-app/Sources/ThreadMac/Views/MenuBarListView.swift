@@ -4,156 +4,190 @@ struct MenuBarListView: View {
     @EnvironmentObject var appState: AppState
     @FocusState private var searchFocused: Bool
     @State private var selection: String?
+    @State private var tab: Tab = .recent
+
+    enum Tab: String, CaseIterable, Identifiable {
+        case recent = "Recent", loops = "Open loops", all = "All"
+        var id: String { rawValue }
+    }
 
     private var searching: Bool {
         !appState.searchQuery.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    private var lastChange: [String: String] {
-        var map: [String: String] = [:]
+    // ideaId -> most recent change timestamp
+    private var lastTouched: [String: String] {
+        var m: [String: String] = [:]
         for c in appState.thinkingState?.recentChanges ?? [] {
-            if let existing = map[c.ideaId], existing >= c.createdAt { continue }
-            map[c.ideaId] = c.createdAt
+            if let e = m[c.ideaId], e >= c.createdAt { continue }
+            m[c.ideaId] = c.createdAt
         }
-        return map
+        return m
     }
 
-    private var loops: [ThinkingStateResponse.OpenLoopEntry] {
+    private var openLoops: [ThinkingStateResponse.OpenLoopEntry] {
         (appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }
     }
 
-    private var ideas: [IdeaSummary] {
-        let loopIdeaIds = Set(loops.map(\.ideaId))
-        return (appState.thinkingState?.currentIdeas ?? []).filter { !loopIdeaIds.contains($0.id) }
+    // MARK: rows model
+
+    struct Row: Identifiable {
+        let id: String
+        let title: String
+        let snippet: String?
+        let meta: String
+        let isLoop: Bool
+        let ideaId: String
+        let when: String
     }
 
-    /// Flat id list in visual order, so ⏎ can resolve the current selection.
-    private var orderedRowIDs: [String] {
-        searching
-            ? appState.searchResults.map(\.id)
-            : ideas.map(\.id) + loops.map { "loop:" + $0.loopId }
+    struct Group: Identifiable {
+        let id: String
+        let label: String
+        let rows: [Row]
     }
+
+    private func ideaRow(_ i: IdeaSummary) -> Row {
+        let when = lastTouched[i.id] ?? i.currentFormulation
+        return Row(
+            id: i.id,
+            title: displayTitle(i.title, fallback: i.currentFormulation),
+            snippet: i.currentFormulation,
+            meta: Theme.ago(lastTouched[i.id] ?? ""),
+            isLoop: false, ideaId: i.id,
+            when: lastTouched[i.id] ?? ""
+        )
+    }
+
+    private func loopRow(_ l: ThinkingStateResponse.OpenLoopEntry) -> Row {
+        Row(id: "loop:" + l.loopId, title: l.statement, snippet: nil,
+            meta: "Open loop", isLoop: true, ideaId: l.ideaId, when: "")
+    }
+
+    private var groups: [Group] {
+        if searching {
+            let rows = appState.searchResults.map {
+                Row(id: $0.id, title: displayTitle($0.title, fallback: $0.currentFormulation),
+                    snippet: $0.currentFormulation, meta: "", isLoop: false, ideaId: $0.id, when: "")
+            }
+            return rows.isEmpty ? [] : [Group(id: "results", label: "Results", rows: rows)]
+        }
+
+        let ideas = appState.thinkingState?.currentIdeas ?? []
+        switch tab {
+        case .loops:
+            return openLoops.isEmpty ? [] : [Group(id: "loops", label: "Open loops", rows: openLoops.map(loopRow))]
+        case .recent, .all:
+            let loopIdeaIDs = Set(openLoops.map(\.ideaId))
+            let items: [Row] =
+                tab == .recent
+                ? (ideas.filter { !loopIdeaIDs.contains($0.id) }.map(ideaRow) + openLoops.map(loopRow))
+                : ideas.map(ideaRow)
+            // bucket by time
+            var buckets: [Int: (String, [Row])] = [:]
+            for r in items {
+                let b: (order: Int, label: String) = r.when.isEmpty ? (4, "Earlier") : Theme.bucket(r.when)
+                buckets[b.order, default: (b.label, [])].1.append(r)
+            }
+            return buckets.keys.sorted().map { k in
+                let (label, rows) = buckets[k]!
+                return Group(id: "b\(k)", label: label,
+                             rows: rows.sorted { $0.when > $1.when })
+            }
+        }
+    }
+
+    // MARK: body
 
     var body: some View {
         VStack(spacing: 0) {
-            searchField
-            Divider()
-            content
+            chrome
+            list
         }
         .onAppear { searchFocused = true }
     }
 
-    // MARK: search
-
-    private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 12))
-            TextField("Where was I with…", text: $appState.searchQuery)
-                .textFieldStyle(.plain)
-                .focused($searchFocused)
-                .onChange(of: appState.searchQuery) { _ in Task { await appState.search() } }
-                .onKeyPress(.downArrow) {
-                    if let first = orderedRowIDs.first { selection = first; searchFocused = false }
-                    return .handled
+    private var chrome: some View {
+        VStack(spacing: 9) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Theme.ink(0.4))
+                TextField("Search", text: $appState.searchQuery)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12.5))
+                    .focused($searchFocused)
+                    .onChange(of: appState.searchQuery) { _ in Task { await appState.search() } }
+                    .onKeyPress(.downArrow) {
+                        if let first = groups.first?.rows.first { selection = first.id; searchFocused = false }
+                        return .handled
+                    }
+                if searching {
+                    Button { appState.searchQuery = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }.buttonStyle(.plain).foregroundStyle(Theme.ink(0.3))
                 }
-            if searching {
-                Button { appState.searchQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain).foregroundStyle(.tertiary)
-            } else {
-                Text("⌘⇧T").font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+            }
+            .frame(height: 26)
+            .padding(.horizontal, 8)
+            .background(Theme.fieldFill, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.ink(0.09), lineWidth: 0.5))
+
+            if !searching {
+                Picker("", selection: $tab) {
+                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .onChange(of: tab) { _ in selection = nil }
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.bottom, 10)
     }
 
-    // MARK: content
-
-    @ViewBuilder private var content: some View {
-        if appState.isLoading && (appState.thinkingState?.currentIdeas.isEmpty ?? true) && !searching {
-            SkeletonList()
-        } else if !searching && ideas.isEmpty && loops.isEmpty {
-            EmptyState(showOnboarding: !appState.onboardingDismissed) { appState.dismissOnboarding() }
+    @ViewBuilder private var list: some View {
+        if groups.isEmpty {
+            EmptyState(
+                onboard: !appState.onboardingDismissed && tab != .loops,
+                dismiss: { appState.dismissOnboarding() },
+                loops: tab == .loops
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(selection: $selection) {
-                if searching {
-                    resultsSection
-                } else {
-                    if !appState.onboardingDismissed { onboardingRow }
-                    ideasSection
-                    loopsSection
+                ForEach(groups) { g in
+                    Section {
+                        ForEach(g.rows) { r in
+                            RowView(row: r).tag(r.id)
+                        }
+                    } header: {
+                        Text(g.label)
+                            .font(.system(size: 12, weight: .semibold)).kerning(-0.1)
+                            .foregroundStyle(Theme.ink(0.85))
+                    }
                 }
             }
-            .listStyle(.plain)
+            .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 2)
-            .onKeyPress(.return) { openSelected(); return .handled }
-            .onKeyPress(.rightArrow) { openSelected(); return .handled }
+            .environment(\.defaultMinListRowHeight, 1)
+            .onChange(of: selection) { open($0) }
+            .onKeyPress(.return) { open(selection); return .handled }
         }
     }
 
-    private var onboardingRow: some View {
-        OnboardingCard { appState.dismissOnboarding() }
-            .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 4, trailing: 12))
-            .listRowSeparator(.hidden)
-            .selectionDisabled()
-    }
-
-    @ViewBuilder private var resultsSection: some View {
-        if appState.searchResults.isEmpty {
-            Text("No matching ideas.").font(.system(size: 12)).foregroundStyle(.secondary)
-                .listRowSeparator(.hidden).selectionDisabled()
-        } else {
-            Section {
-                ForEach(appState.searchResults) { r in
-                    IdeaRow(title: displayTitle(r.title, fallback: r.currentFormulation),
-                            formulation: r.currentFormulation, state: r.state, when: nil,
-                            onOpen: { Task { await appState.openIdea(r.id) } })
-                        .tag(r.id)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private var ideasSection: some View {
-        if !ideas.isEmpty {
-            Section(header: SectionLabel("Recent ideas")) {
-                ForEach(ideas) { idea in
-                    IdeaRow(title: displayTitle(idea.title, fallback: idea.currentFormulation),
-                            formulation: idea.currentFormulation, state: idea.state,
-                            when: lastChange[idea.id],
-                            onOpen: { Task { await appState.openIdea(idea.id) } })
-                        .tag(idea.id)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private var loopsSection: some View {
-        if !loops.isEmpty {
-            Section(header: SectionLabel("Open loops")) {
-                ForEach(loops) { loop in
-                    LoopRow(question: loop.statement,
-                            onOpen: { Task { await appState.openIdea(loop.ideaId) } })
-                        .tag("loop:" + loop.loopId)
-                }
-            }
-        }
-    }
-
-    // MARK: actions
-
-    private func openSelected() {
-        guard let sel = selection else { return }
-        if sel.hasPrefix("loop:") {
-            let loopId = String(sel.dropFirst(5))
-            if let loop = loops.first(where: { $0.loopId == loopId }) {
-                Task { await appState.openIdea(loop.ideaId) }
+    private func open(_ id: String?) {
+        guard let id else { return }
+        if id.hasPrefix("loop:") {
+            let lid = String(id.dropFirst(5))
+            if let l = openLoops.first(where: { $0.loopId == lid }) {
+                Task { await appState.openIdea(l.ideaId) }
             }
         } else {
-            Task { await appState.openIdea(sel) }
+            Task { await appState.openIdea(id) }
         }
     }
+
+    // MARK: title cleanup
 
     private func displayTitle(_ title: String, fallback: String) -> String {
         let t = deNarrate(title.trimmingCharacters(in: .whitespaces))
@@ -181,126 +215,70 @@ struct MenuBarListView: View {
     }
 }
 
-// MARK: - Rows
+// MARK: - Row
 
-private struct SectionLabel: View {
-    let text: String
-    init(_ t: String) { text = t }
-    var body: some View {
-        Text(text).sectionHeader().padding(.top, 6).padding(.bottom, 2)
-    }
-}
-
-private struct IdeaRow: View {
-    let title: String
-    let formulation: String
-    let state: String
-    let when: String?
-    let onOpen: () -> Void
+private struct RowView: View {
+    let row: MenuBarListView.Row
 
     var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if let when, !when.isEmpty {
-                        Text(Theme.relative(when)).font(.system(size: 10)).foregroundStyle(.tertiary)
-                    }
-                    StatePill(state: state)
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: row.isLoop ? "questionmark.circle" : "lightbulb")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.title)
+                    .font(.system(size: 12.5, weight: .medium)).kerning(-0.1)
+                    .lineLimit(2)
+                if let snip = row.snippet, !snip.isEmpty {
+                    Text(snip)
+                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
-                Text(formulation).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
-            }
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowSeparator(.hidden)
-    }
-}
-
-private struct LoopRow: View {
-    let question: String
-    let onOpen: () -> Void
-    var body: some View {
-        Button(action: onOpen) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "circle.dashed").font(.system(size: 11)).foregroundStyle(Theme.accent)
-                    .padding(.top, 1)
-                Text(question).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowSeparator(.hidden)
-    }
-}
-
-struct StatePill: View {
-    let state: String
-    var body: some View {
-        Text(state)
-            .font(.system(size: 9, weight: .medium)).textCase(.uppercase).kerning(0.4)
-            .foregroundStyle(Theme.stateColor(state))
-            .padding(.horizontal, 5).padding(.vertical, 2)
-            .background(Theme.stateColor(state).opacity(0.14))
-            .clipShape(Capsule())
-    }
-}
-
-// MARK: - Skeleton / empty / onboarding
-
-private struct SkeletonList: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(0..<4, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 6) {
-                    RoundedRectangle(cornerRadius: 4).frame(width: 160, height: 11)
-                    RoundedRectangle(cornerRadius: 4).frame(height: 9)
-                    RoundedRectangle(cornerRadius: 4).frame(width: 220, height: 9)
+                if !row.meta.isEmpty {
+                    Text(row.meta).font(.system(size: 11)).foregroundStyle(.tertiary)
                 }
-                .foregroundStyle(.quaternary)
-                .redacted(reason: .placeholder)
-                .shimmer()
             }
-            Spacer()
         }
-        .padding(14)
+        .padding(.vertical, 4)
+        .listRowSeparator(.hidden)
+        .contentShape(Rectangle())
     }
 }
+
+// MARK: - Empty / onboarding
 
 private struct EmptyState: View {
-    let showOnboarding: Bool
+    let onboard: Bool
     let dismiss: () -> Void
+    let loops: Bool
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 13) {
             Spacer()
-            Image(systemName: "sparkles")
-                .font(.system(size: 30, weight: .light))
+            Image(systemName: loops ? "checkmark.circle" : "sparkles")
+                .font(.system(size: 28, weight: .light))
                 .foregroundStyle(Theme.accent.gradient)
-            Text("Nothing captured yet")
-                .font(.system(size: 14, weight: .semibold))
-            Text("Talk to ChatGPT, Claude, or Gemini and your first idea shows up here.")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 260)
-            if showOnboarding {
-                OnboardingCard(dismiss: dismiss).padding(.top, 6).frame(maxWidth: 300)
+            Text(loops ? "No open loops" : "Nothing captured yet")
+                .font(.system(size: 13.5, weight: .semibold))
+            if !loops {
+                Text("Talk to ChatGPT, Claude, or Gemini and your first idea shows up here.")
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).frame(maxWidth: 250)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if onboard {
+                OnboardingCard(dismiss: dismiss).frame(maxWidth: 300).padding(.top, 4)
             }
             Spacer()
         }
-        .frame(maxWidth: .infinity)
-        .padding(20)
+        .frame(maxWidth: .infinity).padding(20)
     }
 }
 
 private struct OnboardingCard: View {
     let dismiss: () -> Void
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -309,51 +287,22 @@ private struct OnboardingCard: View {
                 Button(action: dismiss) { Image(systemName: "xmark") }
                     .buttonStyle(.plain).font(.system(size: 9)).foregroundStyle(.tertiary)
             }
-            step(1, "Install the browser extension", "chrome://extensions → Load unpacked")
-            step(2, "Start talking", "Use ChatGPT, Claude, Gemini or Cursor as normal")
-            step(3, "Press ⌘⇧T", "Recall any idea from anywhere")
+            step(1, "Install the browser extension")
+            step(2, "Talk to ChatGPT, Claude, Gemini or Cursor")
+            step(3, "Press ⌘⇧T to recall anything")
         }
         .padding(12)
-        .background(Theme.cardFill)
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardCorner))
         .overlay(RoundedRectangle(cornerRadius: Theme.cardCorner).stroke(Theme.cardStroke, lineWidth: 0.5))
-        .clipShape(RoundedRectangle(cornerRadius: Theme.cardCorner))
     }
 
-    private func step(_ n: Int, _ title: String, _ detail: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text("\(n)")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
+    private func step(_ n: Int, _ t: String) -> some View {
+        HStack(spacing: 8) {
+            Text("\(n)").font(.system(size: 9, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 14, height: 14)
-                .background(Theme.accent.opacity(0.15)).clipShape(Circle())
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.system(size: 11, weight: .medium))
-                Text(detail).font(.system(size: 10)).foregroundStyle(.secondary)
-            }
+                .background(Theme.accent.opacity(0.15), in: Circle())
+            Text(t).font(.system(size: 11)).foregroundStyle(.secondary)
         }
     }
-}
-
-// MARK: - Shimmer
-
-private struct Shimmer: ViewModifier {
-    @State private var phase: CGFloat = -1
-    func body(content: Content) -> some View {
-        content.overlay(
-            LinearGradient(
-                colors: [.clear, .white.opacity(0.35), .clear],
-                startPoint: .leading, endPoint: .trailing
-            )
-            .frame(width: 80)
-            .offset(x: phase * 300)
-            .blendMode(.plusLighter)
-        )
-        .mask(content)
-        .onAppear {
-            withAnimation(.linear(duration: 1.3).repeatForever(autoreverses: false)) { phase = 2 }
-        }
-    }
-}
-private extension View {
-    func shimmer() -> some View { modifier(Shimmer()) }
 }

@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// One place for the calm, slightly-serious visual language the panel is meant to have (see the
-/// UI spec): system font throughout, a muted accent, soft cards, generous whitespace, and colors
-/// that resolve correctly in both light and dark mode.
+/// Visual language for the panel, following the "Premium macOS" redesign: SF system font, the
+/// system accent colour (blue by default), a translucent material surface, hairline separators,
+/// and full-accent selection like a macOS source list. Semantic colours throughout so it renders
+/// correctly in light *and* dark (the design mock is the light rendering).
 enum Theme {
-    /// Muted indigo -- calm, not playful, distinct from system blue.
-    static let accent = Color(red: 0.36, green: 0.40, blue: 0.78)
+    /// Respects the user's system accent (blue out of the box — the design's #0A6FFF).
+    static let accent = Color(nsColor: .controlAccentColor)
 
-    /// One tint per idea state, following macOS's restrained palette (not saturated).
+    /// One tint per idea state, restrained macOS palette.
     static func stateColor(_ state: String) -> Color {
         switch state.lowercased() {
         case "developing": return accent
@@ -18,54 +19,85 @@ enum Theme {
         }
     }
 
-    static let panelWidth: CGFloat = 440
-    static let panelHeight: CGFloat = 560
-    static let corner: CGFloat = 10
-    static let cardCorner: CGFloat = 8
+    // Panel geometry (from the redesign: 420 × 748, 12pt radius).
+    static let panelWidth: CGFloat = 420
+    static let panelHeight: CGFloat = 748
+    static let corner: CGFloat = 12
+    static let cardCorner: CGFloat = 9
 
-    /// Short relative time ("2h", "yday", "3d", "Aug 17") for idea/evolution metadata.
-    static func relative(_ iso: String) -> String {
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = fmt.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
-        guard let date else { return "" }
-        let secs = Date().timeIntervalSince(date)
-        switch secs {
-        case ..<3600: return "\(max(1, Int(secs / 60)))m"
-        case ..<86_400: return "\(Int(secs / 3600))h"
-        case ..<172_800: return "yday"
-        case ..<604_800: return "\(Int(secs / 86_400))d"
+    /// Adaptive stand-ins for the mock's rgba(0,0,0,x) / rgba(255,255,255,x) values.
+    static func ink(_ a: Double) -> Color { Color.primary.opacity(a) }
+    static let hairline = Color.primary.opacity(0.09)
+    static let fieldFill = Color.primary.opacity(0.055)
+    static let cardFill = Color.primary.opacity(0.04)
+    static let cardStroke = Color.primary.opacity(0.09)
+    static let hoverFill = Color.primary.opacity(0.05)
+
+    /// Short relative time: "24m ago", "1h ago", "3d ago", "Aug 17".
+    static func ago(_ iso: String) -> String {
+        guard let date = parse(iso) else { return "" }
+        let s = Date().timeIntervalSince(date)
+        switch s {
+        case ..<90: return "just now"
+        case ..<3600: return "\(Int(s / 60))m ago"
+        case ..<86_400: return "\(Int(s / 3600))h ago"
+        case ..<604_800: return "\(Int(s / 86_400))d ago"
         default:
-            let d = DateFormatter()
-            d.dateFormat = "MMM d"
+            let d = DateFormatter(); d.dateFormat = "MMM d"
             return d.string(from: date)
         }
     }
 
-    /// Card fill that has real contrast in both appearances (NSColor.textBackgroundColor is too
-    /// close to the panel bg in dark mode).
-    static let cardFill = Color(nsColor: .quaternaryLabelColor).opacity(0.35)
-    static let cardStroke = Color(nsColor: .separatorColor)
-    static let panelBackground = Color(nsColor: .windowBackgroundColor)
+    /// Compact form for tight metadata: "24m", "1h", "3d", "Aug 17".
+    static func relative(_ iso: String) -> String {
+        guard let date = parse(iso) else { return "" }
+        let s = Date().timeIntervalSince(date)
+        switch s {
+        case ..<3600: return "\(max(1, Int(s / 60)))m"
+        case ..<86_400: return "\(Int(s / 3600))h"
+        case ..<604_800: return "\(Int(s / 86_400))d"
+        default:
+            let d = DateFormatter(); d.dateFormat = "MMM d"
+            return d.string(from: date)
+        }
+    }
+
+    /// "Today" / "Yesterday" / "This week" / "Earlier" bucket for a timestamp.
+    static func bucket(_ iso: String) -> (order: Int, label: String) {
+        guard let date = parse(iso) else { return (4, "Earlier") }
+        let cal = Calendar.current
+        if cal.isDateInToday(date) { return (0, "Today") }
+        if cal.isDateInYesterday(date) { return (1, "Yesterday") }
+        if let days = cal.dateComponents([.day], from: date, to: Date()).day, days < 7 { return (2, "This week") }
+        return (3, "Earlier")
+    }
+
+    static func parse(_ iso: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+    }
+}
+
+/// Small uppercase state chip, tinted per state.
+struct StatePill: View {
+    let state: String
+    var body: some View {
+        Text(state)
+            .font(.system(size: 9, weight: .medium)).textCase(.uppercase).kerning(0.4)
+            .foregroundStyle(Theme.stateColor(state))
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(Theme.stateColor(state).opacity(0.14), in: Capsule())
+    }
 }
 
 extension View {
-    /// Standard idea/loop card: soft fill, hairline border, rounded, full-width, tappable.
-    func threadCard() -> some View {
+    /// A raised white control (the mock's secondary buttons): opaque fill, hairline + soft shadow.
+    func raisedControl() -> some View {
         self
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.cardFill)
-            .overlay(RoundedRectangle(cornerRadius: Theme.cardCorner).stroke(Theme.cardStroke, lineWidth: 0.5))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.cardCorner))
-            .contentShape(Rectangle())
-    }
-
-    func sectionHeader() -> some View {
-        self
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .textCase(.uppercase)
-            .kerning(0.6)
+            .background(Color(nsColor: .textBackgroundColor))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.ink(0.13), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .shadow(color: .black.opacity(0.12), radius: 1.5, y: 1)
     }
 }

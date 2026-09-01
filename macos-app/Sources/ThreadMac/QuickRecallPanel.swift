@@ -27,14 +27,13 @@ final class QuickRecallPanel {
         panel.level = .floating
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        // Opaque, shadowed, and clipped to a rounded rect -- without this the SwiftUI content
-        // doesn't fully cover the panel and the desktop shows through at the edges.
-        panel.isOpaque = true
-        panel.backgroundColor = .windowBackgroundColor
+        // Transparent window -- the SwiftUI root paints its own translucent material and clips to
+        // a 12pt rounded rect. The panel just provides the drop shadow.
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.contentView?.wantsLayer = true
-        panel.contentView?.layer?.cornerRadius = Theme.corner
-        panel.contentView?.layer?.masksToBounds = true
+        panel.contentView?.layer?.masksToBounds = false
         self.panel = panel
     }
 
