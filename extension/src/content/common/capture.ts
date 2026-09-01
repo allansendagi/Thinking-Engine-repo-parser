@@ -19,6 +19,15 @@ import type { SiteAdapter } from "./siteAdapter";
  */
 export interface CaptureOptions {
   debounceMs?: number;
+  /**
+   * Backstop re-check interval, independent of MutationObserver callbacks. A page's first render
+   * after a hard reload (fetch conversation -> render -> possibly re-render on hydration) can
+   * settle in ways that leave the very first debounced flush racing an incomplete DOM -- this
+   * catches that case within one interval instead of depending on a mutation firing again later.
+   * Set to 0/undefined-safe: pass 0 to disable (used by tests, which run far faster than any
+   * real interval and don't want an extra timer alive after the test ends).
+   */
+  backstopMs?: number;
   /** Injectable for tests -- defaults to the real chrome.runtime.sendMessage. */
   sendMessage?: (message: CaptureMessage) => Promise<unknown>;
   now?: () => string;
@@ -26,6 +35,7 @@ export interface CaptureOptions {
 
 export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: CaptureOptions = {}): () => void {
   const debounceMs = options.debounceMs ?? 2000;
+  const backstopMs = options.backstopMs ?? 4000;
   const sendMessage = options.sendMessage ?? ((m: CaptureMessage) => chrome.runtime.sendMessage(m));
   const now = options.now ?? (() => new Date().toISOString());
 
@@ -72,5 +82,11 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
 
   scheduleFlush(); // capture whatever's already on the page when we attach
 
-  return () => observer.disconnect();
+  const backstop = backstopMs > 0 ? setInterval(() => void flush(), backstopMs) : null;
+
+  return () => {
+    observer.disconnect();
+    if (timer) clearTimeout(timer);
+    if (backstop) clearInterval(backstop);
+  };
 }
