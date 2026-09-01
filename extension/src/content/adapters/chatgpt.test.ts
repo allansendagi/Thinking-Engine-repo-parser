@@ -13,6 +13,30 @@ describe("chatGptAdapter", () => {
     expect(chatGptAdapter.getConversationId()).toBeNull();
   });
 
+  test("ignores the provisional WEB: id a new chat briefly gets before its real UUID", () => {
+    setupDom("https://chatgpt.com/c/WEB:e53ad3fb-c398-4d27-bce1-066d08a84aa8", "<main></main>");
+    expect(chatGptAdapter.getConversationId()).toBeNull();
+  });
+
+  test("reads the real id once the URL settles, ignoring query/hash", () => {
+    setupDom("https://chatgpt.com/c/6a971195-9a84-83eb-9f5f-348310970f3a?foo=1", "<main></main>");
+    expect(chatGptAdapter.getConversationId()).toBe("6a971195-9a84-83eb-9f5f-348310970f3a");
+  });
+
+  test("strips ChatGPT's screen-reader turn labels from captured text", () => {
+    const window = setupDom(
+      "https://chatgpt.com/c/abc-123",
+      `<main>
+        <div data-message-author-role="user">You said:tell me everything</div>
+        <div data-message-author-role="assistant">ChatGPT said:Here is everything</div>
+      </main>`,
+    );
+    expect(chatGptAdapter.extractMessages(window.document as unknown as ParentNode)).toEqual([
+      { role: "user", text: "tell me everything" },
+      { role: "assistant", text: "Here is everything" },
+    ]);
+  });
+
   test("extracts user/assistant turns via data-message-author-role, in DOM order", () => {
     const window = setupDom(
       "https://chatgpt.com/c/abc-123",
