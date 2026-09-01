@@ -14,11 +14,15 @@ final class PairingServer {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.thread.mac.pairing-server")
     private var payloadProvider: () -> Data?
+    private var onServed: () -> Void
 
-    /// - Parameter payloadProvider: returns the JSON body to serve, or nil to answer 404
-    ///   (e.g. when the app isn't paired yet).
-    init(payloadProvider: @escaping () -> Data?) {
+    /// - Parameters:
+    ///   - payloadProvider: the JSON body to serve, or nil to answer 404 (app not paired yet).
+    ///   - onServed: called after credentials are successfully handed to a client -- used to
+    ///     surface "browser connected" in the UI. Invoked on an arbitrary queue.
+    init(payloadProvider: @escaping () -> Data?, onServed: @escaping () -> Void = {}) {
         self.payloadProvider = payloadProvider
+        self.onServed = onServed
     }
 
     func start() {
@@ -70,6 +74,7 @@ final class PairingServer {
         guard method == "GET", path == "/thread/pair", let body = payloadProvider() else {
             return Self.raw(status: "404 Not Found", body: Data(#"{"error":"not pairing"}"#.utf8))
         }
+        onServed()
         return Self.raw(status: "200 OK", body: body)
     }
 

@@ -17,11 +17,30 @@ final class AppState: ObservableObject {
     @Published var pasteStatus: String?
     @Published var isPasting = false
 
+    /// Last time a client (the browser extension / desktop agent) pulled credentials from the
+    /// loopback pairing server. Drives the footer's "capturing" indicator.
+    @Published var lastExtensionHandshake: Date?
+
     var client: APIClient {
         APIClient(baseURL: apiBaseUrl, credentials: CredentialStore.credentials)
     }
 
     var isPaired: Bool { CredentialStore.credentials != nil }
+
+    enum CaptureStatus {
+        case capturing, idle, unpaired
+    }
+
+    /// A client that handshook within the last 5 minutes is treated as actively connected.
+    var captureStatus: CaptureStatus {
+        guard isPaired else { return .unpaired }
+        if let last = lastExtensionHandshake, Date().timeIntervalSince(last) < 300 { return .capturing }
+        return .idle
+    }
+
+    func noteExtensionHandshake() {
+        lastExtensionHandshake = Date()
+    }
 
     /// The one-line credential the browser extension needs when the automatic local handshake
     /// isn't available. Format matches the extension's `parsePairingString`.

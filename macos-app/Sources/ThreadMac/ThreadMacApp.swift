@@ -23,7 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Serve credentials to the browser extension over loopback so it never mints its own
         // account. Started before bootstrap so a fast extension retry catches a fresh account.
         let state = appState
-        let server = PairingServer(payloadProvider: { state.pairingPayload() })
+        let server = PairingServer(
+            payloadProvider: { state.pairingPayload() },
+            onServed: { Task { @MainActor in state.noteExtensionHandshake() } }
+        )
         server.start()
         pairingServer = server
 
