@@ -14,6 +14,8 @@ final class AppState: ObservableObject {
     @Published var continueResult: String?
     @Published var errorMessage: String?
     @Published var isLoading = false
+    @Published var pasteStatus: String?
+    @Published var isPasting = false
 
     var client: APIClient {
         APIClient(baseURL: apiBaseUrl, credentials: CredentialStore.credentials)
@@ -122,6 +124,29 @@ final class AppState: ObservableObject {
             if let id = selectedIdeaId { await openIdea(id) } else { await refresh() }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// The native, browser-free way data gets into Thread: paste a conversation's text directly
+    /// (copied from ChatGPT, Claude, anywhere) rather than relying on a browser extension to
+    /// scrape a live page's DOM -- no selector fragility, no site-redesign breakage.
+    func submitPaste(_ text: String) async -> Bool {
+        guard isPaired else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        isPasting = true
+        errorMessage = nil
+        pasteStatus = nil
+        do {
+            let result = try await client.pasteConversation(text: trimmed)
+            pasteStatus = "Captured \(result.newCognitiveEvents) idea\(result.newCognitiveEvents == 1 ? "" : "s")."
+            await refresh()
+            isPasting = false
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            isPasting = false
+            return false
         }
     }
 

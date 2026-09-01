@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject var appState: AppState
     @State private var showSettings = false
+    @State private var showPaste = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +26,7 @@ struct RootView: View {
         .frame(width: 360, height: 480)
         .task { await appState.refresh() }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showPaste) { PasteView() }
     }
 
     private var header: some View {
@@ -35,6 +37,11 @@ struct RootView: View {
             }
             Text("Thread").font(.headline)
             Spacer()
+            if appState.isPaired {
+                Button(action: { showPaste = true }) { Image(systemName: "plus.circle") }
+                    .buttonStyle(.plain)
+                    .help("Add a conversation")
+            }
             Button(action: { showSettings = true }) { Image(systemName: "gearshape") }
                 .buttonStyle(.plain)
         }

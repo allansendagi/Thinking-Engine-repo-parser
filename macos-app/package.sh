@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="ThreadMac"
 BUNDLE_ID="com.thread.mac"
-VERSION="0.1.1"
+VERSION="0.1.2"
 BUILD_DIR=".build/release"
 APP_DIR="dist/${APP_NAME}.app"
 
