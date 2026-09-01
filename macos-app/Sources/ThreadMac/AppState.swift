@@ -23,6 +23,45 @@ final class AppState: ObservableObject {
 
     var isPaired: Bool { CredentialStore.credentials != nil }
 
+    /// The one-line credential the browser extension needs when the automatic local handshake
+    /// isn't available. Format matches the extension's `parsePairingString`.
+    var pairingString: String? {
+        guard let c = CredentialStore.credentials else { return nil }
+        return "\(c.userId):\(c.token)"
+    }
+
+    /// JSON body the loopback PairingServer serves to the extension, or nil when not paired.
+    nonisolated func pairingPayload() -> Data? {
+        guard let c = CredentialStore.credentials else { return nil }
+        let body: [String: String] = [
+            "userId": c.userId,
+            "token": c.token,
+            "apiBaseUrl": CredentialStore.apiBaseUrl,
+        ]
+        return try? JSONSerialization.data(withJSONObject: body)
+    }
+
+    /// First-run bootstrap: make sure there's a *working* account so the app just works on launch
+    /// and the pairing server never serves dead credentials to the extension. Safe every launch.
+    func bootstrap() async {
+        if let cred = CredentialStore.credentials {
+            do {
+                _ = try await APIClient(baseURL: apiBaseUrl, credentials: cred).getThinkingState()
+                userId = cred.userId
+                await refresh()
+                return
+            } catch let APIError.http(status, _) where status == 401 {
+                CredentialStore.clear() // stale account -- fall through and re-pair
+            } catch {
+                // Backend unreachable: keep credentials, surface the problem, don't wipe.
+                userId = cred.userId
+                errorMessage = error.localizedDescription
+                return
+            }
+        }
+        await pairNewAccount()
+    }
+
     func pairNewAccount() async {
         errorMessage = nil
         do {
@@ -33,6 +72,14 @@ final class AppState: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func unpair() {
+        CredentialStore.clear()
+        userId = nil
+        thinkingState = nil
+        searchResults = []
+        closeIdea()
     }
 
     func useExistingCredentials(userId: String, token: String) {

@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     private var hotKey: GlobalHotKey?
     private var quickRecallPanel: QuickRecallPanel?
+    private var pairingServer: PairingServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panel = QuickRecallPanel(appState: appState)
@@ -18,6 +19,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if hotKey == nil {
             print("[ThreadMac] Failed to register the global hotkey (Cmd+Shift+T) -- it may be in use by another app.")
         }
+
+        // Serve credentials to the browser extension over loopback so it never mints its own
+        // account. Started before bootstrap so a fast extension retry catches a fresh account.
+        let state = appState
+        let server = PairingServer(payloadProvider: { state.pairingPayload() })
+        server.start()
+        pairingServer = server
+
+        Task { await appState.bootstrap() }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        pairingServer?.stop()
     }
 }
 
