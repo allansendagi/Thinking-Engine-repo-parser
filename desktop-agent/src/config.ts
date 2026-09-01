@@ -12,7 +12,7 @@ export interface AgentConfig {
  * browser profile is -- it's reasonable to require deliberately supplying an existing account.
  */
 export function loadConfig(): AgentConfig {
-  const apiBaseUrl = process.env.THREAD_API_BASE_URL ?? "http://localhost:8787";
+  const apiBaseUrl = process.env.THREAD_API_BASE_URL ?? "https://thinking-engine-repo-parser-production.up.railway.app";
   const userId = process.env.THREAD_USER_ID;
   const token = process.env.THREAD_TOKEN;
 

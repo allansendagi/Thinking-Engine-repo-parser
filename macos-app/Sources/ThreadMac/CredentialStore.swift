@@ -9,7 +9,7 @@ enum CredentialStore {
     private static let service = "com.thread.mac.token"
     private static let userIdKey = "thread.userId"
     private static let apiBaseUrlKey = "thread.apiBaseUrl"
-    static let defaultApiBaseUrl = "http://localhost:8787"
+    static let defaultApiBaseUrl = "https://thinking-engine-repo-parser-production.up.railway.app"
 
     static var apiBaseUrl: String {
         get { UserDefaults.standard.string(forKey: apiBaseUrlKey) ?? defaultApiBaseUrl }
