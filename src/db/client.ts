@@ -9,6 +9,13 @@ export function openDb(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true });
   db.exec("PRAGMA foreign_keys = ON;");
+  // WAL mode: readers don't block writers and vice versa. Default (rollback journal) mode
+  // serializes all access to a file and is fine for a single local user, but this backend now
+  // opens/closes a connection per HTTP request against the same per-user file -- under real
+  // concurrent traffic (e.g. the extension capturing while the Mac app reads), the default mode
+  // would surface as intermittent "database is locked" errors. Not applicable to ":memory:" (used
+  // only in tests), which has no journal file to configure.
+  if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL;");
   const schema = readFileSync(join(__dirname, "schema.sql"), "utf-8");
   db.exec(schema);
   return db;

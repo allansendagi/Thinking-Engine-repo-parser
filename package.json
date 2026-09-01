@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "bun run src/api/server.ts",
     "cli": "bun src/cli.ts",
     "eval": "bun src/cli.ts eval",
     "mcp": "bun src/mcp/server.ts",
