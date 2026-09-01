@@ -148,5 +148,31 @@ describe("runPipeline (FakeProvider, no API key)", () => {
     const result = await runPipeline([conv1[0]!], { extraction, reasoning });
     expect(result.ideas.size).toBe(0);
     expect(result.rejectedExtractions).toHaveLength(1);
+    expect(result.rejectedExtractions[0]?.reason).toContain("evidence_quote not found");
+  });
+
+  test("an event attributed to a message that was never sent at all is rejected, not silently kept", async () => {
+    // Reproduces a real failure observed live: given a single short message, the extraction
+    // model sometimes fabricates additional conversation turns wholesale (invented ids,
+    // invented statements) and extracts events from its own fabrication. The grounding check
+    // must catch this even though there's no real message for evidence_quote to be "wrong"
+    // against -- the source_event_id itself doesn't exist.
+    const extraction = new FakeProvider([
+      extractionResponse([
+        {
+          type: "decision",
+          statement: "A decision from a conversation turn that was never actually sent.",
+          confidence: 0.95,
+          source_event_id: "u1_fabricated_turn_that_does_not_exist",
+          evidence_quote: "Okay, let's go with that.",
+        },
+      ]),
+    ]);
+    const reasoning = new FakeProvider([]);
+
+    const result = await runPipeline([conv1[0]!], { extraction, reasoning });
+    expect(result.ideas.size).toBe(0);
+    expect(result.rejectedExtractions).toHaveLength(1);
+    expect(result.rejectedExtractions[0]?.reason).toContain("does not exist in this conversation");
   });
 });

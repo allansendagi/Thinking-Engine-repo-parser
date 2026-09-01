@@ -10,21 +10,38 @@ function parseJsonResponse(text: string): unknown {
 }
 
 /**
- * Deterministic hallucination guard: an extracted event is only trustworthy if its evidence_quote
- * is a substring of the canonical event it claims to be grounded in. This is what the <2%
+ * Deterministic hallucination guard: an extracted event is only trustworthy if (a) its
+ * source_event_id refers to a message that actually exists in this conversation, and (b) its
+ * evidence_quote is a substring of that message's real text. This is what the <2%
  * hallucinated-attribution gate is actually checking against, so it's enforced here rather than
  * left to the model's self-reported confidence.
  *
- * Case-insensitive deliberately: observed on a live run, the model sometimes capitalizes the
- * first letter of a quote it pulls from the middle of a sentence (treating it as its own
- * sentence). That's a cosmetic normalization, not a fabrication -- the content wasn't changed.
- * The guarantee this check exists to enforce is "did the model make this up," not "did it
- * preserve byte-exact casing," so a case difference alone shouldn't count as hallucination.
+ * Observed on a live run: given a single short message with no reply, the model sometimes
+ * fabricates several additional turns of conversation wholesale -- invented user statements,
+ * complete with invented message ids and timestamps -- and extracts events from its own
+ * fabrication. Check (a) is what catches this: a fabricated source_event_id was never in
+ * eventsById to begin with, so it fails before evidence_quote is even compared. This is a
+ * distinct failure mode from a real message with a misquoted evidence_quote, so it's reported
+ * with a different reason -- an operator debugging a spike in rejections needs to know which one
+ * they're looking at.
+ *
+ * Case-insensitive on the quote comparison deliberately: the model sometimes capitalizes the
+ * first letter of a quote pulled from mid-sentence (treating it as its own sentence). That's a
+ * cosmetic normalization, not a fabrication -- the content wasn't changed. The guarantee this
+ * check exists to enforce is "did the model make this up," not "did it preserve exact casing."
  */
-function isGrounded(event: ExtractedEvent, eventsById: Map<string, CanonicalEvent>): boolean {
+function checkGrounding(
+  event: ExtractedEvent,
+  eventsById: Map<string, CanonicalEvent>,
+): { grounded: true } | { grounded: false; reason: string } {
   const source = eventsById.get(event.source_event_id);
-  if (!source) return false;
-  return source.text.toLowerCase().includes(event.evidence_quote.toLowerCase());
+  if (!source) {
+    return { grounded: false, reason: `source_event_id "${event.source_event_id}" does not exist in this conversation -- likely fabricated` };
+  }
+  if (!source.text.toLowerCase().includes(event.evidence_quote.toLowerCase())) {
+    return { grounded: false, reason: "evidence_quote not found verbatim in source_event_id" };
+  }
+  return { grounded: true };
 }
 
 export interface ExtractionOutcome {
@@ -33,15 +50,25 @@ export interface ExtractionOutcome {
   rejected: { event: ExtractedEvent; reason: string }[];
 }
 
+/**
+ * `contextEvents` is the full transcript (for coherence -- the model needs to see what came
+ * before to correctly classify a refinement). `newEventIds`, if given, restricts which of those
+ * are actually eligible to be extracted from -- the rest are marked [ALREADY PROCESSED] in the
+ * prompt and, as a deterministic backstop (not just a prompt instruction the model could ignore),
+ * any returned event whose source_event_id isn't in that set is rejected outright. This is what
+ * makes incremental/live capture safe: re-sending prior messages for context can never produce a
+ * duplicate cognitive event for something already processed.
+ */
 export async function extractCognitiveEvents(
-  conversationEvents: CanonicalEvent[],
+  contextEvents: CanonicalEvent[],
   provider: CompletionProvider,
+  newEventIds?: Set<string>,
 ): Promise<ExtractionOutcome> {
-  const eventsById = new Map(conversationEvents.map((e) => [e.id, e]));
+  const eventsById = new Map(contextEvents.map((e) => [e.id, e]));
 
   const raw = await provider.complete(
     EXTRACTION_SYSTEM_PROMPT,
-    buildTranscriptPrompt(conversationEvents),
+    buildTranscriptPrompt(contextEvents, newEventIds),
     4096,
   );
 
@@ -51,8 +78,13 @@ export async function extractCognitiveEvents(
   const rejected: ExtractionOutcome["rejected"] = [];
 
   for (const [i, candidate] of parsed.events.entries()) {
-    if (!isGrounded(candidate, eventsById)) {
-      rejected.push({ event: candidate, reason: "evidence_quote not found verbatim in source_event_id" });
+    if (newEventIds && !newEventIds.has(candidate.source_event_id)) {
+      rejected.push({ event: candidate, reason: "source_event_id was marked already-processed, not new" });
+      continue;
+    }
+    const grounding = checkGrounding(candidate, eventsById);
+    if (!grounding.grounded) {
+      rejected.push({ event: candidate, reason: grounding.reason });
       continue;
     }
     events.push({

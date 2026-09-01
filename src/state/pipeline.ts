@@ -30,17 +30,36 @@ function groupByConversation(events: CanonicalEvent[]): Map<string, CanonicalEve
   return groups;
 }
 
+export interface RunPipelineOptions {
+  /**
+   * Ideas from prior runs to extend, rather than starting empty. Required for incremental/live
+   * capture -- without this, every API call would re-derive ideas from scratch and identity
+   * resolution would never see anything from before this call, guaranteeing duplicates.
+   */
+  existingIdeas?: Map<string, IdeaNode>;
+  /**
+   * Canonical event ids that are actually new and should be extracted from. Every other event in
+   * `canonicalEvents` is included as context only (see extraction/prompt.ts's [ALREADY PROCESSED]
+   * marking) -- re-sending prior messages for context can never produce a duplicate cognitive
+   * event, enforced in extract.ts, not just requested in the prompt. If omitted, every event is
+   * treated as new (bulk/import behavior -- unchanged from before this option existed).
+   */
+  newEventIds?: Set<string>;
+}
+
 /**
- * Runs the full pipeline: extraction happens per-conversation on the fast/cheap provider (a
- * bounded, coherent context for the model), but identity resolution and state building run
- * across ALL conversations in chronological source-message order on the strong provider -- an
- * idea raised in one conversation must be resolvable against a refinement of it in a later,
- * different conversation. Before each identity-resolution call, the candidate idea list is
- * narrowed by deterministic signals (identity/signals.ts) rather than sent in full.
+ * Runs the pipeline: extraction happens per-conversation on the fast/cheap provider (a bounded,
+ * coherent context for the model), but identity resolution and state building run across ALL
+ * conversations in chronological source-message order on the strong provider -- an idea raised in
+ * one conversation must be resolvable against a refinement of it in a later, different
+ * conversation (including one from a previous call, via existingIdeas). Before each
+ * identity-resolution call, the candidate idea list is narrowed by deterministic signals
+ * (identity/signals.ts) rather than sent in full.
  */
 export async function runPipeline(
   canonicalEvents: CanonicalEvent[],
   providers: PipelineProviders,
+  options: RunPipelineOptions = {},
 ): Promise<PipelineResult> {
   const eventsById = new Map(canonicalEvents.map((e) => [e.id, e]));
   const byConversation = groupByConversation(canonicalEvents);
@@ -49,7 +68,7 @@ export async function runPipeline(
   const allRejected: ExtractionOutcome["rejected"] = [];
 
   for (const conversationEvents of byConversation.values()) {
-    const outcome = await extractCognitiveEvents(conversationEvents, providers.extraction);
+    const outcome = await extractCognitiveEvents(conversationEvents, providers.extraction, options.newEventIds);
     allCognitiveEvents.push(...outcome.events);
     allRejected.push(...outcome.rejected);
   }
@@ -60,7 +79,7 @@ export async function runPipeline(
     return aTime.localeCompare(bTime);
   });
 
-  const ideas = new Map<string, IdeaNode>();
+  const ideas = options.existingIdeas ?? new Map<string, IdeaNode>();
   const resolutions: IdentityResolution[] = [];
 
   for (const event of allCognitiveEvents) {
