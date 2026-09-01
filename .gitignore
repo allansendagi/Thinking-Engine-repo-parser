@@ -4,3 +4,10 @@ node_modules/
 *.db-journal
 data/
 eval/out/
+
+# bun.lock's format (lockfileVersion 2, written by local bun 1.4.0) is unreadable by the older
+# Bun (1.3.14) that's the newest currently available in Railway's Railpack build environment --
+# `bun install --frozen-lockfile` hard-fails on it with no fallback. Untracked so each
+# environment resolves its own compatible lockfile rather than shipping one that only works
+# locally. Revisit once Railway's Railpack bun version catches up.
+bun.lock
