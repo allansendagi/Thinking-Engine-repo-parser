@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Thread</title>
+    <link rel="stylesheet" href="shared.css" />
+    <style>
+      body {
+        width: 320px;
+      }
+      .popup {
+        padding: 14px;
+      }
+      details summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 12px;
+        margin: 10px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="popup">
+      <h1>Thread</h1>
+
+      <div id="status" class="card muted">Loading…</div>
+
+      <label for="apiBaseUrl">API base URL</label>
+      <div class="row">
+        <input id="apiBaseUrl" type="text" placeholder="http://localhost:8787" />
+        <button id="saveUrl">Save</button>
+      </div>
+
+      <details>
+        <summary>Use an existing account</summary>
+        <label for="userId">User ID</label>
+        <input id="userId" type="text" placeholder="user_..." />
+        <label for="token">Token</label>
+        <input id="token" type="text" placeholder="..." />
+        <div class="row" style="margin-top: 8px">
+          <button id="useExisting" class="primary">Use these credentials</button>
+        </div>
+      </details>
+
+      <hr />
+      <button id="repair">Create a new account</button>
+      <div id="error" class="error"></div>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

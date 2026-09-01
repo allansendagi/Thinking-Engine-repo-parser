@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Thread — Continuity Layer",
+  "version": "0.1.0",
+  "description": "Captures the ideas you develop in ChatGPT, Claude, and Gemini, and lets you recover and continue your thinking.",
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": [
+    "http://localhost/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*"
+  ],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["dist/content-chatgpt.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["dist/content-claude.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["dist/content-gemini.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "dist/popup.html"
+  },
+  "side_panel": {
+    "default_path": "dist/sidepanel.html"
+  }
+}
+

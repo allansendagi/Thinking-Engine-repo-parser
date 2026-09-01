@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Thread</title>
+    <link rel="stylesheet" href="shared.css" />
+    <style>
+      body {
+        padding: 14px;
+      }
+      .idea-title {
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .idea-title:hover {
+        color: var(--accent);
+      }
+      .badge {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 1px 5px;
+      }
+      .evolution-step {
+        border-left: 2px solid var(--border);
+        padding: 4px 0 4px 10px;
+        margin: 6px 0;
+        font-size: 12px;
+      }
+      .open-loop {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        margin: 4px 0;
+      }
+      .open-loop.resolved {
+        text-decoration: line-through;
+        color: var(--muted);
+      }
+      #back {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="row" style="margin-bottom: 10px">
+      <button id="back">&larr;</button>
+      <h1 style="margin: 0">Thread</h1>
+    </div>
+
+    <div id="searchRow" class="row">
+      <input id="search" type="text" placeholder="Search your ideas…" />
+    </div>
+
+    <div id="listView">
+      <h3 style="margin-top: 14px">Open loops</h3>
+      <div id="openLoops" class="muted">Loading…</div>
+
+      <h3 style="margin-top: 14px">Current ideas</h3>
+      <div id="ideaList" class="muted">Loading…</div>
+    </div>
+
+    <div id="detailView" style="display: none"></div>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>
