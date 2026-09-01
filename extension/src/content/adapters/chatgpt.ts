@@ -1,5 +1,5 @@
 import type { SiteAdapter, RawMessage } from "../common/siteAdapter";
-import { cleanText, matchFirst } from "../common/domUtils";
+import { cleanText } from "../common/domUtils";
 
 /**
  * Verified against a real live chatgpt.com conversation (2026-09-01): `data-message-author-role`
@@ -23,7 +23,15 @@ export const chatGptAdapter: SiteAdapter = {
   source: "chatgpt",
 
   getConversationId(): string | null {
-    return matchFirst(location.pathname, [/\/c\/([a-zA-Z0-9-]+)/]);
+    const match = location.pathname.match(/\/c\/([^/?#]+)/);
+    if (!match) return null;
+    const id = decodeURIComponent(match[1]!);
+    // A brand-new chat's URL is briefly `/c/WEB:<uuid>` (a client-side provisional id) before
+    // ChatGPT rewrites it to the permanent `/c/<uuid>` a few seconds later. Capturing during
+    // that window files the first turn under a junk id ("WEB") that every new chat then collides
+    // into. Skip provisional ids entirely -- the real capture still happens once the URL settles.
+    if (id.includes(":")) return null;
+    return id;
   },
 
   extractMessages(root: ParentNode): RawMessage[] {
@@ -33,7 +41,9 @@ export const chatGptAdapter: SiteAdapter = {
     for (const node of nodes) {
       const role = node.getAttribute("data-message-author-role") ?? node.getAttribute("data-turn");
       if (role !== "user" && role !== "assistant") continue;
-      const text = cleanText(node.textContent);
+      // ChatGPT prefixes each turn's accessible text with a screen-reader label ("You said:",
+      // "ChatGPT said:"). Strip it so the captured text is just what was actually said.
+      const text = cleanText(node.textContent).replace(/^(You said:|ChatGPT said:)\s*/i, "");
       if (text.length === 0) continue;
       messages.push({ role, text });
     }

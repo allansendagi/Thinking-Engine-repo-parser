@@ -23,7 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Serve credentials to the browser extension over loopback so it never mints its own
         // account. Started before bootstrap so a fast extension retry catches a fresh account.
         let state = appState
-        let server = PairingServer(payloadProvider: { state.pairingPayload() })
+        let server = PairingServer(
+            payloadProvider: { state.pairingPayload() },
+            onServed: { Task { @MainActor in state.noteExtensionHandshake() } }
+        )
         server.start()
         pairingServer = server
 
@@ -45,5 +48,13 @@ struct ThreadMacApp: App {
                 .environmentObject(appDelegate.appState)
         }
         .menuBarExtraStyle(.window)
+
+        // The optional Full Window (spec §4). Opened with "Open in Window" from the panel, or
+        // Cmd+Shift+W. Single instance.
+        Window("Thread", id: "main") {
+            MainWindowView()
+                .environmentObject(appDelegate.appState)
+        }
+        .keyboardShortcut("w", modifiers: [.command, .shift])
     }
 }

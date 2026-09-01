@@ -1,14 +1,17 @@
 import Foundation
-import Security
 
-/// Stores the Thread account credential in the macOS Keychain. userId and token are kept
-/// together as one atomic JSON item, deliberately: an earlier version split them (token in
-/// Keychain, userId in UserDefaults), which let a stale userId from one build pair with a fresh
-/// token from another -- a guaranteed 401. One item, written and cleared as a unit, makes that
-/// half-state impossible. apiBaseUrl isn't secret and stays in UserDefaults.
+/// Stores the Thread account credential (userId + token, as one atomic unit) on disk in the
+/// app's Application Support directory, file mode 0600.
+///
+/// Why not the Keychain: this app ships **unsigned** via GitHub Releases. A Keychain item's
+/// access control is bound to the app's code signature, which changes on every ad-hoc `swift
+/// build` / every new unsigned download -- so the user gets a "ThreadMac wants to use your
+/// confidential information" password prompt on essentially every launch. A 0600 file in the
+/// user's own Application Support has no such prompt and is adequate protection for what this
+/// token is (a bearer capability to the user's own idea data on the hosted backend). Once the
+/// app has a stable Developer ID signature, moving the token back into the Keychain is the
+/// right call -- see README.
 enum CredentialStore {
-    private static let service = "com.thread.mac.credential"
-    private static let account = "default"
     private static let apiBaseUrlKey = "thread.apiBaseUrl"
     private static let legacyUserIdKey = "thread.userId"
     static let defaultApiBaseUrl = "https://thinking-engine-repo-parser-production.up.railway.app"
@@ -18,25 +21,31 @@ enum CredentialStore {
         let token: String
     }
 
+    private static var fileURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Thread", isDirectory: true)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base.appendingPathComponent("credential.json")
+    }
+
     static var apiBaseUrl: String {
-        get { UserDefaults.standard.string(forKey: apiBaseUrlKey) ?? defaultApiBaseUrl }
-        set { UserDefaults.standard.set(newValue, forKey: apiBaseUrlKey) }
+        get {
+            let stored = UserDefaults.standard.string(forKey: apiBaseUrlKey)?.trimmingCharacters(in: .whitespaces)
+            // An empty string is not nil, so `??` won't catch a blank saved by an earlier build --
+            // and a blank becomes URL(string:) -> "unsupported URL" on every request.
+            guard let stored, stored.hasPrefix("http") else { return defaultApiBaseUrl }
+            return stored
+        }
+        set {
+            let v = newValue.trimmingCharacters(in: .whitespaces)
+            if v.hasPrefix("http") { UserDefaults.standard.set(v, forKey: apiBaseUrlKey) }
+            else { UserDefaults.standard.removeObject(forKey: apiBaseUrlKey) }
+        }
     }
 
     static var credential: Credential? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data,
-              let cred = try? JSONDecoder().decode(Credential.self, from: data)
-        else { return nil }
-        return cred
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        return try? JSONDecoder().decode(Credential.self, from: data)
     }
 
     /// Back-compat shape for call sites that expect a tuple.
@@ -48,25 +57,13 @@ enum CredentialStore {
 
     static func save(userId: String, token: String) {
         guard let data = try? JSONEncoder().encode(Credential(userId: userId, token: token)) else { return }
-        let base: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(base as CFDictionary)
-        var attributes = base
-        attributes[kSecValueData as String] = data
-        SecItemAdd(attributes as CFDictionary, nil)
+        try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
         UserDefaults.standard.removeObject(forKey: legacyUserIdKey)
     }
 
     static func clear() {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
+        try? FileManager.default.removeItem(at: fileURL)
         UserDefaults.standard.removeObject(forKey: legacyUserIdKey)
     }
 }

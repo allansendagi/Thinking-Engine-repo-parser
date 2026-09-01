@@ -92,7 +92,13 @@ export interface IdeaTrace {
     evolution: { formulation: string; createdAt: string }[];
     openLoops: { id: string; statement: string; resolved: boolean }[];
   };
-  provenance: { formulation: string; createdAt: string; sourceText: string | null; sourceRole: string | null }[];
+  provenance: {
+    formulation: string;
+    createdAt: string;
+    sourceText: string | null;
+    sourceRole: string | null;
+    source: string | null;
+  }[];
 }
 
 export function traceIdea(id: string): Promise<IdeaTrace> {

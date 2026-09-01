@@ -14,7 +14,7 @@ final class QuickRecallPanel {
 
         let hosting = NSHostingController(rootView: RootView().environmentObject(appState))
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: Theme.panelWidth, height: Theme.panelHeight),
             styleMask: [.titled, .closable, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -22,10 +22,19 @@ final class QuickRecallPanel {
         panel.contentViewController = hosting
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
+        panel.isMovableByWindowBackground = true
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
+        // Opaque, shadowed, and clipped to a rounded rect -- without this the SwiftUI content
+        // doesn't fully cover the panel and the desktop shows through at the edges.
+        panel.isOpaque = true
+        panel.backgroundColor = .windowBackgroundColor
+        panel.hasShadow = true
+        panel.contentView?.wantsLayer = true
+        panel.contentView?.layer?.cornerRadius = Theme.corner
+        panel.contentView?.layer?.masksToBounds = true
         self.panel = panel
     }
 

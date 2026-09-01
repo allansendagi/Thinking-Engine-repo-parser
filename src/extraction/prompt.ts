@@ -38,6 +38,11 @@ Rules:
   exploratory "what if" musing that isn't actually a claim should score low or be omitted.
 - Do not invent events not grounded in the transcript. When in doubt, omit. A conversation with
   no substantive events at all is a perfectly valid, common result -- return {"events": []}.
+- Write "statement" in the human's own voice as a direct declarative sentence or a direct
+  question -- NOT as third-person narration about them. Good: "Computable authority must be
+  independently verifiable." / "Who performs the independent verification?" Bad: "The user is
+  asking whether computable authority needs verification." / "The human is questioning their
+  approach." It is the source of the idea's title, so it must read as the thought itself.
 - For new_idea events, optionally include why_it_matters: one sentence on why this idea matters,
   grounded in the transcript. Omit it if it isn't clear.
 - If other messages earlier in this transcript contributed context to an event (without being the

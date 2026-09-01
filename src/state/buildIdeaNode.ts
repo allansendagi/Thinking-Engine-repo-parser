@@ -1,9 +1,15 @@
 import type { CognitiveEvent, IdeaNode, IdentityResolution } from "../types";
 import { IDENTITY_RESOLUTION_MERGE_THRESHOLD } from "../types";
 
+/** Third-person narration the extractor still sometimes emits; strip it so the title is the thought. */
+const NARRATION_PREFIX =
+  /^(the (user|human|person) (is )?(asking|questioning|seeking|proposing|claiming|wondering|considering|deciding)( (why|whether|what|how|if|for|about|to))?|the (user|human) (decides|wants|claims|believes|proposes|is)( to)?)\s+/i;
+
 function deriveTitle(statement: string): string {
-  const words = statement.split(/\s+/).slice(0, 6).join(" ");
-  return words.length < statement.length ? `${words}…` : words;
+  let s = statement.trim().replace(NARRATION_PREFIX, "");
+  if (s.length > 0) s = s[0]!.toUpperCase() + s.slice(1);
+  const words = s.split(/\s+/).slice(0, 7).join(" ");
+  return words.length < s.length ? `${words}…` : words;
 }
 
 function linkRelated(a: IdeaNode, b: IdeaNode): void {
