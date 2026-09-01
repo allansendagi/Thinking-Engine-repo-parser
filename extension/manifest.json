@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Thread — Continuity Layer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Captures the ideas you develop in ChatGPT, Claude, and Gemini, and lets you recover and continue your thinking.",
-  "permissions": ["storage", "sidePanel"],
+  "permissions": ["storage", "sidePanel", "alarms"],
   "host_permissions": [
     "http://localhost/*",
+    "http://127.0.0.1/*",
     "https://thinking-engine-repo-parser-production.up.railway.app/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
