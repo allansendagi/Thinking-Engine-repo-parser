@@ -50,7 +50,7 @@ struct IdeaDetailView: View {
             }
 
             HStack(spacing: 6) {
-                Image(systemName: "clock").font(.system(size: 10))
+                Glyph(kind: .clock, size: 13)
                 Text("First seen \(Theme.ago(trace.idea.createdAt)) · last touched \(Theme.ago(trace.idea.updatedAt))")
                     .font(.system(size: 11.5))
             }

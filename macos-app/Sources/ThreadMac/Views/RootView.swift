@@ -41,6 +41,12 @@ struct RootView: View {
         .frame(width: Theme.panelWidth, height: Theme.panelHeight)
         .background(VisualEffectBackground())
         .clipShape(RoundedRectangle(cornerRadius: Theme.corner))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.corner)
+                .strokeBorder(Color.white.opacity(0.7), lineWidth: 0.5)
+                .blendMode(.plusLighter)
+        )
+        .preferredColorScheme(.light)  // the design is a light frosted panel, deliberately
         .task { await appState.refresh() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
@@ -55,37 +61,37 @@ struct RootView: View {
         HStack(spacing: 8) {
             if inDetail {
                 HeaderButton(size: 26) { appState.closeIdea() } label: {
-                    Image(systemName: "chevron.backward").font(.system(size: 12, weight: .semibold))
+                    Glyph(kind: .back, size: 15).foregroundStyle(Theme.ink(0.6))
                 }
                 .padding(.leading, -6)
             }
             Text(inDetail ? "Recent" : "Thread")
                 .font(.system(size: inDetail ? 13 : 15, weight: inDetail ? .medium : .semibold))
-                .foregroundStyle(inDetail ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                .kerning(inDetail ? -0.1 : -0.2)
+                .kerning(inDetail ? -0.104 : -0.225)
+                .foregroundStyle(Theme.ink(inDetail ? 0.6 : 0.85))
 
             Spacer(minLength: 0)
 
             if appState.isPaired {
                 HStack(spacing: 1) {
                     HeaderButton { Task { await appState.refresh() } } label: {
-                        Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .medium))
+                        Glyph(kind: .refresh, size: 15)
                     }.help("Refresh")
                     HeaderButton {
                         openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
                     } label: {
-                        Image(systemName: "macwindow").font(.system(size: 12, weight: .regular))
+                        Glyph(kind: .window, size: 15)
                     }.help("Open in Window")
                     HeaderButton { showPaste = true } label: {
-                        Image(systemName: "plus").font(.system(size: 13, weight: .medium))
+                        Glyph(kind: .plus, size: 16)
                     }.help("Add a conversation")
                     HeaderButton { showSettings = true } label: {
                         Image(systemName: "gearshape").font(.system(size: 12, weight: .regular))
                     }.help("Settings")
                 }
+                .foregroundStyle(Theme.ink(0.55))
             }
         }
-        .foregroundStyle(Theme.ink(0.55))
         .padding(.leading, 14)
         .padding(.trailing, 10)
         .frame(height: 52)
@@ -95,7 +101,7 @@ struct RootView: View {
 
     private var footer: some View {
         HStack(spacing: 6) {
-            Image(systemName: statusIcon).font(.system(size: 10))
+            Glyph(kind: .cloud, size: 12)
             Text(statusText).font(.system(size: 11))
             Spacer(minLength: 0)
             if let n = appState.thinkingState?.currentIdeas.count {
@@ -107,14 +113,6 @@ struct RootView: View {
         .padding(.horizontal, 14)
         .frame(height: 26)
         .overlay(Rectangle().fill(Theme.ink(0.1)).frame(height: 0.5), alignment: .top)
-    }
-
-    private var statusIcon: String {
-        switch appState.captureStatus {
-        case .capturing: return "icloud.and.arrow.up"
-        case .idle: return "icloud"
-        case .unpaired: return "exclamationmark.icloud"
-        }
     }
 
     private var statusText: String {
