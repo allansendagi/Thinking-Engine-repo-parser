@@ -1,4 +1,4 @@
-import type { Credentials, Settings } from "./types";
+import type { Credentials, PairingState, Settings } from "./types";
 
 const DEFAULT_API_BASE_URL = "https://thinking-engine-repo-parser-production.up.railway.app";
 
@@ -22,6 +22,24 @@ export async function setCredentials(credentials: Credentials): Promise<void> {
 
 export async function clearCredentials(): Promise<void> {
   await chrome.storage.local.remove("credentials");
+}
+
+const DEFAULT_PAIRING_STATE: PairingState = {
+  status: "unpaired",
+  userId: null,
+  lastAttemptAt: null,
+  detail: "Open Thread for Mac to connect this browser.",
+};
+
+export async function getPairingState(): Promise<PairingState> {
+  const result = await chrome.storage.local.get("pairingState");
+  return (result.pairingState as PairingState | undefined) ?? DEFAULT_PAIRING_STATE;
+}
+
+export async function setPairingState(patch: Partial<PairingState>): Promise<PairingState> {
+  const next = { ...(await getPairingState()), ...patch };
+  await chrome.storage.local.set({ pairingState: next });
+  return next;
 }
 
 /**

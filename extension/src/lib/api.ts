@@ -10,6 +10,16 @@ export class ApiError extends Error {
   }
 }
 
+/** True when an error means "your credentials are stale" -- the signal to drop them and re-pair. */
+export function isUnauthorized(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401;
+}
+
+/** Cheap authenticated round-trip used to confirm a set of credentials still works. */
+export async function verifyCredentials(): Promise<void> {
+  await request("/v1/thinking-state");
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const { apiBaseUrl, credentials } = await getSettings();
   const headers = new Headers(init.headers);

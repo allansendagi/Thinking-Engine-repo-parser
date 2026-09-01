@@ -40,38 +40,59 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
   const now = options.now ?? (() => new Date().toISOString());
 
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+
+  /**
+   * After the extension is reloaded/updated, the content script already injected into an open
+   * tab keeps running but every `chrome.*` handle in it is dead -- calls throw "Extension context
+   * invalidated". The MutationObserver and the backstop interval would then re-throw that on a
+   * loop forever, filling the page console. Detect it once and tear ourselves down instead.
+   */
+  function isContextInvalidated(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Extension context invalidated") || msg.includes("context invalidated")) return true;
+    // A live content script always has chrome.runtime.id; its disappearance means the context died.
+    return typeof chrome !== "undefined" && "runtime" in chrome && !chrome.runtime?.id;
+  }
 
   async function flush(): Promise<void> {
-    const conversationId = adapter.getConversationId();
-    if (!conversationId) return;
-
-    const raw = adapter.extractMessages(doc);
-    if (raw.length === 0) return;
-
-    const capturedAt = now();
-    const messages: CapturedMessage[] = raw.map((m, i) => ({
-      id: `${conversationId}::${i}`,
-      role: m.role,
-      text: m.text,
-      createdAt: capturedAt,
-    }));
-
-    const sentIds = await getSentIds(conversationId);
-    const hasNew = messages.some((m) => !sentIds.has(m.id));
-    if (!hasNew) return;
-
+    if (stopped) return;
     try {
+      const conversationId = adapter.getConversationId();
+      if (!conversationId) return;
+
+      const raw = adapter.extractMessages(doc);
+      if (raw.length === 0) return;
+
+      const capturedAt = now();
+      const messages: CapturedMessage[] = raw.map((m, i) => ({
+        id: `${conversationId}::${i}`,
+        role: m.role,
+        text: m.text,
+        createdAt: capturedAt,
+      }));
+
+      const sentIds = await getSentIds(conversationId);
+      const hasNew = messages.some((m) => !sentIds.has(m.id));
+      if (!hasNew) return;
+
       await sendMessage({ type: "thread:capture", source: adapter.source, conversationId, messages });
       await addSentIds(
         conversationId,
         messages.map((m) => m.id),
       );
     } catch (err) {
-      console.warn("[Thread] capture send failed, will retry on next change", err);
+      if (isContextInvalidated(err)) {
+        console.info("[Thread] extension was reloaded -- detaching capture from this tab. Reload the tab to resume.");
+        teardown();
+        return;
+      }
+      console.warn("[Thread] capture flush failed, will retry on next change", err);
     }
   }
 
   function scheduleFlush(): void {
+    if (stopped) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => void flush(), debounceMs);
   }
@@ -84,9 +105,12 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
 
   const backstop = backstopMs > 0 ? setInterval(() => void flush(), backstopMs) : null;
 
-  return () => {
+  function teardown(): void {
+    stopped = true;
     observer.disconnect();
     if (timer) clearTimeout(timer);
     if (backstop) clearInterval(backstop);
-  };
+  }
+
+  return teardown;
 }

@@ -11,11 +11,39 @@
       .popup {
         padding: 14px;
       }
+      .statusline {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex: none;
+        background: var(--muted);
+      }
+      .dot.paired {
+        background: #1e8e3e;
+      }
+      .dot.unpaired,
+      .dot.rejected {
+        background: #d93025;
+      }
       details summary {
         cursor: pointer;
         color: var(--muted);
         font-size: 12px;
-        margin: 10px 0;
+        margin: 12px 0 8px;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+        margin: 8px 0;
+      }
+      button.block {
+        width: 100%;
       }
     </style>
   </head>
@@ -23,27 +51,37 @@
     <div class="popup">
       <h1>Thread</h1>
 
-      <div id="status" class="card muted">Loading…</div>
-
-      <label for="apiBaseUrl">API base URL</label>
-      <div class="row">
-        <input id="apiBaseUrl" type="text" placeholder="http://localhost:8787" />
-        <button id="saveUrl">Save</button>
+      <div class="card">
+        <div class="statusline">
+          <span id="dot" class="dot"></span>
+          <span id="statusText">Checking…</span>
+        </div>
+        <div id="statusDetail" class="hint"></div>
       </div>
 
+      <button id="connect" class="primary block" style="margin-top: 10px">Connect to Thread for Mac</button>
+
       <details>
-        <summary>Use an existing account</summary>
-        <label for="userId">User ID</label>
-        <input id="userId" type="text" placeholder="user_..." />
-        <label for="token">Token</label>
-        <input id="token" type="text" placeholder="..." />
+        <summary>Pair with a code instead</summary>
+        <p class="hint">
+          In Thread for Mac → Settings, copy the pairing string and paste it here. Format:
+          <code>user_…:…</code>
+        </p>
+        <input id="pairingString" type="text" placeholder="user_xxxxxxxx…:xxxxxxxx…" />
         <div class="row" style="margin-top: 8px">
-          <button id="useExisting" class="primary">Use these credentials</button>
+          <button id="usePairingString" class="primary">Use this pairing string</button>
         </div>
       </details>
 
-      <hr />
-      <button id="repair">Create a new account</button>
+      <details>
+        <summary>Advanced</summary>
+        <label for="apiBaseUrl">API base URL</label>
+        <div class="row">
+          <input id="apiBaseUrl" type="text" placeholder="https://…" />
+          <button id="saveUrl">Save</button>
+        </div>
+      </details>
+
       <div id="error" class="error"></div>
     </div>
     <script type="module" src="popup.js"></script>
