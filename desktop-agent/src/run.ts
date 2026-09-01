@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { loadConfig } from "./config";
+import { loadConfig, type AgentConfig } from "./config";
 import { sendConversation } from "./ingest";
 import { watchPaths } from "./watcher";
 import { cursorAdapter } from "./sources/cursor";
@@ -7,7 +7,7 @@ import type { SourceAdapter } from "./sources/sourceAdapter";
 
 const ADAPTERS: SourceAdapter[] = [cursorAdapter];
 
-async function processChange(adapter: SourceAdapter, filePath: string, config: ReturnType<typeof loadConfig>): Promise<void> {
+async function processChange(adapter: SourceAdapter, filePath: string, config: AgentConfig): Promise<void> {
   let conversations;
   try {
     conversations = adapter.extract(filePath);
@@ -34,9 +34,9 @@ async function processChange(adapter: SourceAdapter, filePath: string, config: R
   }
 }
 
-function main(): void {
-  const config = loadConfig();
-  console.log(`[Thread desktop-agent] starting, API base ${config.apiBaseUrl}`);
+async function main(): Promise<void> {
+  const config = await loadConfig();
+  console.log(`[Thread desktop-agent] starting as ${config.userId}, API base ${config.apiBaseUrl}`);
 
   const stops: (() => void)[] = [];
 
@@ -64,4 +64,7 @@ function main(): void {
   });
 }
 
-main();
+main().catch((err) => {
+  console.error("[Thread desktop-agent]", err instanceof Error ? err.message : err);
+  process.exit(1);
+});
