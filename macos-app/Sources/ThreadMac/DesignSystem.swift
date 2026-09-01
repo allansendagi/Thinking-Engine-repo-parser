@@ -7,6 +7,17 @@ enum Theme {
     /// Muted indigo -- calm, not playful, distinct from system blue.
     static let accent = Color(red: 0.36, green: 0.40, blue: 0.78)
 
+    /// One tint per idea state, following macOS's restrained palette (not saturated).
+    static func stateColor(_ state: String) -> Color {
+        switch state.lowercased() {
+        case "developing": return accent
+        case "established": return Color(nsColor: .systemGreen)
+        case "rejected": return Color(nsColor: .systemRed).opacity(0.85)
+        case "dormant": return .secondary
+        default: return .secondary
+        }
+    }
+
     static let panelWidth: CGFloat = 440
     static let panelHeight: CGFloat = 560
     static let corner: CGFloat = 10

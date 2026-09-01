@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The optional Full Window (spec §4): a narrow sidebar + a roomy content area for browsing many
-/// ideas or reviewing long histories. Not the primary surface -- the menu-bar panel is. Reuses
-/// AppState, so selection and capture status stay consistent with the panel.
+/// The Full Window (spec §4): sidebar → list → reading pane. A calm, roomy place to browse many
+/// ideas and read long evolution histories — distinct from the fast menu-bar panel. Shares
+/// AppState so selection and capture status stay in sync with the panel.
 struct MainWindowView: View {
     @EnvironmentObject var appState: AppState
 
@@ -19,105 +19,119 @@ struct MainWindowView: View {
     }
 
     @State private var tab: Tab = .ideas
+    @State private var query = ""
 
     var body: some View {
         NavigationSplitView {
             List(Tab.allCases, selection: $tab) { t in
                 Label(t.rawValue, systemImage: t.icon).tag(t)
             }
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
-        } detail: {
+            .navigationSplitViewColumnWidth(min: 168, ideal: 190, max: 220)
+            .safeAreaInset(edge: .bottom) {
+                HStack(spacing: 6) {
+                    Circle().fill(appState.isLocked ? Color.orange : Theme.accent).frame(width: 6, height: 6)
+                    Text(appState.planLabel).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(12)
+            }
+        } content: {
             Group {
                 switch tab {
-                case .ideas: IdeasPane()
-                case .loops: LoopsPane()
-                case .settings: SettingsView().frame(maxWidth: 420)
+                case .ideas: IdeaListColumn(query: $query)
+                case .loops: LoopListColumn()
+                case .settings: SettingsView().frame(maxWidth: 460).padding()
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 460)
+        } detail: {
+            ReadingPane()
         }
-        .frame(minWidth: 720, minHeight: 480)
+        .frame(minWidth: 900, minHeight: 560)
         .task { await appState.refresh() }
     }
 }
 
-private struct IdeasPane: View {
+private struct IdeaListColumn: View {
     @EnvironmentObject var appState: AppState
+    @Binding var query: String
+
+    private var rows: [AnyIdeaRow] {
+        if query.isEmpty {
+            return (appState.thinkingState?.currentIdeas ?? []).map(AnyIdeaRow.init)
+        }
+        return appState.searchResults.map(AnyIdeaRow.init)
+    }
 
     var body: some View {
-        let ideas = appState.searchResults.isEmpty && appState.searchQuery.isEmpty
-            ? (appState.thinkingState?.currentIdeas.map { AnyIdeaRow($0) } ?? [])
-            : appState.searchResults.map { AnyIdeaRow($0) }
-
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search ideas…", text: $appState.searchQuery)
-                    .textFieldStyle(.plain)
-                    .onChange(of: appState.searchQuery) { _ in Task { await appState.search() } }
-            }
-            .padding(12)
-            Divider()
-
-            if let id = appState.selectedIdeaId, appState.selectedTrace != nil {
+        List(rows, selection: Binding(
+            get: { appState.selectedIdeaId },
+            set: { id in if let id { Task { await appState.openIdea(id) } } }
+        )) { row in
+            VStack(alignment: .leading, spacing: 3) {
                 HStack {
-                    Button { appState.closeIdea() } label: { Label("All ideas", systemImage: "chevron.left") }
-                        .buttonStyle(.plain).padding(10)
+                    Text(row.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
                     Spacer()
+                    StatePill(state: row.state)
                 }
-                Divider()
-                IdeaDetailView().id(id)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(ideas) { row in
-                            Button { Task { await appState.openIdea(row.id) } } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(row.title).font(.system(size: 14, weight: .medium))
-                                    Text(row.formulation).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
-                                }
-                                .threadCard()
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(14)
-                }
+                Text(row.formulation).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
             }
+            .padding(.vertical, 3)
+            .tag(row.id)
         }
+        .searchable(text: $query, placement: .toolbar, prompt: "Search ideas")
+        .onChange(of: query) { _ in Task { await appState.search() } }
+        .navigationTitle("Ideas")
     }
 }
 
-private struct LoopsPane: View {
+private struct LoopListColumn: View {
     @EnvironmentObject var appState: AppState
     var body: some View {
         let loops = (appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if loops.isEmpty {
-                    Text("Nothing unresolved.").foregroundStyle(.secondary).padding(14)
-                }
-                ForEach(loops) { loop in
-                    Button { Task { await appState.openIdea(loop.ideaId) } } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(loop.statement).font(.system(size: 13))
-                            Text(loop.ideaTitle).font(.system(size: 11)).foregroundStyle(.secondary)
-                        }
-                        .threadCard()
-                    }
-                    .buttonStyle(.plain)
-                }
+        List(loops, selection: Binding(
+            get: { appState.selectedIdeaId },
+            set: { _ in }
+        )) { loop in
+            VStack(alignment: .leading, spacing: 3) {
+                Text(loop.statement).font(.system(size: 12))
+                Text(loop.ideaTitle).font(.system(size: 10)).foregroundStyle(.secondary)
             }
-            .padding(14)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+            .onTapGesture { Task { await appState.openIdea(loop.ideaId) } }
+        }
+        .overlay {
+            if loops.isEmpty {
+                ContentUnavailableView("Nothing unresolved", systemImage: "checkmark.circle")
+            }
+        }
+        .navigationTitle("Open Loops")
+    }
+}
+
+private struct ReadingPane: View {
+    @EnvironmentObject var appState: AppState
+    var body: some View {
+        if appState.selectedIdeaId != nil {
+            IdeaDetailView()
+                .frame(maxWidth: 640)
+                .frame(maxWidth: .infinity, alignment: .top)
+        } else {
+            ContentUnavailableView(
+                "Select an idea",
+                systemImage: "sidebar.right",
+                description: Text("Its formulation, full evolution, and open loops appear here.")
+            )
         }
     }
 }
 
-/// Erases IdeaSummary / SearchResult to a common row shape for the list.
 private struct AnyIdeaRow: Identifiable {
     let id: String
     let title: String
     let formulation: String
-    init(_ s: IdeaSummary) { id = s.id; title = s.title; formulation = s.currentFormulation }
-    init(_ s: SearchResult) { id = s.id; title = s.title; formulation = s.currentFormulation }
+    let state: String
+    init(_ s: IdeaSummary) { id = s.id; title = s.title; formulation = s.currentFormulation; state = s.state }
+    init(_ s: SearchResult) { id = s.id; title = s.title; formulation = s.currentFormulation; state = s.state }
 }

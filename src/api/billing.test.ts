@@ -82,11 +82,11 @@ describe("applyStripeEvent (against a real registry.db)", () => {
     userId = (await createUser()).userId;
   });
 
-  test("new account starts on a 7-day trial and is entitled", () => {
+  test("new account starts on a 14-day trial and is entitled", () => {
     const acct = getAccount(userId)!;
     expect(acct.status).toBe("trialing");
     expect(isEntitled(acct)).toBe(true);
-    expect(accountView(acct).trialDaysLeft).toBe(7);
+    expect(accountView(acct).trialDaysLeft).toBe(14);
   });
 
   test("checkout.session.completed activates and stores the customer", () => {

@@ -223,7 +223,7 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(res.status).toBe(404);
   });
 
-  test("GET /v1/account reports the 7-day trial for a fresh user", async () => {
+  test("GET /v1/account reports the 14-day trial for a fresh user", async () => {
     const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
     const { userId, token } = await createTestUser(handler);
     const res = await handler(
@@ -238,7 +238,7 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     };
     expect(body.status).toBe("trialing");
     expect(body.entitled).toBe(true);
-    expect(body.trialDaysLeft).toBe(7);
+    expect(body.trialDaysLeft).toBe(14);
     expect(body.billingEnabled).toBe(false); // no STRIPE_* env in tests
   });
 

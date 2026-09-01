@@ -69,37 +69,7 @@ struct IdeaDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: Theme.cardCorner))
                     }
 
-                    section("Evolution") {
-                        if let origin = trace.provenance.first?.sourceLabel,
-                           let latest = trace.provenance.last?.sourceLabel {
-                            Text(latest == origin
-                                 ? "Developed in \(latest)"
-                                 : "Last developed in \(latest) · originally from \(origin)")
-                                .font(.system(size: 10)).foregroundStyle(.tertiary)
-                        }
-                        // Newest first, matching the spec and the marketing site's recovery view.
-                        ForEach(Array(trace.provenance.reversed())) { step in
-                            HStack(alignment: .top, spacing: 9) {
-                                Text(Theme.relative(step.createdAt))
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.tertiary)
-                                    .frame(width: 40, alignment: .leading)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(step.formulation).font(.system(size: 12))
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    if let src = step.sourceText, !src.isEmpty {
-                                        Text("“\(src.prefix(90))\(src.count > 90 ? "…" : "")”")
-                                            .font(.system(size: 10)).foregroundStyle(.tertiary)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-                                }
-                                Spacer(minLength: 6)
-                                if let label = step.sourceLabel {
-                                    Text(label).font(.system(size: 9)).foregroundStyle(.tertiary)
-                                }
-                            }
-                        }
-                    }
+                    EvolutionTimeline(steps: trace.provenance)
 
                     if !trace.idea.relatedIdeaIds.isEmpty {
                         Text("Related: \(trace.idea.relatedIdeaIds.count) idea\(trace.idea.relatedIdeaIds.count == 1 ? "" : "s")")
@@ -149,9 +119,7 @@ struct IdeaDetailView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 Spacer()
-                Text(trace.idea.state)
-                    .font(.system(size: 9, weight: .medium)).textCase(.uppercase).kerning(0.4)
-                    .foregroundStyle(Theme.accent)
+                StatePill(state: trace.idea.state)
                 Menu {
                     Button("Rename…") { titleDraft = trace.idea.title; editingTitle = true }
                     Picker("State", selection: Binding(
@@ -173,6 +141,94 @@ struct IdeaDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).sectionHeader()
             content()
+        }
+    }
+}
+
+/// Newest-first timeline. Consecutive steps from the same conversation are grouped under one
+/// source header; the most recent step is the visually dominant one.
+private struct EvolutionTimeline: View {
+    let steps: [ProvenanceStep]
+
+    private struct Group: Identifiable {
+        let id = UUID()
+        let source: String?
+        let steps: [(step: ProvenanceStep, isCurrent: Bool)]
+    }
+
+    private var groups: [Group] {
+        let ordered = Array(steps.enumerated().reversed()) // newest first
+        var out: [Group] = []
+        var bucket: [(ProvenanceStep, Bool)] = []
+        var currentSource: String?? = nil
+        for (idx, step) in ordered {
+            let isCurrent = idx == steps.count - 1
+            if currentSource == nil { currentSource = step.source }
+            if step.source != currentSource {
+                out.append(Group(source: currentSource ?? nil, steps: bucket.map { ($0.0, $0.1) }))
+                bucket = []
+                currentSource = step.source
+            }
+            bucket.append((step, isCurrent))
+        }
+        if !bucket.isEmpty { out.append(Group(source: currentSource ?? nil, steps: bucket.map { ($0.0, $0.1) })) }
+        return out
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Evolution").sectionHeader()
+                Spacer()
+                if steps.count > 1 {
+                    Text("\(steps.count) steps").font(.system(size: 9)).foregroundStyle(.tertiary)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(groups) { group in
+                    if let label = ProvenanceStep(
+                        formulation: "", createdAt: "", sourceText: nil, sourceRole: nil, source: group.source
+                    ).sourceLabel {
+                        Text(label)
+                            .font(.system(size: 9, weight: .semibold)).textCase(.uppercase).kerning(0.4)
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 14).padding(.top, 6).padding(.bottom, 2)
+                    }
+                    ForEach(Array(group.steps.enumerated()), id: \.offset) { _, entry in
+                        row(entry.step, isCurrent: entry.isCurrent)
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(_ step: ProvenanceStep, isCurrent: Bool) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            // rail
+            VStack(spacing: 0) {
+                Circle()
+                    .fill(isCurrent ? Theme.accent : Color(nsColor: .tertiaryLabelColor))
+                    .frame(width: isCurrent ? 7 : 5, height: isCurrent ? 7 : 5)
+                    .padding(.top, isCurrent ? 3 : 4)
+                Rectangle().fill(Theme.cardStroke).frame(width: 1).frame(maxHeight: .infinity)
+            }
+            .frame(width: 8)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Theme.relative(step.createdAt))
+                    .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                Text(step.formulation)
+                    .font(.system(size: isCurrent ? 13 : 12, weight: isCurrent ? .medium : .regular))
+                    .foregroundStyle(isCurrent ? .primary : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if isCurrent, let src = step.sourceText, !src.isEmpty {
+                    Text("“\(src.prefix(100))\(src.count > 100 ? "…" : "")”")
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.bottom, 10)
         }
     }
 }

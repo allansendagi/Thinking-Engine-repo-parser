@@ -20,10 +20,14 @@ APP_DIR="dist/${APP_NAME}.app"
 echo "Building release binary..."
 swift build -c release
 
+echo "Building app icon..."
+./icon.sh
+
 echo "Assembling ${APP_DIR}..."
-rm -rf dist
-mkdir -p "${APP_DIR}/Contents/MacOS"
+rm -rf "${APP_DIR}" "dist/${APP_NAME}-${VERSION}-macos.zip"
+mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
 cp "${BUILD_DIR}/${APP_NAME}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+cp "dist/AppIcon.icns" "${APP_DIR}/Contents/Resources/AppIcon.icns"
 
 cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -44,8 +48,10 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
     <string>${VERSION}</string>
     <key>CFBundleVersion</key>
     <string>${VERSION}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>

@@ -43,9 +43,11 @@ struct ThreadMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("Thread", systemImage: "circle.hexagongrid.fill") {
+        MenuBarExtra {
             RootView()
                 .environmentObject(appDelegate.appState)
+        } label: {
+            MenuBarGlyph()
         }
         .menuBarExtraStyle(.window)
 

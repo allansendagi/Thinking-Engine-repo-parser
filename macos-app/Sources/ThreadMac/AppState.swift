@@ -26,6 +26,14 @@ final class AppState: ObservableObject {
     @Published var account: AccountStatus?
     @Published var billingBusy = false
 
+    private let onboardingKey = "thread.onboardingDismissed"
+    @Published var onboardingDismissed = UserDefaults.standard.bool(forKey: "thread.onboardingDismissed")
+
+    func dismissOnboarding() {
+        onboardingDismissed = true
+        UserDefaults.standard.set(true, forKey: onboardingKey)
+    }
+
     var client: APIClient {
         APIClient(baseURL: apiBaseUrl, credentials: CredentialStore.credentials)
     }

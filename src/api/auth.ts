@@ -26,7 +26,7 @@ function registryPath(): string {
 }
 
 /** Days of free trial granted at account creation. */
-export const TRIAL_DAYS = 7;
+export const TRIAL_DAYS = 14;
 
 function openRegistry(): Database {
   const path = registryPath();

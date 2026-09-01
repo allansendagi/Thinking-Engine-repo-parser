@@ -1,8 +1,8 @@
-# Billing — 7-day trial, Stripe subscription, soft lock
+# Billing — 14-day trial, Stripe subscription, soft lock
 
 ## Model
 
-- **Trial:** 7 days, no card. Granted at account creation (`createUser` sets `trial_ends_at`).
+- **Trial:** 14 days, no card. Granted at account creation (`createUser` sets `trial_ends_at`).
 - **Convert:** Stripe Checkout (subscription mode). The Thread `userId` rides along as
   `client_reference_id` + `subscription_data.metadata.thread_user_id`.
 - **Lock:** *soft*. Reads (`/v1/thinking-state`, `/v1/ideas`, `/trace`, `/continue`, …) always
@@ -23,8 +23,10 @@
 
 ## Stripe dashboard setup (one time)
 
-1. **Product + Price:** create "Thread Pro", a recurring monthly (or yearly) Price → copy the
-   `price_…` id into `STRIPE_PRICE_ID`.
+1. **Product + Price:** create "Thread Pro" — a recurring **$15/month** Price (and optionally a
+   **$12/month billed yearly** = $144/yr Price). Copy the monthly `price_…` id into
+   `STRIPE_PRICE_ID`. (A yearly option needs a plan-picker in Checkout — add later; monthly ships
+   the flow.)
 2. **Webhook:** Developers → Webhooks → Add endpoint →
    `https://<your-api>/v1/stripe/webhook`, events:
    `checkout.session.completed`, `customer.subscription.created`,
