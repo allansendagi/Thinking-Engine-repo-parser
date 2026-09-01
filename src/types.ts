@@ -9,7 +9,7 @@ export type Role = "user" | "assistant";
 export interface CanonicalEvent {
   id: string;
   conversationId: string;
-  source: "chatgpt" | "claude" | "fixture";
+  source: "chatgpt" | "claude" | "gemini" | "cursor" | "paste" | "fixture";
   role: Role;
   text: string;
   createdAt: string; // ISO 8601

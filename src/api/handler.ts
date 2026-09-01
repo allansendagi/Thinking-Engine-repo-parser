@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { createUser, verifyToken } from "./auth";
 import { openUserDb } from "../db/tenancy";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
+import { parsePastedConversation } from "../import/pasteParser";
 import {
   continueThinking,
   getIdea,
@@ -74,6 +76,34 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
         }
         const result = await ingestConversation(db, body, providers);
         return json(result);
+      }
+
+      if (req.method === "POST" && pathname === "/v1/paste") {
+        let body: { conversationId?: string; text?: string };
+        try {
+          body = (await req.json()) as { conversationId?: string; text?: string };
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        if (!body.text || body.text.trim().length === 0) return error(400, "text is required");
+
+        const parsed = parsePastedConversation(body.text);
+        if (parsed.length === 0) return error(400, "Nothing parseable in the pasted text");
+
+        const conversationId = body.conversationId ?? `paste_${randomUUID()}`;
+        const baseTime = Date.now();
+        const messages = parsed.map((m, i) => ({
+          id: `${conversationId}::${i}`,
+          role: m.role,
+          text: m.text,
+          // Synthesized, evenly spaced timestamps -- a paste has no real per-message timestamps.
+          // Order is preserved (what identity resolution's temporal signal actually needs); the
+          // exact spacing is a placeholder, not a claim about when these were really said.
+          createdAt: new Date(baseTime + i * 1000).toISOString(),
+        }));
+
+        const result = await ingestConversation(db, { conversationId, source: "paste", messages }, providers);
+        return json({ conversationId, ...result });
       }
 
       if (req.method === "GET" && pathname === "/v1/ideas") {

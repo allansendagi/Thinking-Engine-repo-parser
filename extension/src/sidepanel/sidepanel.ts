@@ -2,6 +2,7 @@ import {
   continueThinking,
   deleteIdea,
   getThinkingState,
+  pasteConversation,
   renameIdea,
   searchIdeas,
   setIdeaState,
@@ -194,6 +195,28 @@ function init(): void {
     const ideaId = target.getAttribute("data-idea-id") ?? target.closest("[data-idea-id]")?.getAttribute("data-idea-id");
     if (ideaId && (target.classList.contains("idea-title") || target.closest(".open-loop"))) {
       void openDetail(ideaId);
+    }
+  });
+
+  $("pasteSubmit").addEventListener("click", async () => {
+    const textarea = document.getElementById("pasteText") as HTMLTextAreaElement;
+    const text = textarea.value;
+    const resultEl = $("pasteResult");
+    if (text.trim().length === 0) {
+      resultEl.textContent = "Paste something first.";
+      return;
+    }
+    (document.getElementById("pasteSubmit") as HTMLButtonElement).disabled = true;
+    resultEl.textContent = "Processing…";
+    try {
+      const result = await pasteConversation(text);
+      resultEl.textContent = `Captured ${result.newCognitiveEvents} idea event(s), ${result.ideaCount} idea(s) total.`;
+      textarea.value = "";
+      await renderList("");
+    } catch (err) {
+      resultEl.textContent = err instanceof ApiError ? err.message : "Failed to reach the API server.";
+    } finally {
+      (document.getElementById("pasteSubmit") as HTMLButtonElement).disabled = false;
     }
   });
 

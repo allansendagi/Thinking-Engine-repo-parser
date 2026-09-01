@@ -47,6 +47,10 @@ export function ingestConversation(
   });
 }
 
+export function pasteConversation(text: string): Promise<IngestResult & { conversationId: string }> {
+  return request("/v1/paste", { method: "POST", body: JSON.stringify({ text }) });
+}
+
 export interface IdeaSummary {
   id: string;
   title: string;

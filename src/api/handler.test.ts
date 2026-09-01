@@ -173,6 +173,47 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(finalState.currentIdeas).toHaveLength(0);
   });
 
+  test("POST /v1/paste parses a labeled conversation and ingests it", async () => {
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([
+        extractionResponse([
+          { type: "new_idea", statement: "Authority needs explicit boundaries.", confidence: 0.9, source_event_id: "conv_paste::0", evidence_quote: "explicit boundaries" },
+        ]),
+      ]),
+      reasoning: new FakeProvider([]),
+    });
+    const { userId, token } = await createTestUser(handler);
+    const authHeader = { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" };
+
+    const res = await handler(
+      new Request("http://x/v1/paste", {
+        method: "POST",
+        headers: authHeader,
+        body: JSON.stringify({
+          conversationId: "conv_paste",
+          text: "User: Authority needs explicit boundaries.\nAssistant: Can you say more?",
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ideaCount: number; conversationId: string };
+    expect(body.ideaCount).toBe(1);
+    expect(body.conversationId).toBe("conv_paste");
+  });
+
+  test("POST /v1/paste rejects empty text", async () => {
+    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const { userId, token } = await createTestUser(handler);
+    const res = await handler(
+      new Request("http://x/v1/paste", {
+        method: "POST",
+        headers: { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ text: "   " }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
   test("unknown route returns 404", async () => {
     const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
     const { userId, token } = await createTestUser(handler);

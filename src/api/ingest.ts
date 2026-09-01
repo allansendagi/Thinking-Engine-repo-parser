@@ -12,7 +12,7 @@ export interface IncomingMessage {
 
 export interface IngestConversationInput {
   conversationId: string;
-  source: "chatgpt" | "claude" | "fixture";
+  source: CanonicalEvent["source"];
   /** The full transcript known so far, not just what's new -- see module doc. */
   messages: IncomingMessage[];
 }
