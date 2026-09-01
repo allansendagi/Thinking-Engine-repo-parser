@@ -55,17 +55,39 @@ project:
 **Before trusting this beyond "it compiles"**: open it in real Xcode, run the test suite, and
 actually click through it.
 
-## What "launch" needs from you specifically -- not something I can do autonomously
+## Distribution: unsigned via GitHub Releases (the chosen path for now)
 
-- An Apple Developer Program membership (your Apple ID, your payment) for a Developer ID
-  certificate and/or App Store Connect access
-- Running `xcodebuild -exportArchive` / Xcode's Organizer, or `notarytool`, with your credentials
-- App Store review, if that's the distribution path, including your own listing copy, screenshots,
-  privacy nutrition label answers, etc.
+Same pattern several open-source Whisper-for-Mac apps use (WhisperMac, WhisperDesk): ship an
+unsigned, ad-hoc-signed `.app` as a GitHub Release asset; the user right-clicks → Open once per
+downloaded build to get past Gatekeeper's "unidentified developer" warning. No Apple Developer
+account needed for this path -- that's exactly why it's the right starting point here, and it
+matches the audience (people already comfortable with GitHub Releases and dev tools).
 
-I can prepare an entitlements file, an Info.plist, and a build script once you tell me which
-distribution path you want (direct-download notarized `.dmg`, or Mac App Store, or both -- they
-have different entitlement/sandboxing requirements, particularly for network access and Keychain).
+```
+./package.sh
+```
+
+Builds a release binary, assembles a real `.app` bundle (`Info.plist` with `LSUIElement` set so
+it doesn't show a Dock icon or appear in Cmd+Tab -- it's menu-bar only), ad-hoc signs it, and zips
+it to `dist/ThreadMac-<version>-macos.zip`. Verified for real: the assembled bundle passes
+`plutil -lint`, `codesign -dv` shows a valid ad-hoc signature, and `open dist/ThreadMac.app`
+(the actual way a user launches it, not just running the raw binary) launches it successfully.
+
+**Known limitation of this path, not a bug**: the Gatekeeper warning reappears on every new
+build/version download, since it's tied to that specific file, not a one-time-ever thing. Fine
+for an early technical audience; a real blocker for a mainstream, non-technical launch later.
+
+**What would remove that limitation** -- needs your Apple Developer account regardless of anything
+built here:
+- A Developer ID certificate, for `codesign --sign "Developer ID Application: ..."` instead of
+  ad-hoc, plus `notarytool submit` -- removes the warning entirely for direct downloads
+- Mac App Store instead/also: needs the certificate above, App Sandbox entitlements (network
+  client + keychain-access-groups, at minimum), and App Store Connect submission with your own
+  listing copy, screenshots, and privacy answers
+
+Tell me which of those you want when you're ready and I'll prepare the entitlements file and
+signing step in `package.sh` -- the actual signing/notarization/submission commands still need to
+run with your credentials, not mine.
 
 ## Setup
 
