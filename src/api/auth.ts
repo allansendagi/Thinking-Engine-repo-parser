@@ -14,8 +14,15 @@ import { dirname } from "node:path";
 // Read lazily (not as a module-level const) so tests can override THREAD_REGISTRY_PATH before
 // the first call -- module-level consts would capture whatever the env var was at import time,
 // which in an ES module is before any test code can run (imports are hoisted).
+//
+// The token registry MUST outlive a redeploy or every issued credential 401s. Same resolution
+// order as the per-user DBs: explicit override, else Railway's attached volume, else local.
 function registryPath(): string {
-  return process.env.THREAD_REGISTRY_PATH ?? "data/registry.db";
+  if (process.env.THREAD_REGISTRY_PATH) return process.env.THREAD_REGISTRY_PATH;
+  if (process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+    return `${process.env.RAILWAY_VOLUME_MOUNT_PATH}/registry.db`;
+  }
+  return "data/registry.db";
 }
 
 function openRegistry(): Database {
