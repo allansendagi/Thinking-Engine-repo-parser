@@ -29,4 +29,18 @@ describe("geminiAdapter", () => {
     const window = setupDom("https://gemini.google.com/app/conv-456", "<main><div>obfuscated angular markup</div></main>");
     expect(geminiAdapter.extractMessages(window.document as unknown as ParentNode)).toEqual([]);
   });
+
+  test("prefers *-content elements, strips labels, and collapses the duplicated prompt text", () => {
+    const window = setupDom(
+      "https://gemini.google.com/app/conv-456",
+      `<main>
+        <user-query><user-query-content>You said what is a continuity layer? what is a continuity layer?</user-query-content></user-query>
+        <model-response><message-content>A persistent representation of your evolving ideas.</message-content></model-response>
+      </main>`,
+    );
+    expect(geminiAdapter.extractMessages(window.document as unknown as ParentNode)).toEqual([
+      { role: "user", text: "what is a continuity layer?" },
+      { role: "assistant", text: "A persistent representation of your evolving ideas." },
+    ]);
+  });
 });

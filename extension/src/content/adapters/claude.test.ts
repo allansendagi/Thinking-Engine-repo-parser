@@ -42,4 +42,18 @@ describe("claudeAdapter", () => {
     const window = setupDom("https://claude.ai/chat/xyz-789", "<main><div>unrelated content</div></main>");
     expect(claudeAdapter.extractMessages(window.document as unknown as ParentNode)).toEqual([]);
   });
+
+  test("uses the live selectors and strips the thinking pill + a11y label prefixes", () => {
+    const window = setupDom(
+      "https://claude.ai/chat/xyz-789",
+      `<main>
+        <div data-testid="user-message">You said: Why do agents need a policy?</div>
+        <div class="font-claude-response">Thought for 3sThought for 3sBecause they act autonomously.</div>
+      </main>`,
+    );
+    expect(claudeAdapter.extractMessages(window.document as unknown as ParentNode)).toEqual([
+      { role: "user", text: "Why do agents need a policy?" },
+      { role: "assistant", text: "Because they act autonomously." },
+    ]);
+  });
 });

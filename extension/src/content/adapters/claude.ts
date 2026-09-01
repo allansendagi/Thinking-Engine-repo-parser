@@ -2,15 +2,23 @@ import type { SiteAdapter, RawMessage } from "../common/siteAdapter";
 import { cleanText, matchFirst } from "../common/domUtils";
 
 /**
- * UNVERIFIED against the live site -- Claude's DOM is less publicly documented than ChatGPT's, so
- * this is a best-effort guess, more likely than the other two adapters to need real adjustment.
- * Tries several candidate selectors in order rather than committing to one, and logs loudly if
- * none of them find anything, so a stale selector fails visibly (in devtools) instead of silently
- * capturing nothing forever. See extension/README.md.
+ * Verified against live claude.ai (2026-09-01): user turns carry `data-testid="user-message"`;
+ * an assistant turn's actual prose is `.standard-markdown` inside `.font-claude-response` --
+ * `.font-claude-response` alone also swallows status chips ("Thought for 3s", "Read and edited
+ * memory") rendered before the text. Every list keeps older guesses as ordered fallbacks so a
+ * single rename degrades instead of breaking capture; `stripChrome` is a second line of defence
+ * for the fallback path. Logs loudly (devtools) on a conversation page with zero messages.
  */
 
 const USER_SELECTORS = ['[data-testid="user-message"]', '[data-testid="human-turn"]'];
-const ASSISTANT_SELECTORS = ['[data-testid="assistant-message"]', '[data-testid="ai-turn"]'];
+const ASSISTANT_SELECTORS = [
+  ".font-claude-response .standard-markdown",
+  ".standard-markdown",
+  ".font-claude-response",
+  "[data-is-streaming]",
+  '[data-testid="assistant-message"]',
+  '[data-testid="ai-turn"]',
+];
 
 function collect(root: ParentNode, selectors: string[]): HTMLElement[] {
   for (const selector of selectors) {
@@ -18,6 +26,18 @@ function collect(root: ParentNode, selectors: string[]): HTMLElement[] {
     if (found.length > 0) return found;
   }
   return [];
+}
+
+/**
+ * Fallback cleanup for when only `.font-claude-response` matched (no `.standard-markdown`):
+ * strip the leading status chips Claude renders before the prose, and any a11y label prefix.
+ * Each chip's text tends to render twice, hence the `+`.
+ */
+function stripChrome(raw: string): string {
+  return cleanText(raw)
+    .replace(/^(?:You said:|Claude responded:)\s*/i, "")
+    .replace(/^(?:(?:Thought for \d+m?\s?\d*s|Read and edited memory|Searched (?:the web|for [^.]+?))\s*)+/i, "")
+    .trim();
 }
 
 export const claudeAdapter: SiteAdapter = {
@@ -51,7 +71,7 @@ export const claudeAdapter: SiteAdapter = {
     });
 
     return all
-      .map(({ el, role }) => ({ role, text: cleanText(el.textContent) }))
+      .map(({ el, role }) => ({ role, text: stripChrome(el.textContent ?? "") }))
       .filter((m) => m.text.length > 0);
   },
 };
