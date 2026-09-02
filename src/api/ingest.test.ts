@@ -7,8 +7,8 @@ import { FakeProvider } from "../providers/fake";
 function extractionResponse(events: object[]): string {
   return JSON.stringify({ events });
 }
-function identityResponse(matchedIdeaId: string | null): string {
-  return JSON.stringify({ matched_idea_id: matchedIdeaId, confidence: 0.9, reasoning: "scripted", also_related_idea_id: null });
+function identityResponse(matchedIdeaId: string | null, confidence = 0.9): string {
+  return JSON.stringify({ matched_idea_id: matchedIdeaId, confidence, reasoning: "scripted", also_related_idea_id: null });
 }
 
 describe("ingestConversation against a real DB (simulates repeated HTTP calls as a chat grows)", () => {
@@ -96,6 +96,60 @@ describe("ingestConversation against a real DB (simulates repeated HTTP calls as
     const ideas = loadIdeas(db);
     expect(ideas).toHaveLength(1);
     expect(ideas[0]?.evolution.map((e) => e.sourceEventId).sort()).toEqual(["m1", "m2"]);
+  });
+
+  test("replay does NOT promote a discard when identity still won't confirm the match", async () => {
+    const db = openDb(":memory:");
+
+    await ingestConversation(
+      db,
+      {
+        conversationId: "conv_1",
+        source: "fixture",
+        messages: [{ id: "m1", role: "user", text: "Authority boundaries should be enforced at runtime.", createdAt: "2026-08-17T00:00:00.000Z" }],
+      },
+      {
+        extraction: new FakeProvider([
+          extractionResponse([
+            { type: "claim", statement: "Authority boundaries should be enforced at runtime.", confidence: 0.9, persistence: "medium", source_event_id: "m1", evidence_quote: "enforced at runtime" },
+          ]),
+        ]),
+        reasoning: new FakeProvider([]),
+      },
+    );
+    expect(loadIdeas(db)).toHaveLength(0);
+
+    // An idea arrives with strong lexical overlap -- replay re-examines m1 -- but identity
+    // resolution says confidence 0.4 (below 0.75). m1 must NOT be promoted, and NOT become a
+    // second idea; it stays in discarded_events for a future pass.
+    const call2 = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_1",
+        source: "fixture",
+        messages: [
+          { id: "m1", role: "user", text: "Authority boundaries should be enforced at runtime.", createdAt: "2026-08-17T00:00:00.000Z" },
+          { id: "m2", role: "user", text: "Authority boundaries must be explicit and enforced.", createdAt: "2026-08-18T00:00:00.000Z" },
+        ],
+      },
+      {
+        extraction: new FakeProvider([
+          extractionResponse([
+            { type: "new_idea", statement: "Authority boundaries must be explicit and enforced.", confidence: 0.95, source_event_id: "m2", evidence_quote: "Authority boundaries" },
+          ]),
+        ]),
+        reasoning: new FakeProvider([identityResponse("idea_cog_m2_0", 0.4)]),
+      },
+    );
+
+    expect(call2.promotedFromDiscard).toBe(0);
+    expect(call2.ideaCount).toBe(1); // just the m2 idea, no thin thread for m1
+    const ideas = loadIdeas(db);
+    expect(ideas).toHaveLength(1);
+    expect(ideas[0]?.evolution.map((e) => e.sourceEventId)).toEqual(["m2"]);
+
+    const stillDiscarded = db.query("SELECT id FROM discarded_events").all() as { id: string }[];
+    expect(stillDiscarded.some((r) => r.id.includes("m1"))).toBe(true);
   });
 
   test("a growing conversation extends the same idea across three separate calls", async () => {

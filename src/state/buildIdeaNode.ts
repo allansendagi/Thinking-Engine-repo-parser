@@ -36,16 +36,33 @@ function linkRelated(a: IdeaNode, b: IdeaNode): void {
  * proximity collapsed to ~0 and pushed a genuine match below the candidate-narrowing floor,
  * producing a real missed merge (see git history / eval run for the diagnosis).
  */
+/**
+ * Did identity resolution land on an existing idea we can trust? Used both by applyCognitiveEvent
+ * (merge vs. new) and by the signal gate (state/pipeline.ts, state/replayDiscarded.ts): a
+ * medium-value leaky event is only allowed to persist when this is true -- a strong retrieval
+ * score alone isn't enough, since the retrieval signal can be high while the idea model correctly
+ * says "not the same idea".
+ */
+export function isConfidentExistingMatch(
+  resolution: IdentityResolution,
+  ideas: Map<string, IdeaNode>,
+): boolean {
+  return (
+    resolution.matchedIdeaId !== null &&
+    resolution.confidence >= IDENTITY_RESOLUTION_MERGE_THRESHOLD &&
+    ideas.has(resolution.matchedIdeaId)
+  );
+}
+
 export function applyCognitiveEvent(
   ideas: Map<string, IdeaNode>,
   event: CognitiveEvent,
   resolution: IdentityResolution,
   sourceCreatedAt: string,
 ): IdeaNode {
-  const confidentMatch =
-    resolution.matchedIdeaId !== null && resolution.confidence >= IDENTITY_RESOLUTION_MERGE_THRESHOLD
-      ? ideas.get(resolution.matchedIdeaId)
-      : undefined;
+  const confidentMatch = isConfidentExistingMatch(resolution, ideas)
+    ? ideas.get(resolution.matchedIdeaId as string)
+    : undefined;
 
   if (!confidentMatch) {
     const idea: IdeaNode = {

@@ -175,6 +175,36 @@ describe("runPipeline (FakeProvider, no API key)", () => {
     expect(result.ideas.size).toBe(1);
   });
 
+  // A strong retrieval score clears the phase-2 gate, but the idea model is the real authority on
+  // "same idea". These two cases must NOT produce a new standalone idea.
+  for (const [name, identity] of [
+    ["identity returns no match", identityResponse(null)],
+    ["identity confidence is below the merge threshold", identityResponse("idea_cog_u1_0", 0.6)],
+  ] as const) {
+    test(`a medium leaky event with a strong candidate is discarded when ${name}`, async () => {
+      const events: CanonicalEvent[] = [
+        { id: "u1", conversationId: "c1", source: "fixture", role: "user", text: "Authority boundaries must be explicit and enforced.", createdAt: "2026-08-17T00:00:00.000Z", index: 0 },
+        { id: "u2", conversationId: "c2", source: "fixture", role: "user", text: "Those authority boundaries should be enforced at runtime, not just written down.", createdAt: "2026-08-18T00:00:00.000Z", index: 0 },
+      ];
+      const extraction = new FakeProvider([
+        extractionResponse([{ type: "new_idea", statement: "Authority boundaries must be explicit and enforced.", confidence: 0.95, persistence: "high", source_event_id: "u1", evidence_quote: "Authority boundaries" }]),
+        extractionResponse([{ type: "claim", statement: "Authority boundaries should be enforced at runtime.", confidence: 0.9, persistence: "medium", source_event_id: "u2", evidence_quote: "enforced at runtime" }]),
+      ]);
+      // u2 clears retrieval (strong lexical overlap) so identity IS consulted -- and says no.
+      const reasoning = new FakeProvider([identity]);
+
+      const result = await runPipeline(events, { extraction, reasoning });
+
+      expect(result.ideas.size).toBe(1); // NOT a second thin thread
+      expect(result.cognitiveEvents.map((e) => e.sourceEventId)).toEqual(["u1"]);
+      const d = result.discardedEvents.find((x) => x.event.sourceEventId === "u2");
+      expect(d).toBeDefined();
+      expect(d!.gateReason).toContain("identity gave");
+      // still replayable: the reason keeps the needs-match marker
+      expect(d!.gateReason).toContain("persist only if it extends an existing idea");
+    });
+  }
+
   test("evidence quotes that don't verbatim-match their source are rejected, not silently kept", async () => {
     const extraction = new FakeProvider([
       extractionResponse([
