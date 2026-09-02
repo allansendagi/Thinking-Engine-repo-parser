@@ -2,6 +2,14 @@ import AppKit
 import Foundation
 import SwiftUI
 
+/// The quick-recall panel's three segments. Lives here rather than in MenuBarListView's local
+/// `@State` so an external surface (the `thread://` scheme, Services) can switch to it, and so
+/// it survives the list⇄detail swap — same reasoning as `listSelection`.
+enum ListTab: String, CaseIterable, Identifiable {
+    case recent = "Recent", loops = "Open loops", all = "All"
+    var id: String { rawValue }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     init() {
@@ -43,6 +51,9 @@ final class AppState: ObservableObject {
     /// selected one, exactly like the design mock's persistent `state.sel`.
     @Published var listSelection: String?
 
+    /// Which of the panel's three segments is showing. See `ListTab`.
+    @Published var listTab: ListTab = .recent
+
     /// Idea ids the user has pinned. Shown as a "Pinned" group at the top of the All tab.
     /// Local-only (no backend concept), persisted across launches.
     private let pinnedKey = "thread.pinnedIds"
@@ -54,6 +65,52 @@ final class AppState: ObservableObject {
     func togglePin(_ id: String) {
         if pinnedIds.contains(id) { pinnedIds.remove(id) } else { pinnedIds.insert(id) }
         UserDefaults.standard.set(Array(pinnedIds), forKey: pinnedKey)
+    }
+
+    // MARK: - Resume suggestion (the one restrained "you may be returning to…" nudge)
+
+    /// Snooze timestamps per idea. "Not now" and "Resume" both record now; the nudge only
+    /// resurfaces for an idea once it has been touched *since* you dismissed it -- new activity
+    /// is new evidence. Local-only, persisted.
+    private let resumeSnoozeKey = "thread.resumeSnoozed"
+    @Published private var resumeSnoozed: [String: Double] =
+        (UserDefaults.standard.dictionary(forKey: "thread.resumeSnoozed") as? [String: Double]) ?? [:]
+
+    func snoozeResume(_ ideaId: String) {
+        resumeSnoozed[ideaId] = Date().timeIntervalSince1970
+        UserDefaults.standard.set(resumeSnoozed, forKey: resumeSnoozeKey)
+    }
+
+    /// The single highest-confidence idea worth resuming, or nil. Deliberately conservative:
+    ///   • has an unresolved open loop OR is contested (there is genuinely something unfinished)
+    ///   • not dormant / rejected
+    ///   • last touched between 3 and 45 days ago -- long enough that you were interrupted,
+    ///     recent enough that it isn't abandoned
+    ///   • not snoozed (unless it's been worked on since)
+    /// Only the most-recently-touched qualifier is returned; if nothing qualifies, no nudge.
+    var resumeSuggestion: ResumeSuggestion? {
+        guard isPaired, let state = thinkingState else { return nil }
+
+        let openLoopIdeas = Set(state.openLoops.filter { !$0.resolved }.map(\.ideaId))
+        var lastTouched: [String: Date] = [:]
+        for c in state.recentChanges {
+            guard let d = Theme.parse(c.createdAt) else { continue }
+            if lastTouched[c.ideaId].map({ d > $0 }) ?? true { lastTouched[c.ideaId] = d }
+        }
+
+        let candidates = state.currentIdeas.compactMap { idea -> ResumeCandidate? in
+            guard let touched = lastTouched[idea.id] else { return nil }
+            return ResumeCandidate(
+                id: idea.id,
+                title: cleanIdeaTitle(idea.title, fallback: idea.currentFormulation),
+                state: idea.state,
+                source: idea.sourceLabel,
+                hasOpenLoop: openLoopIdeas.contains(idea.id),
+                lastTouched: touched
+            )
+        }
+        let snoozed = resumeSnoozed.mapValues { Date(timeIntervalSince1970: $0) }
+        return pickResumeSuggestion(candidates, snoozed: snoozed)
     }
     @Published var continueResult: String?
     @Published var errorMessage: String?
@@ -296,7 +353,67 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Route a `ThreadAction` from an outside surface (the `thread://` scheme, the Services menu,
+    /// App Intents). Always brings the quick-recall panel up; for `.recall` it seeds the very
+    /// same search field the user would type into, so there's one code path for "show me ideas
+    /// matching X".
+    func perform(_ action: ThreadAction) {
+        func present() { NotificationCenter.default.post(name: .threadPresentPanel, object: nil) }
+
+        guard isPaired else { present(); return }
+
+        switch action {
+        case .recall(let text):
+            closeIdea()
+            listTab = .recent
+            searchQuery = text
+            present()
+            Task { await search() }
+        case .openIdea(let id):
+            present()
+            Task { await openIdea(id) }
+        case .openLoops:
+            closeIdea()
+            searchQuery = ""
+            listTab = .loops
+            present()
+            Task { await refresh() }
+        case .continueIdea(let id):
+            present()
+            Task {
+                await openIdea(id)
+                await continueThinking(sendTo: nil)
+            }
+        case .continueTopic(let topic):
+            present()
+            Task {
+                let hit = (try? await client.searchIdeas(query: topic))?.first
+                if let hit {
+                    await openIdea(hit.id)
+                    await continueThinking(sendTo: nil)
+                } else {
+                    // Nothing matched -- fall back to the search so the user can pick.
+                    closeIdea()
+                    listTab = .recent
+                    searchQuery = topic
+                    await search()
+                }
+            }
+        }
+    }
+
     func openIdea(_ id: String) async {
+        // Switching to a different idea: drop any continuation preview/draft from the previous
+        // one so it can't linger under the new idea's detail (panel and full window share this
+        // AppState, and the full window changes ideas by selecting a row, not via closeIdea()).
+        if id != selectedIdeaId {
+            continueResult = nil
+            continuationPacket = nil
+            continuationText = nil
+            nextStepDraft = ""
+            continueCopied = false
+            sentToTool = nil
+        }
         selectedIdeaId = id
         errorMessage = nil
         do {
@@ -310,6 +427,11 @@ final class AppState: ObservableObject {
         selectedIdeaId = nil
         selectedTrace = nil
         continueResult = nil
+        continuationPacket = nil
+        continuationText = nil
+        nextStepDraft = ""
+        continueCopied = false
+        sentToTool = nil
     }
 
     func renameSelected(to title: String) async {
@@ -415,61 +537,63 @@ final class AppState: ObservableObject {
     }
 
     /// A clean, paste-ready Markdown context block: current idea, evolution, open question,
-    /// and (once fetched) the synthesised "where this stands".
-    func contextMarkdown(for trace: IdeaTrace, synthesis: String?) -> String {
-        var out = "### Current Idea: \(trace.idea.title)\n\n"
-        out += "**Current formulation:**\n\(trace.idea.currentFormulation)\n\n"
-        if !trace.provenance.isEmpty {
-            out += "**Evolution:**\n"
-            for step in trace.provenance { // chronological, oldest first
-                let date = Theme.relative(step.createdAt)
-                let src = step.sourceLabel.map { " _(\($0))_" } ?? ""
-                out += "- \(date): \(step.formulation)\(src)\n"
-            }
-            out += "\n"
-        }
-        let loops = trace.idea.openLoops.filter { !$0.resolved }
-        if !loops.isEmpty {
-            out += "**Open question\(loops.count == 1 ? "" : "s"):**\n"
-            for l in loops { out += "- \(l.statement)\n" }
-            out += "\n"
-        }
-        if let synthesis, !synthesis.isEmpty {
-            out += "**Where this stands:**\n\(synthesis)\n\n"
-        }
-        out += "---\nPlease continue from here."
-        return out
-    }
-
     private func copyContext(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         continueCopied = true
     }
 
-    /// The payoff. Fetches the synthesis, copies the full context block, and (for a web tool)
-    /// opens a fresh chat so the user just presses Cmd+V.
+    /// The last continuation packet fetched, for the in-app preview (source affordances +
+    /// editable next step). `continuationText` is the server's verbatim paste-ready render.
+    @Published var continuationPacket: ContinuationPacket?
+    @Published var continuationText: String?
+    /// The user's edit of "Continue from here". Empty = use packet.suggestedNext untouched.
+    @Published var nextStepDraft: String = ""
+
+    /// The paste string. The backend leaves a token where the "Continue from here" line goes;
+    /// we fill it with the user's edit or the suggested default in one literal replace. No
+    /// client-side re-render, no fuzzy anchor matching -- the token can't collide or drift.
+    var continuationCopyText: String? {
+        guard let text = continuationText, let packet = continuationPacket else { return nil }
+        let edited = nextStepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let line = edited.isEmpty ? packet.suggestedNext : edited
+        return text.replacingOccurrences(of: ContinuationPacket.continueToken, with: line)
+    }
+
+    /// The payoff. Builds the continuation packet for the selected idea, copies the paste-ready
+    /// text, and (for a web tool) opens a fresh chat so the user just presses Cmd+V. The preview
+    /// card then shows exactly what was sent.
     func continueThinking(sendTo tool: AITool?) async {
         guard let trace = selectedTrace else { return }
         continueResult = "Thinking…"
         continueCopied = false
         sentToTool = nil
+        continuationPacket = nil
+        continuationText = nil
 
-        var synthesis: String?
         do {
-            synthesis = try await client.continueThinking(topic: trace.idea.title).text
-            continueResult = synthesis
+            let r = try await client.continueIdea(ideaId: trace.idea.id)
+            continuationPacket = r.packet
+            continuationText = r.text
+            nextStepDraft = r.packet.suggestedNext
+            continueResult = r.text
         } catch {
             continueResult = nil
             errorMessage = error.localizedDescription
+            return
         }
 
-        copyContext(contextMarkdown(for: trace, synthesis: synthesis))
+        if let copy = continuationCopyText { copyContext(copy) }
 
         if let tool {
             preferredTool = tool
             if let url = tool.newChatURL { NSWorkspace.shared.open(url) }
             sentToTool = tool
         }
+    }
+
+    /// Re-copy after the user tweaks "Continue from here" in the preview.
+    func recopyContinuation() {
+        if let copy = continuationCopyText { copyContext(copy) }
     }
 }

@@ -124,6 +124,37 @@ CredentialStore.swift        Keychain for the token, UserDefaults for non-secret
 Views (`Views/*.swift`) are pure SwiftUI reading/writing `AppState` -- no view owns its own
 network or storage logic.
 
+## Driving Thread from outside its own UI
+
+Three entry points, all routed through `AppState.perform(_ :ThreadAction)` so there is one code
+path per action. `ThreadAction` (see `ExternalActions.swift`) is the only place the vocabulary
+and URL grammar live.
+
+**`thread://` URL scheme** -- `open` it from Raycast, Alfred, a Shortcut's "Open URL" action,
+or a script:
+
+| URL | Does |
+| --- | --- |
+| `thread://recall?q=<text>` | opens the panel, runs a search for `<text>` |
+| `thread://idea/<id>` | opens the panel on that idea's detail |
+| `thread://loops` | opens the panel on the Open loops tab |
+| `thread://continue?idea=<id>` | builds + copies that idea's continuation packet |
+| `thread://continue?topic=<text>` | resolves the best-matching idea, then continues it |
+
+Ids that contain `::` (paste-sourced) must be percent-encoded (`conv%3A%3A4`).
+
+**Services menu** -- select text in any app, right-click, Services -> "Recall in Thread".
+Backed by `ThreadServicesProvider`; declared under `NSServices` in the bundle Info.plist.
+
+**App Intents** -- `AppIntents.swift` exposes *Recall in Thread*, *Show Open Loops*, and
+*Continue a Thought in Thread* to Shortcuts, Spotlight, and Siri, each a thin wrapper over the
+same `ThreadAction` cases. SwiftPM has no App Intents build phase, so `package.sh` runs the two
+steps Xcode would: `swift-frontend -emit-const-values-path` (fed `appintents-protocols.json` --
+a bare JSON array, since the open-source frontend rejects the toolchain's own keyed
+`AppIntents.json`), then `appintentsmetadataprocessor` -> `Contents/Resources/Metadata.appintents`.
+Needs full Xcode installed; on a Command-Line-Tools-only machine the step is skipped and the
+app still builds (intents just aren't discoverable there -- the `thread://` scheme always is).
+
 ## What's deliberately not here
 
 - Text insertion into other applications (Wispr's actual mechanism) -- a distinct, bigger

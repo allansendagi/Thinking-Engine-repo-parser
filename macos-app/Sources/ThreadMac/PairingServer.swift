@@ -7,6 +7,12 @@ import Network
 /// machine can reach it; the response only ever contains this user's own credentials, which the
 /// extension would otherwise get by the user pasting a pairing string.
 ///
+/// SECURITY: the response carries a bearer token, so it sends **no** CORS headers. The MV3
+/// extension reads it from its background worker through a `http://127.0.0.1/*` host permission,
+/// which isn't gated by CORS. With no `Access-Control-Allow-Origin`, the browser refuses to let
+/// a cross-origin web page read the body -- which is what stops any page the user visits from
+/// `fetch`-ing this endpoint and walking off with the token.
+///
 /// Deliberately tiny: enough HTTP/1.1 to answer one GET. No routing framework, no dependencies.
 final class PairingServer {
     static let port: UInt16 = 43917
@@ -68,9 +74,6 @@ final class PairingServer {
         let method = parts.first.map(String.init) ?? ""
         let path = parts.count > 1 ? String(parts[1]) : ""
 
-        if method == "OPTIONS" {
-            return Self.raw(status: "204 No Content", body: nil)
-        }
         guard method == "GET", path == "/thread/pair", let body = payloadProvider() else {
             return Self.raw(status: "404 Not Found", body: Data(#"{"error":"not pairing"}"#.utf8))
         }
@@ -79,9 +82,10 @@ final class PairingServer {
     }
 
     private static func raw(status: String, body: Data?) -> Data {
+        // No CORS headers, on purpose -- see the type doc. The extension reaches this via a
+        // host permission, not a page fetch, so it needs none; omitting them is what keeps a
+        // hostile web page from reading a token response it manages to trigger.
         var headers = "HTTP/1.1 \(status)\r\n"
-        headers += "Access-Control-Allow-Origin: *\r\n"
-        headers += "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
         headers += "Cache-Control: no-store\r\n"
         headers += "Content-Type: application/json\r\n"
         headers += "Content-Length: \(body?.count ?? 0)\r\n"

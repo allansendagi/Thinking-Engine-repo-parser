@@ -3,15 +3,37 @@ import Carbon.HIToolbox
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// So App Intents (which the system instantiates on their own) can reach the running
+    /// app's single AppState. Set on init; the app is a lone menu-bar process, never > 1.
+    static private(set) weak var shared: AppDelegate?
+
     let appState = AppState()
     private var hotKey: GlobalHotKey?
     private var quickRecallPanel: QuickRecallPanel?
     private var pairingServer: PairingServer?
     private var statusItem: NSStatusItem?
+    private var servicesProvider: ThreadServicesProvider?
+    /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
+    private var pendingURLs: [URL] = []
+
+    override init() {
+        super.init()
+        AppDelegate.shared = self
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panel = QuickRecallPanel(appState: appState)
         quickRecallPanel = panel
+
+        // Bring the panel up on request (thread:// scheme, Services menu, App Intents later).
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(presentPanel), name: .threadPresentPanel, object: nil
+        )
+
+        // "Recall in Thread" on selected text in any app.
+        let services = ThreadServicesProvider(appState: appState)
+        NSApp.servicesProvider = services
+        servicesProvider = services
 
         // Menu-bar item — a single NSStatusItem whose click toggles the ONE panel. (A SwiftUI
         // MenuBarExtra would create a second RootView window, which is what made it "jump".)
@@ -39,9 +61,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pairingServer = server
 
         Task { await appState.bootstrap() }
+
+        // Flush any thread:// URL that launched us before this point.
+        let queued = pendingURLs
+        pendingURLs.removeAll()
+        queued.forEach(route)
+    }
+
+    /// `open thread://...` from Raycast / Alfred / Shortcuts / a script. Registered via
+    /// `CFBundleURLTypes` in the bundle's Info.plist.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            if quickRecallPanel == nil { pendingURLs.append(url) } else { route(url) }
+        }
+    }
+
+    private func route(_ url: URL) {
+        guard let action = ThreadAction.parse(url) else {
+            print("[ThreadMac] ignored unrecognised URL: \(url.absoluteString)")
+            return
+        }
+        appState.perform(action)
     }
 
     @objc private func togglePanel() { quickRecallPanel?.toggle() }
+    @objc private func presentPanel() { quickRecallPanel?.show() }
 
     /// The quick-recall panel is an NSPanel, which AppKit doesn't count as a "visible window", so
     /// activating the app (Dock click, status-item click) would otherwise trigger the default

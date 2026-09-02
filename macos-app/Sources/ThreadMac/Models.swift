@@ -166,8 +166,45 @@ struct BillingURL: Codable {
     let url: String
 }
 
+/// The continuation packet: a compact, source-backed handoff for resuming a thought in any AI
+/// tool. `text` is the server's paste-ready render -- copy it verbatim. `packet` is the
+/// structured version for the in-app preview (source affordances + an editable next step).
 struct ContinueResponse: Codable {
     let text: String
+    let packet: ContinuationPacket
+}
+
+struct ContinuationPacket: Codable {
+    struct Idea: Codable { let id: String; let title: String; let state: String }
+    struct EvolutionStep: Codable, Identifiable {
+        let when: String
+        let source: String?
+        let formulation: String
+        let sourceText: String?
+        var id: String { when + formulation }
+    }
+    struct PacketDecision: Codable, Identifiable {
+        let statement: String
+        let decidedAt: String
+        var id: String { decidedAt + statement }
+    }
+
+    let idea: Idea
+    let whereYouLeftOff: String
+    let contested: Bool
+    /// Verified user-authored steps only (see `evolutionUnverified`). The full list — the paste
+    /// text abridges a long one; the preview can show all.
+    let evolution: [EvolutionStep]
+    /// The idea has history but none of it is a verified user message (pre source-role data).
+    /// `evolution` is then empty and the UI says so rather than implying steps are the user's.
+    let evolutionUnverified: Bool
+    let decisions: [PacketDecision]
+    let unresolvedQuestion: String?
+    let suggestedNext: String
+
+    /// The backend's rendered `text` carries this where the "Continue from here" line goes.
+    /// Fill it with one literal replace — no client-side re-rendering of the packet.
+    static let continueToken = "{{CONTINUE_FROM_HERE}}"
 }
 
 struct APIErrorBody: Codable {

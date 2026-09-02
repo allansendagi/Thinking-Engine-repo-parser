@@ -3,18 +3,22 @@ import SwiftUI
 struct MenuBarListView: View {
     @EnvironmentObject var appState: AppState
     @FocusState private var searchFocused: Bool
-    @State private var tab: Tab = .recent
+
+    /// The visible segment. Backed by AppState (see `ListTab`) so `thread://loops` and the
+    /// Services menu can switch it, and so it survives the list⇄detail swap.
+    private var tab: ListTab {
+        get { appState.listTab }
+        nonmutating set { appState.listTab = newValue }
+    }
+    private var tabBinding: Binding<ListTab> {
+        Binding(get: { appState.listTab }, set: { appState.listTab = $0 })
+    }
 
     /// Highlighted row. Backed by AppState so it survives the list⇄detail swap (see the mock's
     /// persistent `state.sel`): pick row 2, open it, come back — row 2 is still blue.
     private var selection: String? {
         get { appState.listSelection }
         nonmutating set { appState.listSelection = newValue }
-    }
-
-    enum Tab: String, CaseIterable, Identifiable {
-        case recent = "Recent", loops = "Open loops", all = "All"
-        var id: String { rawValue }
     }
 
     private var searching: Bool { !appState.searchQuery.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -41,6 +45,7 @@ struct MenuBarListView: View {
     private var openLoops: [ThinkingStateResponse.OpenLoopEntry] {
         (appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }
     }
+    private var loopIdeaIDs: Set<String> { Set(openLoops.map(\.ideaId)) }
 
     // Row look, title cleanup, `metaLine`, date bucketing all live in IdeaRowKit.swift now,
     // shared with the full window so the two surfaces are one design.
@@ -51,7 +56,8 @@ struct MenuBarListView: View {
         return IdeaRow(id: i.id, title: title,
                        snippet: rowSnippet(title: title, formulation: i.currentFormulation),
                        meta: metaLine(i.sourceLabel, when),
-                       isLoop: false, ideaId: i.id, when: when)
+                       isLoop: false, ideaId: i.id, when: when,
+                       status: rowStatus(state: i.state, hasOpenLoop: loopIdeaIDs.contains(i.id)))
     }
     private func loopRow(_ l: ThinkingStateResponse.OpenLoopEntry) -> IdeaRow {
         let when = l.createdAt ?? lastTouched[l.ideaId] ?? ""
@@ -73,7 +79,9 @@ struct MenuBarListView: View {
         let ideas = appState.thinkingState?.currentIdeas ?? []
         switch tab {
         case .loops:
-            return openLoops.isEmpty ? [] : [IdeaRowGroup(id: "l", label: "Open loops", rows: openLoops.map(loopRow))]
+            return openLoopGroups(openLoops, flatLabel: "Open loops",
+                                  sourceLabelFor: { ideaSourceLabel[$0] },
+                                  whenFor: { lastTouched[$0] })
         case .recent, .all:
             let loopIdeaIDs = Set(openLoops.map(\.ideaId))
 
@@ -101,6 +109,19 @@ struct MenuBarListView: View {
     var body: some View {
         VStack(spacing: 0) {
             chrome
+            if !searching, tab == .recent, let s = appState.resumeSuggestion {
+                ResumeBar(
+                    suggestion: s,
+                    onResume: {
+                        appState.snoozeResume(s.ideaId)
+                        Task {
+                            await appState.openIdea(s.ideaId)
+                            await appState.continueThinking(sendTo: nil)
+                        }
+                    },
+                    onDismiss: { withAnimation(.easeOut(duration: 0.16)) { appState.snoozeResume(s.ideaId) } }
+                )
+            }
             if groups.isEmpty {
                 EmptyState(onboard: !appState.onboardingDismissed && tab != .loops,
                            dismiss: { appState.dismissOnboarding() }, loops: tab == .loops)
@@ -151,7 +172,7 @@ struct MenuBarListView: View {
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.ink(0.09), lineWidth: 0.5))
 
             if !searching {
-                Segmented(selection: $tab)
+                Segmented(selection: tabBinding)
                     .onChange(of: tab) { newTab in selection = newTab == .loops ? nil : flatIDs.first }
             }
         }
@@ -218,10 +239,10 @@ struct MenuBarListView: View {
 // MARK: - Custom segmented (exact mock styling)
 
 private struct Segmented: View {
-    @Binding var selection: MenuBarListView.Tab
+    @Binding var selection: ListTab
     var body: some View {
         HStack(spacing: 1.5) {
-            ForEach(MenuBarListView.Tab.allCases) { t in
+            ForEach(ListTab.allCases) { t in
                 let on = selection == t
                 Text(t.rawValue)
                     .font(.system(size: 12, weight: on ? .semibold : .medium)).kerning(-0.06)

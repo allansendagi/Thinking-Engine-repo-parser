@@ -44,16 +44,37 @@ struct MainWindowView: View {
         .navigationTitle("")
         .frame(minWidth: 900, minHeight: 560)
         .background { VisualEffectBackground() }
-        .fullWindowChrome()          // green button zooms/full-screens; window won't auto-restore
+        .fullWindowChrome()          // green button fills the screen; window won't auto-restore
         .preferredColorScheme(.light)
+        .tint(Theme.accent)          // sidebar selection + buttons follow the app accent, not the OS one
         .task { await appState.refresh() }
     }
 
     private var sidebar: some View {
-        List(Tab.allCases, selection: $tab) { t in
-            Label(t.rawValue, systemImage: t.icon).tag(t)
+        // Hand-drawn selection so the highlight is Thread's accent, not the OS accent colour
+        // (macOS List selection ignores .tint).
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Tab.allCases) { t in
+                let on = tab == t
+                Button {
+                    tab = t
+                } label: {
+                    Label(t.rawValue, systemImage: t.icon)
+                        .font(.system(size: 13, weight: on ? .semibold : .regular))
+                        .foregroundStyle(on ? Color.white : Theme.ink(0.75))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7)
+                                .fill(on ? Theme.accent : Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
         }
-        .scrollContentBackground(.hidden)
+        .padding(8)
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 6) {
                 Glyph(kind: .cloud, size: 12)
@@ -88,6 +109,10 @@ private struct IdeaListColumn: View {
         return m
     }
 
+    private var loopIdeaIDs: Set<String> {
+        Set((appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }.map(\.ideaId))
+    }
+
     private var groups: [IdeaRowGroup] {
         if searching {
             let rows = appState.searchResults.map { r -> IdeaRow in
@@ -104,7 +129,8 @@ private struct IdeaListColumn: View {
             return IdeaRow(id: i.id, title: title,
                            snippet: rowSnippet(title: title, formulation: i.currentFormulation),
                            meta: metaLine(i.sourceLabel, when),
-                           isLoop: false, ideaId: i.id, when: when)
+                           isLoop: false, ideaId: i.id, when: when,
+                           status: rowStatus(state: i.state, hasOpenLoop: loopIdeaIDs.contains(i.id)))
         }
         return dateBucketedGroups(rows)
     }
@@ -138,15 +164,7 @@ private struct LoopListColumn: View {
     @EnvironmentObject var appState: AppState
 
     private var groups: [IdeaRowGroup] {
-        let loops = (appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }
-        let rows = loops.map { l -> IdeaRow in
-            let when = l.createdAt ?? ""
-            return IdeaRow(id: "loop:" + l.loopId,
-                           title: deNarrate(l.statement.trimmingCharacters(in: .whitespaces)),
-                           snippet: l.ideaTitle, meta: metaLine(l.sourceLabel, when),
-                           isLoop: true, ideaId: l.ideaId, when: when)
-        }
-        return rows.isEmpty ? [] : [IdeaRowGroup(id: "loops", label: "Unresolved", rows: rows)]
+        openLoopGroups(appState.thinkingState?.openLoops ?? [], flatLabel: "Unresolved")
     }
 
     var body: some View {
