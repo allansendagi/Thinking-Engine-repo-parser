@@ -138,15 +138,7 @@ private struct LoopListColumn: View {
     @EnvironmentObject var appState: AppState
 
     private var groups: [IdeaRowGroup] {
-        let loops = (appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }
-        let rows = loops.map { l -> IdeaRow in
-            let when = l.createdAt ?? ""
-            return IdeaRow(id: "loop:" + l.loopId,
-                           title: deNarrate(l.statement.trimmingCharacters(in: .whitespaces)),
-                           snippet: l.ideaTitle, meta: metaLine(l.sourceLabel, when),
-                           isLoop: true, ideaId: l.ideaId, when: when)
-        }
-        return rows.isEmpty ? [] : [IdeaRowGroup(id: "loops", label: "Unresolved", rows: rows)]
+        openLoopGroups(appState.thinkingState?.openLoops ?? [], flatLabel: "Unresolved")
     }
 
     var body: some View {

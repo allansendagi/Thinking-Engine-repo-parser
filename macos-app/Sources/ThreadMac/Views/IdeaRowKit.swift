@@ -72,6 +72,68 @@ func metaLine(_ source: String?, _ when: String) -> String {
     }
 }
 
+/// Open loops get ONE layout mode at a time — never a mix.
+///
+/// While every idea carries at most one open loop, the flat list is clearest: each loop is its
+/// own row with the parent thought as the secondary line. The moment any single idea has two or
+/// more open loops, the whole screen switches to grouping by parent thought, so you can see
+/// *why* several similar questions coexist. The data already supports this — every loop knows
+/// its `ideaId` and `ideaTitle`.
+///
+/// `flatLabel` is the section title in flat mode (the two surfaces name it differently).
+/// `sourceLabelFor` / `whenFor` are optional per-ideaId fallbacks the panel supplies for loops
+/// whose own `latestSource` / `createdAt` are absent (older backend payloads).
+func openLoopGroups(
+    _ loops: [ThinkingStateResponse.OpenLoopEntry],
+    flatLabel: String,
+    sourceLabelFor: (String) -> String? = { _ in nil },
+    whenFor: (String) -> String? = { _ in nil }
+) -> [IdeaRowGroup] {
+    let active = loops.filter { !$0.resolved }
+    guard !active.isEmpty else { return [] }
+
+    func when(_ l: ThinkingStateResponse.OpenLoopEntry) -> String {
+        l.createdAt ?? whenFor(l.ideaId) ?? ""
+    }
+    func row(_ l: ThinkingStateResponse.OpenLoopEntry, showParent: Bool) -> IdeaRow {
+        IdeaRow(
+            id: "loop:" + l.loopId,
+            title: deNarrate(l.statement.trimmingCharacters(in: .whitespaces)),
+            snippet: showParent ? l.ideaTitle : nil,
+            meta: metaLine(l.sourceLabel ?? sourceLabelFor(l.ideaId), when(l)),
+            isLoop: true, ideaId: l.ideaId, when: when(l)
+        )
+    }
+
+    var byIdea: [String: [ThinkingStateResponse.OpenLoopEntry]] = [:]
+    var seenOrder: [String] = []
+    for l in active {
+        if byIdea[l.ideaId] == nil { seenOrder.append(l.ideaId) }
+        byIdea[l.ideaId, default: []].append(l)
+    }
+
+    // Flat mode: one idea per loop. Newest loop first; parent thought on the second line.
+    if !byIdea.values.contains(where: { $0.count >= 2 }) {
+        let rows = active.sorted { when($0) > when($1) }.map { row($0, showParent: true) }
+        return [IdeaRowGroup(id: "loops", label: flatLabel, rows: rows)]
+    }
+
+    // Grouped mode: one section per parent thought, ordered by its most recent loop.
+    let parents = seenOrder.sorted { a, b in
+        let am = byIdea[a]?.map(when).max() ?? ""
+        let bm = byIdea[b]?.map(when).max() ?? ""
+        return am > bm
+    }
+    return parents.map { id in
+        let ls = (byIdea[id] ?? []).sorted { when($0) > when($1) }
+        return IdeaRowGroup(
+            id: "idea:" + id,
+            label: ls.first?.ideaTitle ?? "Untitled",
+            rows: ls.map { row($0, showParent: false) }
+        )
+    }
+}
+
 /// Buckets rows into Today / Yesterday / This week / … (newest bucket first, newest row first).
 func dateBucketedGroups(_ rows: [IdeaRow]) -> [IdeaRowGroup] {
     var buckets: [Int: (String, [IdeaRow])] = [:]
@@ -134,6 +196,7 @@ struct IdeaRowSectionHeader: View {
         Text(label)
             .font(.system(size: 12, weight: .semibold)).kerning(-0.12)
             .foregroundStyle(Theme.ink(0.85))
+            .lineLimit(1).truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 5)
             .background(Theme.stickyTint)

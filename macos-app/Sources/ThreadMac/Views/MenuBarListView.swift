@@ -73,7 +73,9 @@ struct MenuBarListView: View {
         let ideas = appState.thinkingState?.currentIdeas ?? []
         switch tab {
         case .loops:
-            return openLoops.isEmpty ? [] : [IdeaRowGroup(id: "l", label: "Open loops", rows: openLoops.map(loopRow))]
+            return openLoopGroups(openLoops, flatLabel: "Open loops",
+                                  sourceLabelFor: { ideaSourceLabel[$0] },
+                                  whenFor: { lastTouched[$0] })
         case .recent, .all:
             let loopIdeaIDs = Set(openLoops.map(\.ideaId))
 
