@@ -6,10 +6,10 @@ extension Notification.Name {
     static let threadPresentPanel = Notification.Name("thread.presentPanel")
 }
 
-/// One vocabulary for every "drive Thread from outside its own UI" surface. Today that's the
-/// `thread://` URL scheme and the Services menu; once a full Xcode build is available an
-/// App Intents layer wraps these same cases, so the routing (`AppState.perform(_:)`) stays the
-/// single source of truth and the intents are a thin shell over it.
+/// One vocabulary for every "drive Thread from outside its own UI" surface: the `thread://` URL
+/// scheme, the Services menu, and the App Intents layer (Shortcuts / Spotlight / Siri). All
+/// three route through `AppState.perform(_:)`, so it stays the single source of truth and the
+/// intents are a thin shell over it.
 enum ThreadAction: Equatable {
     /// Open the panel and run a search for this text — the same path as typing in the field.
     case recall(String)
@@ -19,6 +19,9 @@ enum ThreadAction: Equatable {
     case openLoops
     /// Build + copy the continuation packet for this idea (opens the panel on its detail).
     case continueIdea(String)
+    /// Resolve a free-text topic to its best-matching idea, then continue it. For voice/Shortcuts,
+    /// where the caller names a topic rather than an id.
+    case continueTopic(String)
 
     /// Parse a `thread://` URL. Returns nil for anything unrecognised.
     ///
@@ -26,6 +29,7 @@ enum ThreadAction: Equatable {
     ///   thread://idea/<id>              thread://idea?id=<id>
     ///   thread://loops
     ///   thread://continue?idea=<id>     thread://continue/<id>
+    ///   thread://continue?topic=<text>
     static func parse(_ url: URL) -> ThreadAction? {
         guard url.scheme?.lowercased() == "thread" else { return nil }
         let host = (url.host ?? "").lowercased()
@@ -58,6 +62,7 @@ enum ThreadAction: Equatable {
         case "loops", "open-loops":
             return .openLoops
         case "continue":
+            if let topic = query("topic") { return .continueTopic(topic) }
             guard let id = query("idea", "id") ?? firstPath() else { return nil }
             return .continueIdea(id)
         default:

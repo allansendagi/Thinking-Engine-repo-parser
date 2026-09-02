@@ -3,6 +3,10 @@ import Carbon.HIToolbox
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// So App Intents (which the system instantiates on their own) can reach the running
+    /// app's single AppState. Set on init; the app is a lone menu-bar process, never > 1.
+    static private(set) weak var shared: AppDelegate?
+
     let appState = AppState()
     private var hotKey: GlobalHotKey?
     private var quickRecallPanel: QuickRecallPanel?
@@ -11,6 +15,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var servicesProvider: ThreadServicesProvider?
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
     private var pendingURLs: [URL] = []
+
+    override init() {
+        super.init()
+        AppDelegate.shared = self
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panel = QuickRecallPanel(appState: appState)

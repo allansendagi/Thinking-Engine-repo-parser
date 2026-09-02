@@ -89,6 +89,51 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# --- App Intents metadata (Shortcuts / Spotlight / Siri discovery) -----------------------------
+# SwiftPM has no App Intents build phase, so do the two steps Xcode's build system would:
+#   1. swift-frontend emits a .swiftconstvalues for the module (needs a bare-JSON-array protocol
+#      list -- the toolchain's own AppIntents.json uses a key the open-source frontend rejects).
+#   2. appintentsmetadataprocessor turns that into Contents/Resources/Metadata.appintents.
+# Best-effort: on a machine with only Command Line Tools (no Xcode) this is skipped and the app
+# still works -- the intents just aren't discoverable there. The thread:// scheme always is.
+DEVDIR="$(xcode-select -p 2>/dev/null || true)"
+TC="${DEVDIR}/Toolchains/XcodeDefault.xctoolchain"
+APMP="${TC}/usr/bin/appintentsmetadataprocessor"
+MACOS_SDK="${DEVDIR}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+if [ -x "${APMP}" ] && [ -d "${MACOS_SDK}" ]; then
+  echo "Generating App Intents metadata..."
+  AI_WORK="$(mktemp -d)"
+  find "${PWD}/Sources" -name '*.swift' | sort > "${AI_WORK}/sources.list"
+  XCV="$(defaults read "${DEVDIR%/Developer}/version.plist" ProductBuildVersion 2>/dev/null || echo 0)"
+  if "${TC}/usr/bin/swift-frontend" -typecheck \
+       -emit-const-values-path "${AI_WORK}/${APP_NAME}.swiftconstvalues" \
+       -const-gather-protocols-file "${PWD}/appintents-protocols.json" \
+       @"${AI_WORK}/sources.list" \
+       -sdk "${MACOS_SDK}" -target arm64-apple-macos14.0 -module-name "${APP_NAME}" \
+       >"${AI_WORK}/frontend.log" 2>&1
+  then
+    printf '%s\n' "${AI_WORK}/${APP_NAME}.swiftconstvalues" > "${AI_WORK}/constvals.list"
+    "${APMP}" \
+      --output "${APP_DIR}/Contents/Resources" \
+      --toolchain-dir "${TC}" \
+      --module-name "${APP_NAME}" \
+      --sdk-root "${MACOS_SDK}" \
+      --xcode-version "${XCV}" \
+      --platform-family macOS \
+      --deployment-target 14.0 \
+      --target-triple arm64-apple-macos14.0 \
+      --source-file-list "${AI_WORK}/sources.list" \
+      --swift-const-vals-list "${AI_WORK}/constvals.list" \
+    && echo "  -> ${APP_DIR}/Contents/Resources/Metadata.appintents" \
+    || echo "  (appintentsmetadataprocessor failed -- see above; intents still work when invoked directly)"
+  else
+    echo "  (const-value extraction failed -- skipping; $(tail -1 "${AI_WORK}/frontend.log"))"
+  fi
+  rm -rf "${AI_WORK}"
+else
+  echo "App Intents metadata: skipped (no Xcode toolchain) -- thread:// scheme still works."
+fi
+
 # Ad-hoc (re-)sign the assembled bundle -- swift build already ad-hoc signs the raw binary, but
 # the bundle needs signing as a whole after Info.plist is added for it to be internally consistent.
 codesign --force --deep --sign - "${APP_DIR}"

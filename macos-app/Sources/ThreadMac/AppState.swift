@@ -308,9 +308,9 @@ final class AppState: ObservableObject {
     }
 
     /// Route a `ThreadAction` from an outside surface (the `thread://` scheme, the Services menu,
-    /// later App Intents). Always brings the quick-recall panel up; for `.recall` it seeds the
-    /// very same search field the user would type into, so there's one code path for "show me
-    /// ideas matching X".
+    /// App Intents). Always brings the quick-recall panel up; for `.recall` it seeds the very
+    /// same search field the user would type into, so there's one code path for "show me ideas
+    /// matching X".
     func perform(_ action: ThreadAction) {
         func present() { NotificationCenter.default.post(name: .threadPresentPanel, object: nil) }
 
@@ -337,6 +337,21 @@ final class AppState: ObservableObject {
             Task {
                 await openIdea(id)
                 await continueThinking(sendTo: nil)
+            }
+        case .continueTopic(let topic):
+            present()
+            Task {
+                let hit = (try? await client.searchIdeas(query: topic))?.first
+                if let hit {
+                    await openIdea(hit.id)
+                    await continueThinking(sendTo: nil)
+                } else {
+                    // Nothing matched -- fall back to the search so the user can pick.
+                    closeIdea()
+                    listTab = .recent
+                    searchQuery = topic
+                    await search()
+                }
             }
         }
     }

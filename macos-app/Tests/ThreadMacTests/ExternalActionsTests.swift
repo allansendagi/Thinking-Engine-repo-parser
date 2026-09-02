@@ -29,6 +29,15 @@ final class ExternalActionsTests: XCTestCase {
         XCTAssertEqual(parse("thread://continue/abc123"), .continueIdea("abc123"))
     }
 
+    func testContinueTopic() {
+        XCTAssertEqual(
+            parse("thread://continue?topic=computable%20authority"),
+            .continueTopic("computable authority")
+        )
+        // topic wins over a stray id when both are present
+        XCTAssertEqual(parse("thread://continue?topic=x&idea=abc"), .continueTopic("x"))
+    }
+
     func testRejectsJunk() {
         XCTAssertNil(parse("thread://recall"))               // no text
         XCTAssertNil(parse("thread://idea"))                 // no id
