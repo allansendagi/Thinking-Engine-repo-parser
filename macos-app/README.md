@@ -124,6 +124,32 @@ CredentialStore.swift        Keychain for the token, UserDefaults for non-secret
 Views (`Views/*.swift`) are pure SwiftUI reading/writing `AppState` -- no view owns its own
 network or storage logic.
 
+## Driving Thread from outside its own UI
+
+Two entry points, both routed through `AppState.perform(_ :ThreadAction)` so there is one code
+path per action. `ThreadAction.parse` (see `ExternalActions.swift`) is the only place the URL
+grammar lives.
+
+**`thread://` URL scheme** -- `open` it from Raycast, Alfred, a Shortcut's "Open URL" action,
+or a script:
+
+| URL | Does |
+| --- | --- |
+| `thread://recall?q=<text>` | opens the panel, runs a search for `<text>` |
+| `thread://idea/<id>` | opens the panel on that idea's detail |
+| `thread://loops` | opens the panel on the Open loops tab |
+| `thread://continue?idea=<id>` | builds + copies that idea's continuation packet |
+
+Ids that contain `::` (paste-sourced) must be percent-encoded (`conv%3A%3A4`).
+
+**Services menu** -- select text in any app, right-click, Services -> "Recall in Thread".
+Backed by `ThreadServicesProvider`; declared under `NSServices` in the bundle Info.plist.
+
+Native **App Intents** (Shortcuts / Spotlight / Siri discovery) are the intended next layer --
+a thin wrapper over the same `ThreadAction` cases -- but the metadata processor that makes
+intents discoverable ships only with full Xcode, which this SwiftPM + Command Line Tools build
+doesn't have. Same blocker as codesigning/notarization.
+
 ## What's deliberately not here
 
 - Text insertion into other applications (Wispr's actual mechanism) -- a distinct, bigger

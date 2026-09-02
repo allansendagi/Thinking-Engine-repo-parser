@@ -3,18 +3,22 @@ import SwiftUI
 struct MenuBarListView: View {
     @EnvironmentObject var appState: AppState
     @FocusState private var searchFocused: Bool
-    @State private var tab: Tab = .recent
+
+    /// The visible segment. Backed by AppState (see `ListTab`) so `thread://loops` and the
+    /// Services menu can switch it, and so it survives the list⇄detail swap.
+    private var tab: ListTab {
+        get { appState.listTab }
+        nonmutating set { appState.listTab = newValue }
+    }
+    private var tabBinding: Binding<ListTab> {
+        Binding(get: { appState.listTab }, set: { appState.listTab = $0 })
+    }
 
     /// Highlighted row. Backed by AppState so it survives the list⇄detail swap (see the mock's
     /// persistent `state.sel`): pick row 2, open it, come back — row 2 is still blue.
     private var selection: String? {
         get { appState.listSelection }
         nonmutating set { appState.listSelection = newValue }
-    }
-
-    enum Tab: String, CaseIterable, Identifiable {
-        case recent = "Recent", loops = "Open loops", all = "All"
-        var id: String { rawValue }
     }
 
     private var searching: Bool { !appState.searchQuery.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -153,7 +157,7 @@ struct MenuBarListView: View {
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.ink(0.09), lineWidth: 0.5))
 
             if !searching {
-                Segmented(selection: $tab)
+                Segmented(selection: tabBinding)
                     .onChange(of: tab) { newTab in selection = newTab == .loops ? nil : flatIDs.first }
             }
         }
@@ -220,10 +224,10 @@ struct MenuBarListView: View {
 // MARK: - Custom segmented (exact mock styling)
 
 private struct Segmented: View {
-    @Binding var selection: MenuBarListView.Tab
+    @Binding var selection: ListTab
     var body: some View {
         HStack(spacing: 1.5) {
-            ForEach(MenuBarListView.Tab.allCases) { t in
+            ForEach(ListTab.allCases) { t in
                 let on = selection == t
                 Text(t.rawValue)
                     .font(.system(size: 12, weight: on ? .semibold : .medium)).kerning(-0.06)

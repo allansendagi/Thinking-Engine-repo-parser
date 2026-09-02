@@ -2,6 +2,14 @@ import AppKit
 import Foundation
 import SwiftUI
 
+/// The quick-recall panel's three segments. Lives here rather than in MenuBarListView's local
+/// `@State` so an external surface (the `thread://` scheme, Services) can switch to it, and so
+/// it survives the list⇄detail swap — same reasoning as `listSelection`.
+enum ListTab: String, CaseIterable, Identifiable {
+    case recent = "Recent", loops = "Open loops", all = "All"
+    var id: String { rawValue }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     init() {
@@ -42,6 +50,9 @@ final class AppState: ObservableObject {
     /// it survives the list⇄detail swap — click a row, open it, come back, and it's still the
     /// selected one, exactly like the design mock's persistent `state.sel`.
     @Published var listSelection: String?
+
+    /// Which of the panel's three segments is showing. See `ListTab`.
+    @Published var listTab: ListTab = .recent
 
     /// Idea ids the user has pinned. Shown as a "Pinned" group at the top of the All tab.
     /// Local-only (no backend concept), persisted across launches.
@@ -293,6 +304,40 @@ final class AppState: ObservableObject {
             searchResults = try await client.searchIdeas(query: searchQuery)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Route a `ThreadAction` from an outside surface (the `thread://` scheme, the Services menu,
+    /// later App Intents). Always brings the quick-recall panel up; for `.recall` it seeds the
+    /// very same search field the user would type into, so there's one code path for "show me
+    /// ideas matching X".
+    func perform(_ action: ThreadAction) {
+        func present() { NotificationCenter.default.post(name: .threadPresentPanel, object: nil) }
+
+        guard isPaired else { present(); return }
+
+        switch action {
+        case .recall(let text):
+            closeIdea()
+            listTab = .recent
+            searchQuery = text
+            present()
+            Task { await search() }
+        case .openIdea(let id):
+            present()
+            Task { await openIdea(id) }
+        case .openLoops:
+            closeIdea()
+            searchQuery = ""
+            listTab = .loops
+            present()
+            Task { await refresh() }
+        case .continueIdea(let id):
+            present()
+            Task {
+                await openIdea(id)
+                await continueThinking(sendTo: nil)
+            }
         }
     }
 

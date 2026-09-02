@@ -58,6 +58,33 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Thread</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.thread.mac.url</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>thread</string></array>
+        </dict>
+    </array>
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict><key>default</key><string>Recall in Thread</string></dict>
+            <key>NSMessage</key>
+            <string>recallInThread</string>
+            <key>NSPortName</key>
+            <string>Thread</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>public.utf8-plain-text</string>
+                <string>NSStringPboardType</string>
+            </array>
+            <key>NSRequiredContext</key>
+            <dict><key>NSTextContent</key><string>Text</string></dict>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
