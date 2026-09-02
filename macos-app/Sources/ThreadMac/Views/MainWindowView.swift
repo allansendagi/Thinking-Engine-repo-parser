@@ -178,7 +178,7 @@ private struct GroupedRowScroller: View {
                 ForEach(groups) { g in
                     Section {
                         ForEach(g.rows) { r in
-                            IdeaRowView(row: r, selected: r.ideaId == selection, dense: false)
+                            IdeaRowView(row: r, selected: r.ideaId == selection)
                                 .contentShape(Rectangle())
                                 .onTapGesture { open(r) }
                                 .contextMenu {

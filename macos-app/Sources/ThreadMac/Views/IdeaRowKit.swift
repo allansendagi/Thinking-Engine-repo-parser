@@ -85,30 +85,28 @@ func dateBucketedGroups(_ rows: [IdeaRow]) -> [IdeaRowGroup] {
     }
 }
 
-/// The one row. `dense` = the tight panel metrics; `false` = a touch more air for the window.
+/// The one row. Density and whether the snippet line shows are user preferences
+/// (Settings ▸ Appearance), read live from AppState so both surfaces stay in sync.
 struct IdeaRowView: View {
     let row: IdeaRow
     let selected: Bool
-    var dense: Bool = true
+    @EnvironmentObject private var appState: AppState
     @State private var hover = false
 
-    private var pad: EdgeInsets {
-        dense ? .init(top: 8, leading: 10, bottom: 9, trailing: 10)
-              : .init(top: 10, leading: 12, bottom: 11, trailing: 12)
-    }
+    private var d: Density { appState.density }
 
     var body: some View {
-        HStack(alignment: .top, spacing: dense ? 9 : 11) {
-            Glyph(kind: row.isLoop ? .loop : .idea, size: dense ? 14 : 15)
+        HStack(alignment: .top, spacing: d.hSpacing) {
+            Glyph(kind: row.isLoop ? .loop : .idea, size: d.glyphSize)
                 .foregroundStyle(selected ? Theme.onAccent(0.9) : Theme.ink(0.42))
                 .frame(width: 16).padding(.top, 1)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title)
-                    .font(.system(size: dense ? 12.5 : 13, weight: .medium)).kerning(-0.08)
+                    .font(.system(size: d.titleSize, weight: .medium)).kerning(-0.08)
                     .lineSpacing(1.5).lineLimit(2)
                     .foregroundStyle(selected ? Color.white : Theme.ink(0.87))
-                if let s = row.snippet, !s.isEmpty {
-                    Text(s).font(.system(size: dense ? 11.5 : 12)).lineSpacing(1).lineLimit(2)
+                if appState.showSnippets, let s = row.snippet, !s.isEmpty {
+                    Text(s).font(.system(size: d.bodySize)).lineSpacing(1).lineLimit(2)
                         .foregroundStyle(selected ? Theme.onAccent(0.82) : Theme.ink(0.5))
                 }
                 if !row.meta.isEmpty {
@@ -118,7 +116,7 @@ struct IdeaRowView: View {
                 }
             }
         }
-        .padding(pad)
+        .padding(d.rowPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 7)
