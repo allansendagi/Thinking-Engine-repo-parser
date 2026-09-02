@@ -19,34 +19,16 @@ struct WindowAccessor: NSViewRepresentable {
     }
 }
 
-/// Makes the green button fill the whole visible screen -- like ChatGPT and most modern Mac
-/// apps -- instead of AppKit's "zoom to the content's ideal size", which left a grey void.
-///
-/// Two paths cover it: (1) the zoom BUTTON's action is replaced so a click toggles between the
-/// full `visibleFrame` and the prior size; (2) `windowWillUseStandardFrame` handles the other
-/// zoom entry points (double-click titlebar, Window menu). Chains to any delegate SwiftUI set.
+/// Makes the green button enter real macOS full-screen -- menu bar hidden, the window covering
+/// the entire display -- the way ChatGPT and most modern Mac apps behave. `.fullScreenPrimary`
+/// alone often leaves a SwiftUI single-`Window` scene still just "zooming", so the zoom button's
+/// action is set explicitly to `toggleFullScreen:`. `windowWillUseStandardFrame` keeps the
+/// non-full-screen zoom paths (option-click, Window menu) maximising to the visible frame.
 final class WindowChrome: NSObject, NSWindowDelegate {
-    weak var window: NSWindow?
     weak var forward: NSWindowDelegate?
-    private var restoreFrame: NSRect?
-
-    private func fullFrame(_ w: NSWindow) -> NSRect { (w.screen ?? NSScreen.main)?.visibleFrame ?? w.frame }
-
-    @objc func toggleFill(_ sender: Any?) {
-        guard let w = window else { return }
-        let full = fullFrame(w)
-        if let r = restoreFrame,
-           abs(w.frame.width - full.width) < 2, abs(w.frame.height - full.height) < 2 {
-            w.setFrame(r, display: true, animate: true)
-            restoreFrame = nil
-        } else {
-            restoreFrame = w.frame
-            w.setFrame(full, display: true, animate: true)
-        }
-    }
 
     func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
-        fullFrame(window)
+        (window.screen ?? NSScreen.main)?.visibleFrame ?? newFrame
     }
 
     override func responds(to aSelector: Selector!) -> Bool {
@@ -57,12 +39,12 @@ final class WindowChrome: NSObject, NSWindowDelegate {
     }
 }
 
-/// NSWindow.delegate is weak, and the zoom button holds only a weak target -- retain per window.
+/// NSWindow.delegate is weak -- retain the chrome per window.
 private var windowChromeStore: [ObjectIdentifier: WindowChrome] = [:]
 
 extension View {
-    /// Standard full-window configuration: green button fills the screen, resizable, full-screen
-    /// capable, non-restorable, no window tabbing.
+    /// Standard full-window configuration: green button enters full-screen, resizable,
+    /// non-restorable, no window tabbing.
     func fullWindowChrome() -> some View {
         background(
             WindowAccessor { w in
@@ -78,14 +60,15 @@ extension View {
                     windowChromeStore[key] = c
                     return c
                 }()
-                chrome.window = w
                 if w.delegate !== chrome {
                     chrome.forward = w.delegate
                     w.delegate = chrome
                 }
-                if let zoom = w.standardWindowButton(.zoomButton), zoom.target !== chrome {
-                    zoom.target = chrome
-                    zoom.action = #selector(WindowChrome.toggleFill(_:))
+                // Green button -> real full-screen (covers the whole display, hides the menu bar).
+                if let zoom = w.standardWindowButton(.zoomButton),
+                   zoom.action != #selector(NSWindow.toggleFullScreen(_:)) {
+                    zoom.target = w
+                    zoom.action = #selector(NSWindow.toggleFullScreen(_:))
                 }
             }
         )

@@ -36,8 +36,10 @@ struct MainWindowView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 320, ideal: 384, max: 560)
+            .background(Theme.panelTint.opacity(0.55))
         } detail: {
             ReadingPane()
+                .background(Theme.panelTint.opacity(0.3))
         }
         .navigationTitle("")
         .frame(minWidth: 900, minHeight: 560)
@@ -253,15 +255,13 @@ private struct ReadingPane: View {
 
     var body: some View {
         if appState.selectedIdeaId != nil {
-            // IdeaDetailView owns its own ScrollView -- don't nest another. Cap to a readable
-            // measure and align leading with a generous left margin, so on a wide window it
-            // reads as a document, not an island floating in grey.
+            // IdeaDetailView owns its own ScrollView -- don't nest another. Just cap it to a
+            // readable measure, centre it, and keep gutters on a narrow window.
             IdeaDetailView()
-                .frame(maxWidth: 820, alignment: .leading)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.leading, 40)
-                .padding(.trailing, 24)
-                .padding(.top, 14)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.horizontal, 24)
+                .padding(.top, 10)
         } else {
             VStack(spacing: 12) {
                 Glyph(kind: .window, size: 34).foregroundStyle(Theme.ink(0.22))
