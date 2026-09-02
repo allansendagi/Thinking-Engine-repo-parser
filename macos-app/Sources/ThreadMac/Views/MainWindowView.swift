@@ -44,8 +44,9 @@ struct MainWindowView: View {
         .navigationTitle("")
         .frame(minWidth: 900, minHeight: 560)
         .background { VisualEffectBackground() }
-        .fullWindowChrome()          // green button zooms/full-screens; window won't auto-restore
+        .fullWindowChrome()          // green button fills the screen; window won't auto-restore
         .preferredColorScheme(.light)
+        .tint(Theme.accent)          // sidebar selection + buttons follow the app accent, not the OS one
         .task { await appState.refresh() }
     }
 

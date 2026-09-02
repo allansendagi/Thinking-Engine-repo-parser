@@ -118,6 +118,7 @@ struct SettingsView: View {
         }
         .padding(16)
         .frame(width: 340)
+        .tint(Theme.accent)   // buttons follow the app accent, not the OS accent colour
         .onAppear { urlDraft = appState.apiBaseUrl }
     }
 }
