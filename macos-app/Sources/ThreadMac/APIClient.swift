@@ -146,8 +146,9 @@ final class APIClient {
         let _: Empty = try await request("/v1/open-loops/\(Self.pathSegment(id))", method: "PATCH", body: body)
     }
 
-    func continueThinking(topic: String) async throws -> ContinueResponse {
-        let body = try JSONEncoder().encode(["topic": topic])
+    /// Build the continuation packet for one specific idea (exact id -- what the app always has).
+    func continueIdea(ideaId: String) async throws -> ContinueResponse {
+        let body = try JSONEncoder().encode(["ideaId": ideaId])
         return try await request("/v1/continue", method: "POST", body: body)
     }
 

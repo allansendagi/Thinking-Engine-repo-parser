@@ -454,6 +454,27 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       // ...but an active Pro account is not gated
       setPlan(userId, { plan: "pro", status: "active" });
       expect((await capture()).status).not.toBe(402);
+
+      // /v1/continue by exact ideaId returns { text, packet }; the reasoning provider is empty
+      // here, so suggestedNext falls back to a template rather than erroring.
+      const packetRes = await handler(
+        new Request("http://x/v1/continue", {
+          method: "POST",
+          headers: authHeader,
+          body: JSON.stringify({ ideaId: "idea_0" }),
+        }),
+      );
+      expect(packetRes.status).toBe(200);
+      const cp = (await packetRes.json()) as { text: string; packet: { idea: { id: string }; whereYouLeftOff: string; suggestedNext: string } };
+      expect(cp.packet.idea.id).toBe("idea_0");
+      expect(cp.packet.whereYouLeftOff).toBe("f0");
+      expect(cp.text).toContain("Resume: ");
+      expect(cp.packet.suggestedNext.length).toBeGreaterThan(0);
+
+      const missing = await handler(
+        new Request("http://x/v1/continue", { method: "POST", headers: authHeader, body: JSON.stringify({ ideaId: "idea_nope" }) }),
+      );
+      expect(missing.status).toBe(404);
     } finally {
       delete process.env.PADDLE_API_KEY;
       delete process.env.PADDLE_PRICE_ID;

@@ -310,6 +310,11 @@ final class AppState: ObservableObject {
         selectedIdeaId = nil
         selectedTrace = nil
         continueResult = nil
+        continuationPacket = nil
+        continuationText = nil
+        nextStepDraft = ""
+        continueCopied = false
+        sentToTool = nil
     }
 
     func renameSelected(to title: String) async {
@@ -415,61 +420,62 @@ final class AppState: ObservableObject {
     }
 
     /// A clean, paste-ready Markdown context block: current idea, evolution, open question,
-    /// and (once fetched) the synthesised "where this stands".
-    func contextMarkdown(for trace: IdeaTrace, synthesis: String?) -> String {
-        var out = "### Current Idea: \(trace.idea.title)\n\n"
-        out += "**Current formulation:**\n\(trace.idea.currentFormulation)\n\n"
-        if !trace.provenance.isEmpty {
-            out += "**Evolution:**\n"
-            for step in trace.provenance { // chronological, oldest first
-                let date = Theme.relative(step.createdAt)
-                let src = step.sourceLabel.map { " _(\($0))_" } ?? ""
-                out += "- \(date): \(step.formulation)\(src)\n"
-            }
-            out += "\n"
-        }
-        let loops = trace.idea.openLoops.filter { !$0.resolved }
-        if !loops.isEmpty {
-            out += "**Open question\(loops.count == 1 ? "" : "s"):**\n"
-            for l in loops { out += "- \(l.statement)\n" }
-            out += "\n"
-        }
-        if let synthesis, !synthesis.isEmpty {
-            out += "**Where this stands:**\n\(synthesis)\n\n"
-        }
-        out += "---\nPlease continue from here."
-        return out
-    }
-
     private func copyContext(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         continueCopied = true
     }
 
-    /// The payoff. Fetches the synthesis, copies the full context block, and (for a web tool)
-    /// opens a fresh chat so the user just presses Cmd+V.
+    /// The last continuation packet fetched, for the in-app preview (source affordances +
+    /// editable next step). `continuationText` is the server's verbatim paste-ready render.
+    @Published var continuationPacket: ContinuationPacket?
+    @Published var continuationText: String?
+    /// The user's edit of "Continue from here". Empty = use packet.suggestedNext untouched.
+    @Published var nextStepDraft: String = ""
+
+    /// The paste string, with one well-defined substitution if the user edited the next line.
+    /// Never a client re-render -- that's how the two representations would drift.
+    var continuationCopyText: String? {
+        guard let text = continuationText, let packet = continuationPacket else { return nil }
+        let edited = nextStepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !edited.isEmpty, edited != packet.suggestedNext else { return text }
+        return text.replacingOccurrences(of: packet.suggestedNext, with: edited)
+    }
+
+    /// The payoff. Builds the continuation packet for the selected idea, copies the paste-ready
+    /// text, and (for a web tool) opens a fresh chat so the user just presses Cmd+V. The preview
+    /// card then shows exactly what was sent.
     func continueThinking(sendTo tool: AITool?) async {
         guard let trace = selectedTrace else { return }
         continueResult = "Thinking…"
         continueCopied = false
         sentToTool = nil
+        continuationPacket = nil
+        continuationText = nil
 
-        var synthesis: String?
         do {
-            synthesis = try await client.continueThinking(topic: trace.idea.title).text
-            continueResult = synthesis
+            let r = try await client.continueIdea(ideaId: trace.idea.id)
+            continuationPacket = r.packet
+            continuationText = r.text
+            nextStepDraft = r.packet.suggestedNext
+            continueResult = r.text
         } catch {
             continueResult = nil
             errorMessage = error.localizedDescription
+            return
         }
 
-        copyContext(contextMarkdown(for: trace, synthesis: synthesis))
+        if let copy = continuationCopyText { copyContext(copy) }
 
         if let tool {
             preferredTool = tool
             if let url = tool.newChatURL { NSWorkspace.shared.open(url) }
             sentToTool = tool
         }
+    }
+
+    /// Re-copy after the user tweaks "Continue from here" in the preview.
+    func recopyContinuation() {
+        if let copy = continuationCopyText { copyContext(copy) }
     }
 }

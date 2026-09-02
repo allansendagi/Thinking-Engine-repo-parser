@@ -26,7 +26,7 @@ import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { parsePastedConversation } from "../import/pasteParser";
 import {
-  continueThinking,
+  buildContinuationPacket,
   getIdea,
   getOpenLoops,
   getRecentChanges,
@@ -398,19 +398,22 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       }
 
       if (req.method === "POST" && pathname === "/v1/continue") {
-        let body: { topic?: string };
+        let body: { topic?: string; ideaId?: string };
         try {
-          body = (await req.json()) as { topic?: string };
+          body = (await req.json()) as { topic?: string; ideaId?: string };
         } catch {
           return error(400, "Invalid JSON body");
         }
-        if (!body.topic) return error(400, "topic is required");
-        try {
-          const text = await continueThinking(db, body.topic, providers.reasoning);
-          return json({ text });
-        } catch (e) {
-          return error(404, e instanceof Error ? e.message : "No matching ideas");
-        }
+        if (!body.topic && !body.ideaId) return error(400, "topic or ideaId is required");
+        // Returns { text, packet }: `text` is the paste-ready render, `packet` the structured
+        // fields (source affordances, editable next step). Clients copy `text` verbatim.
+        const result = await buildContinuationPacket(
+          db,
+          { ideaId: body.ideaId, topic: body.topic },
+          providers.reasoning,
+        );
+        if (!result) return error(404, body.ideaId ? "Idea not found" : "No matching ideas");
+        return json(result);
       }
 
       return error(404, "Not found");

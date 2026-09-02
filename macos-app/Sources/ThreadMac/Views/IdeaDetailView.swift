@@ -121,30 +121,14 @@ struct IdeaDetailView: View {
             }
             .padding(.top, 13)
 
-            if appState.continueResult != nil || appState.continueCopied {
-                resultCallout
+            if let packet = appState.continuationPacket {
+                ContinuationPreview(packet: packet).padding(.top, 12)
+            } else if appState.continueResult != nil {
+                Text("Building your handoff…").font(.system(size: 12)).foregroundStyle(.secondary)
                     .padding(.top, 12)
             }
         }
         .padding(.horizontal, 16)
-    }
-
-    private var resultCallout: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let r = appState.continueResult {
-                Text(r).font(.system(size: 12)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let tool = appState.sentToTool {
-                Label("\(tool.label) opened · context ready — press ⌘V", systemImage: "checkmark.circle")
-                    .font(.system(size: 10)).foregroundStyle(Theme.accent)
-            } else if appState.continueCopied {
-                Label("Context copied to clipboard", systemImage: "checkmark.circle")
-                    .font(.system(size: 10)).foregroundStyle(Theme.accent)
-            }
-        }
-        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardCorner))
     }
 
     // MARK: evolution
@@ -255,5 +239,91 @@ private struct EvolutionRow: View {
             }
             .padding(.trailing, 12).padding(.vertical, 9)
         }
+    }
+}
+
+// MARK: - Continuation preview
+
+/// What "Continue this idea" produced: a compact, source-backed handoff. The paste string is the
+/// server's `text`, copied verbatim; the only editable part is the last line.
+private struct ContinuationPreview: View {
+    let packet: ContinuationPacket
+    @EnvironmentObject var appState: AppState
+
+    private func eyebrow(_ s: String) -> some View {
+        Text(s).font(.system(size: 10, weight: .semibold)).textCase(.uppercase).kerning(0.5)
+            .foregroundStyle(Theme.ink(0.4))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Glyph(kind: .idea, size: 12).foregroundStyle(Theme.accent)
+                Text("Resume handoff").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ink(0.6))
+                Spacer(minLength: 0)
+                if let tool = appState.sentToTool {
+                    Label("\(tool.label) opened — press ⌘V", systemImage: "checkmark.circle")
+                        .font(.system(size: 10)).foregroundStyle(Theme.accent)
+                } else if appState.continueCopied {
+                    Label("Copied", systemImage: "checkmark.circle")
+                        .font(.system(size: 10)).foregroundStyle(Theme.accent)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                eyebrow("Where you left off")
+                Text(packet.whereYouLeftOff).font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                if packet.contested {
+                    Text("This idea is contested — a later point conflicts with the above.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.stateColor("contested"))
+                }
+            }
+
+            if !packet.evolution.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    eyebrow("How this evolved")
+                    ForEach(packet.evolution) { step in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("•").foregroundStyle(Theme.ink(0.3))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("\(Theme.ago(step.when))\(step.source.map { " · \($0)" } ?? "")")
+                                    .font(.system(size: 10)).foregroundStyle(Theme.ink(0.36))
+                                Text(step.formulation).font(.system(size: 12)).foregroundStyle(Theme.ink(0.72))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let q = packet.unresolvedQuestion {
+                VStack(alignment: .leading, spacing: 4) {
+                    eyebrow("Unresolved question")
+                    Text(q.replacingOccurrences(of: "Unresolved contradiction: ", with: ""))
+                        .font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                eyebrow("Continue from here")
+                TextField("What to ask next…", text: $appState.nextStepDraft, axis: .vertical)
+                    .textFieldStyle(.plain).font(.system(size: 12.5))
+                    .foregroundStyle(Theme.ink(0.85)).lineLimit(1 ... 4)
+                    .padding(8)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.ink(0.12), lineWidth: 0.5))
+                HStack {
+                    Spacer()
+                    Button("Copy again") { appState.recopyContinuation() }
+                        .buttonStyle(.plain).font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardCorner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cardCorner).stroke(Theme.cardStroke, lineWidth: 0.5))
     }
 }
