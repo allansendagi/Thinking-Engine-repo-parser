@@ -13,7 +13,10 @@ enum Theme {
 
     // Panel surface: rgba(246,246,248,.82) over the blurred material.
     static let panelTint = Color(red: 246 / 255, green: 246 / 255, blue: 248 / 255)
-    static let stickyTint = Color(red: 246 / 255, green: 246 / 255, blue: 248 / 255).opacity(0.9)
+    /// Sticky section-header band ("Today" / "Yesterday"). The mock is rgba(246,246,248,.9) over a
+    /// heavy blur; rendered near-opaque here so the band reads as a crisp light strip, not a grey
+    /// smudge (which is what .ultraThinMaterial gave in light mode).
+    static let stickyTint = Color(red: 247 / 255, green: 247 / 255, blue: 249 / 255).opacity(0.96)
 
     static let hairline = Color.black.opacity(0.09)          // rgba(0,0,0,.09)
     static let fieldFill = Color.black.opacity(0.055)         // rgba(0,0,0,.055)

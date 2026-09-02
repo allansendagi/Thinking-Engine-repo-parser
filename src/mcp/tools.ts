@@ -77,7 +77,10 @@ export function traceIdea(db: Database, id: string): IdeaTrace | null {
 }
 
 export function getThreadState(db: Database, topic?: string): ThinkingState {
-  return buildThinkingState(loadIdeas(db), loadCognitiveEvents(db), { topic });
+  const sourceByEventId = new Map(
+    loadCanonicalEvents(db).map((e) => [e.id, e.source] as const),
+  );
+  return buildThinkingState(loadIdeas(db), loadCognitiveEvents(db), { topic }, sourceByEventId);
 }
 
 export function getOpenLoops(db: Database, topic?: string): ThinkingState["openLoops"] {

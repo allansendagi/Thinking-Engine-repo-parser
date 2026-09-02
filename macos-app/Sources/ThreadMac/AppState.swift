@@ -12,6 +12,24 @@ final class AppState: ObservableObject {
     @Published var thinkingState: ThinkingStateResponse?
     @Published var selectedIdeaId: String?
     @Published var selectedTrace: IdeaTrace?
+
+    /// Which list row is highlighted blue. Lives here (not in MenuBarListView's local @State) so
+    /// it survives the list⇄detail swap — click a row, open it, come back, and it's still the
+    /// selected one, exactly like the design mock's persistent `state.sel`.
+    @Published var listSelection: String?
+
+    /// Idea ids the user has pinned. Shown as a "Pinned" group at the top of the All tab.
+    /// Local-only (no backend concept), persisted across launches.
+    private let pinnedKey = "thread.pinnedIds"
+    @Published private(set) var pinnedIds: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: "thread.pinnedIds") ?? [])
+
+    func isPinned(_ id: String) -> Bool { pinnedIds.contains(id) }
+
+    func togglePin(_ id: String) {
+        if pinnedIds.contains(id) { pinnedIds.remove(id) } else { pinnedIds.insert(id) }
+        UserDefaults.standard.set(Array(pinnedIds), forKey: pinnedKey)
+    }
     @Published var continueResult: String?
     @Published var errorMessage: String?
     @Published var isLoading = false

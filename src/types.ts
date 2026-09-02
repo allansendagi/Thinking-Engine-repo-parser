@@ -110,10 +110,26 @@ export const IDENTITY_RESOLUTION_MERGE_THRESHOLD = 0.75;
  */
 export interface ThinkingState {
   topic: string | null;
-  currentIdeas: { id: string; title: string; state: IdeaState; currentFormulation: string }[];
+  currentIdeas: {
+    id: string;
+    title: string;
+    state: IdeaState;
+    currentFormulation: string;
+    /** Tool the idea was most recently developed in ("chatgpt" | "claude" | ...), or null. */
+    latestSource: string | null;
+  }[];
   recentChanges: { ideaId: string; ideaTitle: string; formulation: string; createdAt: string }[];
   decisions: { ideaId: string; ideaTitle: string; statement: string; decidedAt: string }[];
-  openLoops: { ideaId: string; ideaTitle: string; loopId: string; statement: string; resolved: boolean }[];
+  openLoops: {
+    ideaId: string;
+    ideaTitle: string;
+    loopId: string;
+    statement: string;
+    resolved: boolean;
+    createdAt: string;
+    /** Tool the parent idea was most recently developed in, or null. Mirrors currentIdeas[].latestSource. */
+    latestSource: string | null;
+  }[];
   contradictions: { ideaId: string; ideaTitle: string; formulation: string; createdAt: string }[];
   relatedIdeas: { id: string; title: string }[];
 }

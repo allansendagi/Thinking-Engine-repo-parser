@@ -23,8 +23,15 @@ export function buildThinkingState(
   ideas: IdeaNode[],
   cognitiveEvents: CognitiveEvent[],
   options: ThinkingStateOptions = {},
+  /** Maps a canonical source_event_id -> tool ("chatgpt" | ...). Optional; enables latestSource. */
+  sourceByEventId: Map<string, string> = new Map(),
 ): ThinkingState {
   const cognitiveEventsById = new Map(cognitiveEvents.map((e) => [e.id, e]));
+
+  const latestSourceOf = (idea: IdeaNode): string | null => {
+    const last = idea.evolution[idea.evolution.length - 1];
+    return last ? sourceByEventId.get(last.sourceEventId) ?? null : null;
+  };
   const relevant = options.topic ? ideas.filter((i) => matchesTopic(i, options.topic as string)) : ideas;
   const relevantIds = new Set(relevant.map((i) => i.id));
 
@@ -73,6 +80,8 @@ export function buildThinkingState(
       loopId: loop.id,
       statement: loop.statement,
       resolved: loop.resolved,
+      createdAt: loop.createdAt,
+      latestSource: latestSourceOf(idea),
     })),
   );
 
@@ -95,6 +104,7 @@ export function buildThinkingState(
       title: i.title,
       state: i.state,
       currentFormulation: i.currentFormulation,
+      latestSource: latestSourceOf(i),
     })),
     recentChanges: recentChanges.sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     decisions,

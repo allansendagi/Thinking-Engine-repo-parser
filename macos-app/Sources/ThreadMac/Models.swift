@@ -3,11 +3,29 @@ import Foundation
 /// Mirrors src/mcp/tools.ts / src/api/handler.ts's JSON shapes exactly -- the backend is the
 /// single source of truth for these; this file has no independent logic of its own.
 
+/// Maps a backend source slug to its display label. Shared by IdeaSummary, OpenLoopEntry and
+/// ProvenanceStep so the panel labels a tool the same way everywhere ("ChatGPT · 24m ago").
+func displaySourceLabel(_ source: String?) -> String? {
+    switch source {
+    case "chatgpt": return "ChatGPT"
+    case "claude": return "Claude"
+    case "gemini": return "Gemini"
+    case "cursor": return "Cursor"
+    case "paste": return "Pasted"
+    default: return nil
+    }
+}
+
 struct IdeaSummary: Codable, Identifiable {
     let id: String
     let title: String
     let state: String
     let currentFormulation: String
+    /// Tool the idea was most recently developed in ("chatgpt" | ...), or nil. Added by the
+    /// backend's ThinkingState.currentIdeas; optional so older payloads still decode.
+    var latestSource: String?
+
+    var sourceLabel: String? { displaySourceLabel(latestSource) }
 }
 
 struct SearchResult: Codable, Identifiable {
@@ -39,7 +57,14 @@ struct ThinkingStateResponse: Codable {
         let loopId: String
         let statement: String
         let resolved: Bool
+        /// When the loop was raised; drives the "· 24m ago" in the row meta. Optional so older
+        /// payloads still decode.
+        var createdAt: String?
+        /// Tool the parent idea was most recently developed in. Optional; mirrors IdeaSummary.
+        var latestSource: String?
         var id: String { loopId }
+
+        var sourceLabel: String? { displaySourceLabel(latestSource) }
     }
     struct RelatedIdea: Codable, Identifiable {
         let id: String
@@ -98,16 +123,7 @@ struct ProvenanceStep: Codable, Identifiable {
     let source: String?
     var id: String { formulation + createdAt }
 
-    var sourceLabel: String? {
-        switch source {
-        case "chatgpt": return "ChatGPT"
-        case "claude": return "Claude"
-        case "gemini": return "Gemini"
-        case "cursor": return "Cursor"
-        case "paste": return "Pasted"
-        default: return nil
-        }
-    }
+    var sourceLabel: String? { displaySourceLabel(source) }
 }
 
 struct IdeaTrace: Codable {

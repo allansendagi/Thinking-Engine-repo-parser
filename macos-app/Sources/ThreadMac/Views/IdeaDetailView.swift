@@ -58,39 +58,47 @@ struct IdeaDetailView: View {
             .padding(.top, 9)
 
             HStack(spacing: 7) {
-                Menu {
-                    Button {
-                        Task { await appState.continueThinking(sendTo: nil) }
-                    } label: { Label("Copy context to clipboard", systemImage: "doc.on.clipboard") }
-                    Divider()
-                    ForEach(AppState.AITool.allCases) { tool in
-                        Button {
-                            Task { await appState.continueThinking(sendTo: tool) }
-                        } label: {
-                            Label(tool == .cursor ? "Copy for Cursor" : "Send to \(tool.label)",
-                                  systemImage: tool == .cursor ? "curlybraces" : "arrow.up.forward.app")
-                        }
-                    }
+                // Primary — a plain solid-accent button, no split-button chevron (the design
+                // shows a flat pill). White label goes on the Text, not the Button, so the
+                // menu/button style can't re-resolve it to the control's default ink.
+                Button {
+                    Task { await appState.continueThinking(sendTo: appState.preferredTool) }
                 } label: {
                     Text("Continue this idea")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 12, weight: .medium)).kerning(-0.03)
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 11).frame(height: 26)
-                } primaryAction: {
-                    Task { await appState.continueThinking(sendTo: appState.preferredTool) }
+                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.1), lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
                 }
-                .menuStyle(.borderlessButton)
                 .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 6))
-                .fixedSize()
 
-                Button("Copy") { Task { await appState.continueThinking(sendTo: nil) } }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12)).foregroundStyle(Theme.ink(0.7))
-                    .padding(.horizontal, 9).frame(height: 26)
-                    .raisedControl()
+                Button {
+                    Task { await appState.continueThinking(sendTo: nil) }
+                } label: {
+                    Text("Copy")
+                        .font(.system(size: 12)).foregroundStyle(Theme.ink(0.7))
+                        .padding(.horizontal, 9).frame(height: 26)
+                }
+                .buttonStyle(.plain)
+                .raisedControl()
 
                 Menu {
+                    Section("Continue in") {
+                        ForEach(AppState.AITool.allCases) { tool in
+                            Button {
+                                Task { await appState.continueThinking(sendTo: tool) }
+                            } label: {
+                                Label(tool == .cursor ? "Copy for Cursor" : "Send to \(tool.label)",
+                                      systemImage: tool == .cursor ? "curlybraces" : "arrow.up.forward.app")
+                            }
+                        }
+                    }
+                    Divider()
+                    Button(appState.isPinned(trace.idea.id) ? "Unpin" : "Pin to top") {
+                        appState.togglePin(trace.idea.id)
+                    }
                     Button("Rename…") { titleDraft = trace.idea.title; editingTitle = true }
                     Picker("State", selection: Binding(
                         get: { trace.idea.state },
@@ -99,11 +107,11 @@ struct IdeaDetailView: View {
                     Divider()
                     Button("Delete idea", role: .destructive) { Task { await appState.deleteSelected() } }
                 } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 13))
-                        .frame(width: 26, height: 26)
+                    Image(systemName: "ellipsis").font(.system(size: 13)).foregroundStyle(Theme.ink(0.6))
+                        .frame(width: 30, height: 28)
                 }
                 .menuStyle(.borderlessButton).buttonStyle(.plain)
-                .foregroundStyle(Theme.ink(0.6))
+                .menuIndicator(.hidden)
                 .raisedControl()
                 .fixedSize()
             }
@@ -161,7 +169,7 @@ struct IdeaDetailView: View {
                     }
                 }
             }
-            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
+            .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 9))  // mock: rgba(255,255,255,.66)
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.ink(0.09), lineWidth: 0.5))
             .padding(.horizontal, 12).padding(.bottom, 14)
         }
@@ -215,7 +223,7 @@ private struct EvolutionRow: View {
                 Circle()
                     .fill(isCurrent ? Theme.accent : Theme.ink(0.28))
                     .frame(width: isCurrent ? 7 : 5, height: isCurrent ? 7 : 5)
-                    .overlay(Circle().stroke(Color(nsColor: .textBackgroundColor), lineWidth: 3))
+                    .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 3))  // mock: 0 0 0 3px rgba(255,255,255,.9)
                     .padding(.top, 13)
             }
             .frame(width: 30)

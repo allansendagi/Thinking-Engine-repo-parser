@@ -3,8 +3,14 @@ import SwiftUI
 struct MenuBarListView: View {
     @EnvironmentObject var appState: AppState
     @FocusState private var searchFocused: Bool
-    @State private var selection: String?
     @State private var tab: Tab = .recent
+
+    /// Highlighted row. Backed by AppState so it survives the list⇄detail swap (see the mock's
+    /// persistent `state.sel`): pick row 2, open it, come back — row 2 is still blue.
+    private var selection: String? {
+        get { appState.listSelection }
+        nonmutating set { appState.listSelection = newValue }
+    }
 
     enum Tab: String, CaseIterable, Identifiable {
         case recent = "Recent", loops = "Open loops", all = "All"
@@ -18,6 +24,16 @@ struct MenuBarListView: View {
         for c in appState.thinkingState?.recentChanges ?? [] {
             if let e = m[c.ideaId], e >= c.createdAt { continue }
             m[c.ideaId] = c.createdAt
+        }
+        return m
+    }
+
+    /// ideaId -> "ChatGPT" etc. Fallback for open loops whose own latestSource is absent
+    /// (older backend payloads).
+    private var ideaSourceLabel: [String: String] {
+        var m: [String: String] = [:]
+        for i in appState.thinkingState?.currentIdeas ?? [] {
+            if let l = i.sourceLabel { m[i.id] = l }
         }
         return m
     }
@@ -37,14 +53,28 @@ struct MenuBarListView: View {
     }
     struct Group: Identifiable { let id: String; let label: String; let rows: [Row] }
 
+    /// "ChatGPT · 24m ago" — model name + relative time, matching the design. Falls back to just
+    /// the time if the source is unknown, or "" if there's no timestamp either.
+    private func metaLine(_ source: String?, _ when: String) -> String {
+        let time = Theme.ago(when)
+        switch (source, time.isEmpty) {
+        case let (label?, false): return "\(label) · \(time)"
+        case let (label?, true): return label
+        case (nil, false): return time
+        case (nil, true): return ""
+        }
+    }
+
     private func ideaRow(_ i: IdeaSummary) -> Row {
-        Row(id: i.id, title: clean(i.title, i.currentFormulation), snippet: i.currentFormulation,
-            meta: Theme.ago(lastTouched[i.id] ?? ""), isLoop: false, ideaId: i.id,
-            when: lastTouched[i.id] ?? "")
+        let when = lastTouched[i.id] ?? ""
+        return Row(id: i.id, title: clean(i.title, i.currentFormulation), snippet: i.currentFormulation,
+                   meta: metaLine(i.sourceLabel, when), isLoop: false, ideaId: i.id, when: when)
     }
     private func loopRow(_ l: ThinkingStateResponse.OpenLoopEntry) -> Row {
-        Row(id: "loop:" + l.loopId, title: l.statement, snippet: nil, meta: "Open loop",
-            isLoop: true, ideaId: l.ideaId, when: "")
+        let when = l.createdAt ?? lastTouched[l.ideaId] ?? ""
+        return Row(id: "loop:" + l.loopId, title: deNarrate(l.statement.trimmingCharacters(in: .whitespaces)),
+                   snippet: nil, meta: metaLine(l.sourceLabel ?? ideaSourceLabel[l.ideaId], when),
+                   isLoop: true, ideaId: l.ideaId, when: when)
     }
 
     private var groups: [Group] {
@@ -61,15 +91,28 @@ struct MenuBarListView: View {
             return openLoops.isEmpty ? [] : [Group(id: "l", label: "Open loops", rows: openLoops.map(loopRow))]
         case .recent, .all:
             let loopIdeaIDs = Set(openLoops.map(\.ideaId))
+
+            // All tab leads with a "Pinned" group (mock parity); those ideas are then held out
+            // of the date buckets so they don't show twice.
+            var pinnedGroup: [Group] = []
+            var pinnedIDs: Set<String> = []
+            if tab == .all {
+                let pinned = ideas.filter { appState.isPinned($0.id) }.map(ideaRow)
+                if !pinned.isEmpty {
+                    pinnedGroup = [Group(id: "pinned", label: "Pinned", rows: pinned)]
+                    pinnedIDs = Set(pinned.map(\.id))
+                }
+            }
+
             let items: [Row] = tab == .recent
                 ? ideas.filter { !loopIdeaIDs.contains($0.id) }.map(ideaRow) + openLoops.map(loopRow)
-                : ideas.map(ideaRow)
+                : ideas.filter { !pinnedIDs.contains($0.id) }.map(ideaRow)
             var buckets: [Int: (String, [Row])] = [:]
             for r in items {
                 let b: (order: Int, label: String) = r.when.isEmpty ? (4, "Earlier") : Theme.bucket(r.when)
                 buckets[b.order, default: (b.label, [])].1.append(r)
             }
-            return buckets.keys.sorted().map { k in
+            return pinnedGroup + buckets.keys.sorted().map { k in
                 let (label, rows) = buckets[k]!
                 return Group(id: "b\(k)", label: label, rows: rows.sorted { $0.when > $1.when })
             }
@@ -89,7 +132,17 @@ struct MenuBarListView: View {
                 scroller
             }
         }
-        .onAppear { searchFocused = true }
+        .onAppear { searchFocused = true; selectFirstIfNeeded() }
+        .onChange(of: flatIDs) { _ in selectFirstIfNeeded() }
+    }
+
+    /// The design shows a row already highlighted blue at rest. Pre-select the first row so
+    /// "whatever you select turns blue" is true from the moment the list appears.
+    private func selectFirstIfNeeded() {
+        guard !searching else { return }
+        if selection == nil || !(flatIDs.contains(selection!)) {
+            selection = flatIDs.first
+        }
     }
 
     // MARK: chrome — search + segmented
@@ -117,7 +170,7 @@ struct MenuBarListView: View {
 
             if !searching {
                 Segmented(selection: $tab)
-                    .onChange(of: tab) { _ in selection = nil }
+                    .onChange(of: tab) { _ in selection = flatIDs.first }
             }
         }
         .padding(.horizontal, 12).padding(.bottom, 10)
@@ -136,6 +189,13 @@ struct MenuBarListView: View {
                                     .id(r.id)
                                     .contentShape(Rectangle())
                                     .onTapGesture { selection = r.id; open(r.id) }
+                                    .contextMenu {
+                                        if !r.isLoop {
+                                            Button(appState.isPinned(r.ideaId) ? "Unpin" : "Pin to top") {
+                                                appState.togglePin(r.ideaId)
+                                            }
+                                        }
+                                    }
                             }
                         } header: {
                             Text(g.label)
@@ -143,7 +203,7 @@ struct MenuBarListView: View {
                                 .foregroundStyle(Theme.ink(0.85))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 5)
-                                .background(Theme.stickyTint.background(.ultraThinMaterial))
+                                .background(Theme.stickyTint)
                         }
                     }
                 }

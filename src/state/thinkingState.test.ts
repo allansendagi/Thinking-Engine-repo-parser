@@ -64,4 +64,22 @@ describe("buildThinkingState", () => {
     const state = buildThinkingState([idea(), related], cognitiveEvents(), { topic: "authority" });
     expect(state.relatedIdeas.map((r) => r.id)).toEqual(["idea_2"]);
   });
+
+  test("latestSource resolves the tool of the newest evolution step for ideas and their open loops", () => {
+    const sourceByEventId = new Map([
+      ["src_1", "chatgpt"],
+      ["src_2", "claude"],
+    ]);
+    const state = buildThinkingState([idea()], cognitiveEvents(), {}, sourceByEventId);
+
+    expect(state.currentIdeas[0]?.latestSource).toBe("claude");
+    expect(state.openLoops[0]?.latestSource).toBe("claude");
+    expect(state.openLoops[0]?.createdAt).toBe(now);
+  });
+
+  test("latestSource is null when no source map is supplied", () => {
+    const state = buildThinkingState([idea()], cognitiveEvents());
+    expect(state.currentIdeas[0]?.latestSource).toBeNull();
+    expect(state.openLoops[0]?.latestSource).toBeNull();
+  });
 });

@@ -31,15 +31,25 @@ struct Glyph: View {
                 ctx.stroke(base, with: stroke, style: .init(lineWidth: lw, lineCap: .round))
 
             case .loop:
-                ctx.stroke(Path(ellipseIn: CGRect(x: p(1.7, 1.7).x, y: p(1.7, 1.7).y, width: 12.6 * s, height: 12.6 * s)),
-                           with: stroke, style: .init(lineWidth: lw))
+                // Question-mark-in-a-circle, transcribed from the mock: outer circle r=6.3,
+                // a ~270° arc for the hook (SVG "M6.2 6.15 a1.85 1.85 0 1 1 1.85 1.9 v1.15"),
+                // then a straight stem, then the dot.
+                ctx.stroke(Path(ellipseIn: CGRect(x: 1.7 * s, y: 1.7 * s, width: 12.6 * s, height: 12.6 * s)),
+                           with: stroke, style: .init(lineWidth: 1.35 * s))
                 var hook = Path()
-                hook.move(to: p(6.2, 6.15))
-                hook.addCurve(to: p(8.05, 8.05), control1: p(6.2, 5.13), control2: p(7.03, 4.3))
-                hook.addCurve(to: p(8.05, 9.2), control1: p(9.1, 8.05), control2: p(8.05, 8.7))
-                hook.addLine(to: p(8.05, 9.2))
-                ctx.stroke(hook, with: stroke, style: .init(lineWidth: lw, lineCap: .round))
-                ctx.fill(Path(ellipseIn: CGRect(x: p(7.27, 10.72).x, y: p(7.27, 10.72).y, width: 1.56 * s, height: 1.56 * s)),
+                let hc = p(8.05, 6.2)          // arc centre
+                let hr = 1.85 * s
+                let start = 180.0, sweep = 270.0   // degrees, screen-clockwise (y-down)
+                let steps = 28
+                for i in 0...steps {
+                    let a = (start + sweep * Double(i) / Double(steps)) * .pi / 180
+                    let pt = CGPoint(x: hc.x + hr * CGFloat(cos(a)), y: hc.y + hr * CGFloat(sin(a)))
+                    if i == 0 { hook.move(to: pt) } else { hook.addLine(to: pt) }
+                }
+                hook.addLine(to: p(8.05, 9.2))     // v1.15 stem
+                ctx.stroke(hook, with: stroke, style: .init(lineWidth: 1.45 * s, lineCap: .round, lineJoin: .round))
+                ctx.fill(Path(ellipseIn: CGRect(x: p(8.05, 11.5).x - 0.78 * s, y: p(8.05, 11.5).y - 0.78 * s,
+                                                width: 1.56 * s, height: 1.56 * s)),
                          with: stroke)
 
             case .back:
