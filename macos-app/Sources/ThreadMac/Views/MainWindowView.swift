@@ -44,6 +44,7 @@ struct MainWindowView: View {
         .navigationTitle("")
         .frame(minWidth: 900, minHeight: 560)
         .background { VisualEffectBackground() }
+        .fullWindowChrome()          // green button zooms/full-screens; window won't auto-restore
         .preferredColorScheme(.light)
         .task { await appState.refresh() }
     }

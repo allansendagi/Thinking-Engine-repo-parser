@@ -79,6 +79,12 @@ final class AppState: ObservableObject {
     /// True when billing is on AND this account can no longer capture. Reads still work.
     var isLocked: Bool { (account?.billingEnabled ?? false) && !(account?.canCapture ?? true) }
 
+    /// The paywall banner is a nudge, not a wall -- the user can dismiss it for the session.
+    /// Resets on relaunch (and whenever the lock clears), so it comes back if they stay capped.
+    @Published var paywallBannerDismissed = false
+    func dismissPaywallBanner() { paywallBannerDismissed = true }
+    var showsPaywallBanner: Bool { isPaired && isLocked && !paywallBannerDismissed }
+
     /// Where the founder buys Pro / manages the account -- payment lives on the website.
     static let marketingBaseURL = "https://mind-stream-continuity.vercel.app"
 
