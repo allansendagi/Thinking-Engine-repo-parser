@@ -62,7 +62,8 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
         .onExitCommand {
-            if inDetail { appState.closeIdea() } else { NSApp.keyWindow?.orderOut(nil) }
+            if inDetail { appState.closeIdea() }
+            else { NotificationCenter.default.post(name: .threadDismissPanel, object: nil) }
         }
     }
 
@@ -89,7 +90,9 @@ struct RootView: View {
                         Glyph(kind: .refresh, size: 15)
                     }.help("Refresh")
                     HeaderButton {
-                        openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+                        openWindow(id: "main")
+                        NSApp.activate(ignoringOtherApps: true)
+                        NotificationCenter.default.post(name: .threadDismissPanel, object: nil)
                     } label: {
                         Glyph(kind: .window, size: 15)
                     }.help("Open in Window")

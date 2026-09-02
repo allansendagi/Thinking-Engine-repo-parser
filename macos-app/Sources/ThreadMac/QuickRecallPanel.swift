@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    /// Posted from SwiftUI (Escape, "Open in Window") to ask the floating panel to dismiss —
+    /// SwiftUI has no direct handle on the NSPanel.
+    static let threadDismissPanel = Notification.Name("thread.dismissPanel")
+}
+
 /// A borderless key-capable panel — the standard Spotlight/Raycast-style host. `.titled` +
 /// transparent + fullSizeContentView is the flaky combo that made the panel flash and vanish;
 /// a plain borderless NSPanel with an explicit `canBecomeKey` is stable.
@@ -9,10 +15,20 @@ private final class FloatingPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-final class QuickRecallPanel {
+/// Owns the menu-bar / ⌘⇧T quick-recall panel and, crucially, its *dismissal* rules — the part
+/// that makes it feel like a native menu-bar utility rather than a stray window:
+///   • click anywhere outside it            → closes  (resignKey)
+///   • open the full window, or press Esc   → closes  (.threadDismissPanel)
+///   • click the menu-bar icon / ⌘⇧T again  → toggles
+/// A short guard stops the "click the menu-bar icon while the panel is open" case from closing
+/// (via resignKey) and immediately reopening (via the button action) in the same run loop pass.
+final class QuickRecallPanel: NSObject, NSWindowDelegate {
     private let panel: FloatingPanel
     /// The menu-bar status button, if opened from the menu bar — anchors the panel under it.
     weak var anchorButton: NSStatusBarButton?
+
+    private var lastDismissedAt = Date.distantPast
+    private var isDismissing = false
 
     init(appState: AppState) {
         let hosting = NSHostingController(rootView: RootView().environmentObject(appState))
@@ -38,16 +54,50 @@ final class QuickRecallPanel {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         self.panel = panel
+
+        super.init()
+        panel.delegate = self
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleDismissRequest), name: .threadDismissPanel, object: nil
+        )
     }
+
+    var isVisible: Bool { panel.isVisible }
 
     func toggle() {
         if panel.isVisible {
-            panel.orderOut(nil)
+            dismiss()
         } else {
-            position()
-            NSApp.activate(ignoringOtherApps: true)
-            panel.makeKeyAndOrderFront(nil)
+            // The menu-bar button click that got us here also resigned the panel's key status a
+            // beat ago; without this guard that same click would reopen what it just closed.
+            if Date().timeIntervalSince(lastDismissedAt) < 0.25 { return }
+            show()
         }
+    }
+
+    func show() {
+        position()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func dismiss() {
+        guard panel.isVisible, !isDismissing else { return }
+        isDismissing = true
+        lastDismissedAt = Date()
+        panel.orderOut(nil)
+        isDismissing = false
+    }
+
+    @objc private func handleDismissRequest() { dismiss() }
+
+    // MARK: NSWindowDelegate
+
+    func windowDidResignKey(_ notification: Notification) {
+        // Losing key to our own sheet (Settings / Add a conversation) must NOT dismiss the panel.
+        if panel.attachedSheet != nil { return }
+        if let key = NSApp.keyWindow, key.sheetParent === panel { return }
+        dismiss()
     }
 
     /// Anchor under the menu-bar item when we have it; otherwise top-centre of the active screen.

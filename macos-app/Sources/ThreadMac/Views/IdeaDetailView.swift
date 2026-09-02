@@ -107,8 +107,8 @@ struct IdeaDetailView: View {
                     Divider()
                     Button("Delete idea", role: .destructive) { Task { await appState.deleteSelected() } }
                 } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 13)).foregroundStyle(Theme.ink(0.6))
-                        .frame(width: 30, height: 28)
+                    Glyph(kind: .ellipsis, size: 14).foregroundStyle(Theme.ink(0.6))
+                        .frame(width: 26, height: 26)
                 }
                 .menuStyle(.borderlessButton).buttonStyle(.plain)
                 .menuIndicator(.hidden)

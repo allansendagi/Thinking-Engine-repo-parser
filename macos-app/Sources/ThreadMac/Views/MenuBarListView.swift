@@ -150,7 +150,7 @@ struct MenuBarListView: View {
     private var chrome: some View {
         VStack(spacing: 9) {
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Theme.ink(0.4))
+                Glyph(kind: .search, size: 12).foregroundStyle(Theme.ink(0.4))
                 TextField("Search", text: $appState.searchQuery)
                     .textFieldStyle(.plain).font(.system(size: 12.5))
                     .foregroundStyle(Theme.ink(0.85))
