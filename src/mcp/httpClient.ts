@@ -5,7 +5,7 @@
  * same way the extension and Mac app do: with the account's bearer token.
  */
 
-const PRODUCTION_API = "https://api.threadnow.app";
+const PRODUCTION_API = "https://thinking-engine-repo-parser-production.up.railway.app";
 const PAIRING_URL = "http://127.0.0.1:43917/thread/pair";
 
 export interface ThreadCredentials {

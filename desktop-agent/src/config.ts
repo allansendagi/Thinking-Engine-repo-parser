@@ -25,7 +25,7 @@ async function fetchDesktopPairing(): Promise<AgentConfig | null> {
     const apiBaseUrl =
       typeof body.apiBaseUrl === "string" && body.apiBaseUrl.startsWith("http")
         ? body.apiBaseUrl
-        : "https://api.threadnow.app";
+        : "https://thinking-engine-repo-parser-production.up.railway.app";
     return { apiBaseUrl, userId: body.userId, token: body.token };
   } catch {
     return null; // Mac app not running -- fall through to env vars
@@ -39,7 +39,7 @@ async function fetchDesktopPairing(): Promise<AgentConfig | null> {
  *   2. Thread for Mac's loopback pairing endpoint -- the normal case on a desktop
  */
 export async function loadConfig(): Promise<AgentConfig> {
-  const apiBaseUrl = process.env.THREAD_API_BASE_URL ?? "https://api.threadnow.app";
+  const apiBaseUrl = process.env.THREAD_API_BASE_URL ?? "https://thinking-engine-repo-parser-production.up.railway.app";
   const userId = process.env.THREAD_USER_ID;
   const token = process.env.THREAD_TOKEN;
 

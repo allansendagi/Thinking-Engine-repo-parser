@@ -59,7 +59,7 @@ export async function fetchDesktopPairing(timeoutMs = 1500): Promise<DesktopPair
   const apiBaseUrl =
     typeof body.apiBaseUrl === "string" && body.apiBaseUrl.startsWith("http")
       ? body.apiBaseUrl
-      : "https://api.threadnow.app";
+      : "https://thinking-engine-repo-parser-production.up.railway.app";
 
   return { credentials: { userId: body.userId, token: body.token }, apiBaseUrl };
 }
