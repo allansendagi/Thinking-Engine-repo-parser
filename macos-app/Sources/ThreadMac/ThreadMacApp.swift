@@ -60,5 +60,10 @@ struct ThreadMacApp: App {
                 .environmentObject(appDelegate.appState)
         }
         .keyboardShortcut("w", modifiers: [.command, .shift])
+        .defaultSize(width: 1180, height: 760)
+        // Respect the view's minWidth/minHeight but let the window grow to any size, zoom (green
+        // button), and go full-screen. Without this a `Window` scene can lock to its content's
+        // ideal size and the maximise button does nothing.
+        .windowResizability(.contentMinSize)
     }
 }
