@@ -14,7 +14,7 @@ import Foundation
 enum CredentialStore {
     private static let apiBaseUrlKey = "thread.apiBaseUrl"
     private static let legacyUserIdKey = "thread.userId"
-    static let defaultApiBaseUrl = "https://thinking-engine-repo-parser-production.up.railway.app"
+    static let defaultApiBaseUrl = "https://api.threadnow.app"
 
     struct Credential: Codable {
         let userId: String

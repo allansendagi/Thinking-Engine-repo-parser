@@ -1,6 +1,6 @@
 import type { Credentials, PairingState, Settings } from "./types";
 
-const DEFAULT_API_BASE_URL = "https://thinking-engine-repo-parser-production.up.railway.app";
+const DEFAULT_API_BASE_URL = "https://api.threadnow.app";
 
 /** Thin wrapper over chrome.storage.local so the rest of the code isn't littered with string keys. */
 
