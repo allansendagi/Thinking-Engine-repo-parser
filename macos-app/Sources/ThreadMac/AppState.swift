@@ -262,6 +262,34 @@ final class AppState: ObservableObject {
         return "\(c.userId):\(c.token)"
     }
 
+    // MARK: - Pairing window
+    //
+    // The loopback server only hands the bearer token to the extension during a short, explicit
+    // window -- opened for ~2 min on launch, or when the user clicks "Connect a browser" in
+    // Settings. Outside it the endpoint 404s, so a local process that isn't listening at exactly
+    // the right moment can't siphon the token. The extension keeps working on its saved
+    // credentials; it only needs a fresh window if those are ever rejected.
+    //
+    // Read from the pairing server's own queue, so it's lock-guarded rather than @MainActor.
+
+    private let pairingWindowLock = NSLock()
+    nonisolated(unsafe) private var pairingWindowUntil: Date?
+
+    nonisolated var isPairingWindowOpen: Bool {
+        pairingWindowLock.lock(); defer { pairingWindowLock.unlock() }
+        return (pairingWindowUntil.map { $0 > Date() }) ?? false
+    }
+
+    nonisolated func openPairingWindow(seconds: TimeInterval = 180) {
+        pairingWindowLock.lock()
+        pairingWindowUntil = Date().addingTimeInterval(seconds)
+        pairingWindowLock.unlock()
+        Task { @MainActor in self.objectWillChange.send() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds + 0.5) { [weak self] in
+            Task { @MainActor in self?.objectWillChange.send() }
+        }
+    }
+
     /// JSON body the loopback PairingServer serves to the extension, or nil when not paired.
     nonisolated func pairingPayload() -> Data? {
         guard let c = CredentialStore.credentials else { return nil }

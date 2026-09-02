@@ -1,11 +1,15 @@
 import Foundation
 import Network
 
-/// The Mac app is the account authority. While it holds credentials, it serves them on a
-/// loopback-only HTTP endpoint so the browser extension can adopt them with no copy-paste --
+/// The Mac app is the account authority. It serves its credentials on a loopback-only HTTP
+/// endpoint so the browser extension can adopt them with no copy-paste --
 /// `GET http://127.0.0.1:43917/thread/pair`. Bound to 127.0.0.1 explicitly, so nothing off the
 /// machine can reach it; the response only ever contains this user's own credentials, which the
 /// extension would otherwise get by the user pasting a pairing string.
+///
+/// The endpoint answers with the token **only while a pairing window is open** (~2 min after
+/// launch, or when the user clicks "Connect a browser"); outside it, 404. `payloadProvider`
+/// returns nil then. That bounds how long the token sits reachable on the wire.
 ///
 /// SECURITY: the response carries a bearer token, so it sends **no** CORS headers. The MV3
 /// extension reads it from its background worker through a `http://127.0.0.1/*` host permission,

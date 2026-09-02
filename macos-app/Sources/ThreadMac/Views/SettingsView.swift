@@ -51,9 +51,19 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Label("Browser extension", systemImage: "puzzlepiece.extension")
                     .font(.subheadline).fontWeight(.medium)
-                Text("While Thread is running, the extension connects automatically. If it can't, paste this pairing string into the extension popup.")
+                Text("The extension connects automatically for a couple of minutes after Thread launches. If it drops, open a fresh window here or paste the pairing string.")
                     .font(.caption).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 8) {
+                    Button("Connect a browser") { appState.openPairingWindow() }
+                        .font(.caption)
+                    if appState.isPairingWindowOpen {
+                        Label("Listening…", systemImage: "dot.radiowaves.left.and.right")
+                            .font(.caption2).foregroundStyle(Theme.accent)
+                    }
+                }
+                .padding(.top, 2)
 
                 if let pairing = appState.pairingString {
                     HStack {

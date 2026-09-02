@@ -134,9 +134,25 @@ else
   echo "App Intents metadata: skipped (no Xcode toolchain) -- thread:// scheme still works."
 fi
 
-# Ad-hoc (re-)sign the assembled bundle -- swift build already ad-hoc signs the raw binary, but
-# the bundle needs signing as a whole after Info.plist is added for it to be internally consistent.
-codesign --force --deep --sign - "${APP_DIR}"
+# --- Sign -------------------------------------------------------------------------------------
+# Set THREAD_SIGN_IDENTITY to a "Developer ID Application: NAME (TEAMID)" identity for a real,
+# hardened-runtime signature. With nothing set it falls back to ad-hoc (Gatekeeper shows
+# "unidentified developer") -- what CI and a machine without the Apple Developer Program produce.
+ENTITLEMENTS="${PWD}/Thread.entitlements"
+if [ -n "${THREAD_SIGN_IDENTITY:-}" ]; then
+  echo "Signing: ${THREAD_SIGN_IDENTITY}"
+  codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" \
+    --sign "${THREAD_SIGN_IDENTITY}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+  codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" \
+    --sign "${THREAD_SIGN_IDENTITY}" "${APP_DIR}"
+  codesign --verify --deep --strict --verbose=1 "${APP_DIR}"
+  SIGNED=1
+else
+  # swift build ad-hoc signs the raw binary; re-sign the whole bundle so it's internally
+  # consistent after Info.plist and Metadata.appintents were added.
+  codesign --force --deep --sign - "${APP_DIR}"
+  SIGNED=0
+fi
 
 cd dist
 zip -r -q "${APP_NAME}-${VERSION}-macos.zip" "${APP_NAME}.app"
@@ -159,10 +175,38 @@ else
   rm -rf "${DMG_STAGE}"
 fi
 
+# --- Notarize + staple (only when signed with a real identity) ------------------------------
+if [ "${SIGNED:-0}" = 1 ]; then
+  codesign --force --timestamp --sign "${THREAD_SIGN_IDENTITY}" "dist/Thread.dmg"
+
+  NOTARY_ARGS=""
+  if [ -n "${THREAD_NOTARY_PROFILE:-}" ]; then
+    NOTARY_ARGS="--keychain-profile ${THREAD_NOTARY_PROFILE}"
+  elif [ -n "${THREAD_NOTARY_APPLE_ID:-}" ] && [ -n "${THREAD_NOTARY_PASSWORD:-}" ] && [ -n "${THREAD_NOTARY_TEAM_ID:-}" ]; then
+    NOTARY_ARGS="--apple-id ${THREAD_NOTARY_APPLE_ID} --password ${THREAD_NOTARY_PASSWORD} --team-id ${THREAD_NOTARY_TEAM_ID}"
+  fi
+
+  if [ -n "${NOTARY_ARGS}" ]; then
+    echo "Notarizing dist/Thread.dmg (waits for Apple)..."
+    # shellcheck disable=SC2086
+    xcrun notarytool submit "dist/Thread.dmg" ${NOTARY_ARGS} --wait
+    xcrun stapler staple "dist/Thread.dmg"
+    xcrun stapler validate "dist/Thread.dmg" && echo "  notarized + stapled"
+  else
+    echo "  DMG signed, NOT notarized -- set THREAD_NOTARY_PROFILE (a stored notarytool profile)"
+    echo "  or THREAD_NOTARY_APPLE_ID + THREAD_NOTARY_PASSWORD + THREAD_NOTARY_TEAM_ID."
+  fi
+fi
+
 echo ""
 echo "Built:  ${APP_DIR}"
 echo "Zipped: dist/${APP_NAME}-${VERSION}-macos.zip"
 echo "DMG:    dist/Thread.dmg   ->  copy to  mind-stream-continuity/public/downloads/Thread.dmg"
 echo ""
-echo "This is UNSIGNED (ad-hoc only). To run it: right-click the .app -> Open (first launch only)."
-echo "World-class next step: an Apple Developer ID cert -> codesign + notarize + staple the DMG."
+if [ "${SIGNED:-0}" = 1 ]; then
+  echo "Signed with a Developer ID identity."
+  [ -n "${NOTARY_ARGS:-}" ] || echo "Not notarized -- Gatekeeper will still warn until you notarize + staple."
+else
+  echo "UNSIGNED (ad-hoc). To run: right-click the .app -> Open (first launch only)."
+  echo "To ship without that: set THREAD_SIGN_IDENTITY (+ notary creds) and re-run -- see README."
+fi

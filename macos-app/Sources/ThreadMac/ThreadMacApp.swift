@@ -54,11 +54,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let state = appState
         let server = PairingServer(
-            payloadProvider: { state.pairingPayload() },
+            // Only serve the token while a pairing window is open (see AppState.openPairingWindow).
+            payloadProvider: { state.isPairingWindowOpen ? state.pairingPayload() : nil },
             onServed: { Task { @MainActor in state.noteExtensionHandshake() } }
         )
         server.start()
         pairingServer = server
+        // A short window on launch so a freshly-installed extension pairs with no clicks.
+        appState.openPairingWindow(seconds: 120)
 
         Task { await appState.bootstrap() }
 
