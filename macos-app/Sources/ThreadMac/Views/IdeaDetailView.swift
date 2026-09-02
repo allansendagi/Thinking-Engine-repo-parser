@@ -109,11 +109,15 @@ struct IdeaDetailView: View {
                 } label: {
                     Glyph(kind: .ellipsis, size: 14).foregroundStyle(Theme.ink(0.6))
                         .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
                 }
-                .menuStyle(.borderlessButton).buttonStyle(.plain)
+                .menuStyle(.button)
+                .buttonStyle(.plain)
                 .menuIndicator(.hidden)
-                .raisedControl()
                 .fixedSize()
+                .raisedControl()
+
+                Spacer(minLength: 0)
             }
             .padding(.top, 13)
 
