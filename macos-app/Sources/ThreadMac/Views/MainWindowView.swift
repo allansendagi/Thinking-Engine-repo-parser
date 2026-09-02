@@ -88,6 +88,10 @@ private struct IdeaListColumn: View {
         return m
     }
 
+    private var loopIdeaIDs: Set<String> {
+        Set((appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }.map(\.ideaId))
+    }
+
     private var groups: [IdeaRowGroup] {
         if searching {
             let rows = appState.searchResults.map { r -> IdeaRow in
@@ -104,7 +108,8 @@ private struct IdeaListColumn: View {
             return IdeaRow(id: i.id, title: title,
                            snippet: rowSnippet(title: title, formulation: i.currentFormulation),
                            meta: metaLine(i.sourceLabel, when),
-                           isLoop: false, ideaId: i.id, when: when)
+                           isLoop: false, ideaId: i.id, when: when,
+                           status: rowStatus(state: i.state, hasOpenLoop: loopIdeaIDs.contains(i.id)))
         }
         return dateBucketedGroups(rows)
     }

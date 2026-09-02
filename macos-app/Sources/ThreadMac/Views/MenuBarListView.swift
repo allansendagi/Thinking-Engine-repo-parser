@@ -45,6 +45,7 @@ struct MenuBarListView: View {
     private var openLoops: [ThinkingStateResponse.OpenLoopEntry] {
         (appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }
     }
+    private var loopIdeaIDs: Set<String> { Set(openLoops.map(\.ideaId)) }
 
     // Row look, title cleanup, `metaLine`, date bucketing all live in IdeaRowKit.swift now,
     // shared with the full window so the two surfaces are one design.
@@ -55,7 +56,8 @@ struct MenuBarListView: View {
         return IdeaRow(id: i.id, title: title,
                        snippet: rowSnippet(title: title, formulation: i.currentFormulation),
                        meta: metaLine(i.sourceLabel, when),
-                       isLoop: false, ideaId: i.id, when: when)
+                       isLoop: false, ideaId: i.id, when: when,
+                       status: rowStatus(state: i.state, hasOpenLoop: loopIdeaIDs.contains(i.id)))
     }
     private func loopRow(_ l: ThinkingStateResponse.OpenLoopEntry) -> IdeaRow {
         let when = l.createdAt ?? lastTouched[l.ideaId] ?? ""

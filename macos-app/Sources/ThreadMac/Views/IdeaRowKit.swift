@@ -45,6 +45,28 @@ func rowSnippet(title: String, formulation: String) -> String? {
     return f
 }
 
+/// The one quiet, fully-derived state a row carries — read straight off the idea, never
+/// user-set. Its whole expression is the leading glyph (see `IdeaRowView.glyphSymbol`): a calm
+/// circle family, empty → dotted → full, with contested the only one that breaks family
+/// because it's the only one that means *do something now*.
+enum RowStatus {
+    case neutral       // developing / dormant, nothing pending -> hollow circle
+    case openQuestion  // has an unresolved open loop           -> dotted circle
+    case contested     // idea state is contested               -> amber half-filled circle
+    case established    // a decision settled it                 -> filled circle, dimmed
+    case rejected      // set aside                              -> slashed circle, dimmed
+}
+
+/// Priority when several could apply: contested > openQuestion > rejected > established.
+/// Loops are always drawn as `.openQuestion` — a loop row *is* the question.
+func rowStatus(state: String?, hasOpenLoop: Bool) -> RowStatus {
+    if state == "contested" { return .contested }
+    if hasOpenLoop { return .openQuestion }
+    if state == "rejected" { return .rejected }
+    if state == "established" { return .established }
+    return .neutral
+}
+
 struct IdeaRow: Identifiable {
     let id: String
     let title: String
@@ -53,6 +75,7 @@ struct IdeaRow: Identifiable {
     let isLoop: Bool
     let ideaId: String
     let when: String
+    var status: RowStatus = .neutral
 }
 
 struct IdeaRowGroup: Identifiable {
@@ -157,11 +180,32 @@ struct IdeaRowView: View {
 
     private var d: Density { appState.density }
 
+    /// The row's whole state expression: one circle-family SF Symbol.
+    private var glyphSymbol: String {
+        if row.isLoop { return "circle.dotted" }
+        switch row.status {
+        case .contested:    return "circle.bottomhalf.filled"
+        case .openQuestion: return "circle.dotted"
+        case .established:  return "circle.fill"
+        case .rejected:     return "circle.slash"
+        case .neutral:      return "circle"
+        }
+    }
+    private var glyphDimmed: Bool {
+        !selected && (row.status == .established || row.status == .rejected)
+    }
+    private var glyphColor: Color {
+        if selected { return Theme.onAccent(0.9) }
+        if row.status == .contested { return Theme.stateColor("contested") }
+        return Theme.ink(glyphDimmed ? 0.3 : 0.42)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: d.hSpacing) {
-            Glyph(kind: row.isLoop ? .loop : .idea, size: d.glyphSize)
-                .foregroundStyle(selected ? Theme.onAccent(0.9) : Theme.ink(0.42))
-                .frame(width: 16).padding(.top, 1)
+            Image(systemName: glyphSymbol)
+                .font(.system(size: d.glyphSize - 2, weight: .regular))
+                .foregroundStyle(glyphColor)
+                .frame(width: 16).padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title)
                     .font(.system(size: d.titleSize, weight: .medium)).kerning(-0.08)
