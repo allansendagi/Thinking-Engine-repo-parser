@@ -1,12 +1,12 @@
 import type { Database } from "bun:sqlite";
 import type { CanonicalEvent, CognitiveEvent, DiscardedEvent, IdeaNode, IdentityResolution } from "../types";
-import { SIGNAL_GATE_VERSION } from "../types";
+import { IDENTITY_RESOLUTION_MERGE_THRESHOLD, SIGNAL_GATE_VERSION } from "../types";
 import type { CompletionProvider, EmbeddingProvider } from "../providers/types";
 import { extractCognitiveEvents, type ExtractionOutcome } from "../extraction/extract";
 import { resolveIdentity } from "../identity/resolve";
 import { rankCandidates, narrowCandidates } from "../identity/signals";
 import { quickGate, strongMatchScore } from "./signalGate";
-import { applyCognitiveEvent } from "./buildIdeaNode";
+import { applyCognitiveEvent, isConfidentExistingMatch } from "./buildIdeaNode";
 
 export interface PipelineResult {
   ideas: Map<string, IdeaNode>;
@@ -120,6 +120,22 @@ export async function runPipeline(
     }
 
     const resolution = await resolveIdentity(event, narrowed, providers.reasoning);
+
+    // Signal gate, phase 3: a strong retrieval score got a medium leaky event this far, but the
+    // idea model is the actual "is this the same idea" authority. If it won't confirm a confident
+    // existing-idea match, the event does NOT become a new thin thread -- it waits in
+    // discarded_events for a later pass, once the graph may have grown into it.
+    if (quick.decision === "needs-match" && !isConfidentExistingMatch(resolution, ideas)) {
+      discardedEvents.push({
+        event,
+        gateReason:
+          `${quick.reason}; identity gave ${resolution.matchedIdeaId ?? "no match"} @ ` +
+          `${resolution.confidence.toFixed(2)} (need >= ${IDENTITY_RESOLUTION_MERGE_THRESHOLD})`,
+        gateVersion: SIGNAL_GATE_VERSION,
+      });
+      continue;
+    }
+
     resolutions.push(resolution);
     applyCognitiveEvent(ideas, event, resolution, sourceEvent.createdAt);
     persistedEvents.push(event);

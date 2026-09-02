@@ -42,80 +42,57 @@ struct MenuBarListView: View {
         (appState.thinkingState?.openLoops ?? []).filter { !$0.resolved }
     }
 
-    struct Row: Identifiable {
-        let id: String
-        let title: String
-        let snippet: String?
-        let meta: String
-        let isLoop: Bool
-        let ideaId: String
-        let when: String
-    }
-    struct Group: Identifiable { let id: String; let label: String; let rows: [Row] }
+    // Row look, title cleanup, `metaLine`, date bucketing all live in IdeaRowKit.swift now,
+    // shared with the full window so the two surfaces are one design.
 
-    /// "ChatGPT · 24m ago" — model name + relative time, matching the design. Falls back to just
-    /// the time if the source is unknown, or "" if there's no timestamp either.
-    private func metaLine(_ source: String?, _ when: String) -> String {
-        let time = Theme.ago(when)
-        switch (source, time.isEmpty) {
-        case let (label?, false): return "\(label) · \(time)"
-        case let (label?, true): return label
-        case (nil, false): return time
-        case (nil, true): return ""
-        }
-    }
-
-    private func ideaRow(_ i: IdeaSummary) -> Row {
+    private func ideaRow(_ i: IdeaSummary) -> IdeaRow {
         let when = lastTouched[i.id] ?? ""
-        return Row(id: i.id, title: clean(i.title, i.currentFormulation), snippet: i.currentFormulation,
-                   meta: metaLine(i.sourceLabel, when), isLoop: false, ideaId: i.id, when: when)
+        let title = cleanIdeaTitle(i.title, fallback: i.currentFormulation)
+        return IdeaRow(id: i.id, title: title,
+                       snippet: rowSnippet(title: title, formulation: i.currentFormulation),
+                       meta: metaLine(i.sourceLabel, when),
+                       isLoop: false, ideaId: i.id, when: when)
     }
-    private func loopRow(_ l: ThinkingStateResponse.OpenLoopEntry) -> Row {
+    private func loopRow(_ l: ThinkingStateResponse.OpenLoopEntry) -> IdeaRow {
         let when = l.createdAt ?? lastTouched[l.ideaId] ?? ""
-        return Row(id: "loop:" + l.loopId, title: deNarrate(l.statement.trimmingCharacters(in: .whitespaces)),
-                   snippet: nil, meta: metaLine(l.sourceLabel ?? ideaSourceLabel[l.ideaId], when),
-                   isLoop: true, ideaId: l.ideaId, when: when)
+        return IdeaRow(id: "loop:" + l.loopId, title: deNarrate(l.statement.trimmingCharacters(in: .whitespaces)),
+                       snippet: nil, meta: metaLine(l.sourceLabel ?? ideaSourceLabel[l.ideaId], when),
+                       isLoop: true, ideaId: l.ideaId, when: when)
     }
 
-    private var groups: [Group] {
+    private var groups: [IdeaRowGroup] {
         if searching {
-            let rows = appState.searchResults.map {
-                Row(id: $0.id, title: clean($0.title, $0.currentFormulation), snippet: $0.currentFormulation,
-                    meta: "", isLoop: false, ideaId: $0.id, when: "")
+            let rows = appState.searchResults.map { r -> IdeaRow in
+                let title = cleanIdeaTitle(r.title, fallback: r.currentFormulation)
+                return IdeaRow(id: r.id, title: title,
+                               snippet: rowSnippet(title: title, formulation: r.currentFormulation),
+                               meta: "", isLoop: false, ideaId: r.id, when: "")
             }
-            return rows.isEmpty ? [] : [Group(id: "r", label: "Results", rows: rows)]
+            return rows.isEmpty ? [] : [IdeaRowGroup(id: "r", label: "Results", rows: rows)]
         }
         let ideas = appState.thinkingState?.currentIdeas ?? []
         switch tab {
         case .loops:
-            return openLoops.isEmpty ? [] : [Group(id: "l", label: "Open loops", rows: openLoops.map(loopRow))]
+            return openLoops.isEmpty ? [] : [IdeaRowGroup(id: "l", label: "Open loops", rows: openLoops.map(loopRow))]
         case .recent, .all:
             let loopIdeaIDs = Set(openLoops.map(\.ideaId))
 
             // All tab leads with a "Pinned" group (mock parity); those ideas are then held out
             // of the date buckets so they don't show twice.
-            var pinnedGroup: [Group] = []
+            var pinnedGroup: [IdeaRowGroup] = []
             var pinnedIDs: Set<String> = []
             if tab == .all {
                 let pinned = ideas.filter { appState.isPinned($0.id) }.map(ideaRow)
                 if !pinned.isEmpty {
-                    pinnedGroup = [Group(id: "pinned", label: "Pinned", rows: pinned)]
+                    pinnedGroup = [IdeaRowGroup(id: "pinned", label: "Pinned", rows: pinned)]
                     pinnedIDs = Set(pinned.map(\.id))
                 }
             }
 
-            let items: [Row] = tab == .recent
+            let items: [IdeaRow] = tab == .recent
                 ? ideas.filter { !loopIdeaIDs.contains($0.id) }.map(ideaRow) + openLoops.map(loopRow)
                 : ideas.filter { !pinnedIDs.contains($0.id) }.map(ideaRow)
-            var buckets: [Int: (String, [Row])] = [:]
-            for r in items {
-                let b: (order: Int, label: String) = r.when.isEmpty ? (4, "Earlier") : Theme.bucket(r.when)
-                buckets[b.order, default: (b.label, [])].1.append(r)
-            }
-            return pinnedGroup + buckets.keys.sorted().map { k in
-                let (label, rows) = buckets[k]!
-                return Group(id: "b\(k)", label: label, rows: rows.sorted { $0.when > $1.when })
-            }
+            return pinnedGroup + dateBucketedGroups(items)
         }
     }
 
@@ -136,10 +113,15 @@ struct MenuBarListView: View {
         .onChange(of: flatIDs) { _ in selectFirstIfNeeded() }
     }
 
-    /// The design shows a row already highlighted blue at rest. Pre-select the first row so
-    /// "whatever you select turns blue" is true from the moment the list appears.
+    /// The design shows a row already highlighted blue at rest, so pre-select the first row --
+    /// EXCEPT on the Open loops tab, where an unresolved question isn't a thing you're "on" and a
+    /// default blue fill reads as noise. There, start with nothing selected.
     private func selectFirstIfNeeded() {
         guard !searching else { return }
+        if tab == .loops {
+            if let s = selection, !flatIDs.contains(s) { selection = nil }
+            return
+        }
         if selection == nil || !(flatIDs.contains(selection!)) {
             selection = flatIDs.first
         }
@@ -170,7 +152,7 @@ struct MenuBarListView: View {
 
             if !searching {
                 Segmented(selection: $tab)
-                    .onChange(of: tab) { _ in selection = flatIDs.first }
+                    .onChange(of: tab) { newTab in selection = newTab == .loops ? nil : flatIDs.first }
             }
         }
         .padding(.horizontal, 12).padding(.bottom, 10)
@@ -185,7 +167,7 @@ struct MenuBarListView: View {
                     ForEach(groups) { g in
                         Section {
                             ForEach(g.rows) { r in
-                                RowView(row: r, selected: selection == r.id)
+                                IdeaRowView(row: r, selected: selection == r.id)
                                     .id(r.id)
                                     .contentShape(Rectangle())
                                     .onTapGesture { selection = r.id; open(r.id) }
@@ -198,12 +180,7 @@ struct MenuBarListView: View {
                                     }
                             }
                         } header: {
-                            Text(g.label)
-                                .font(.system(size: 12, weight: .semibold)).kerning(-0.12)
-                                .foregroundStyle(Theme.ink(0.85))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 5)
-                                .background(Theme.stickyTint)
+                            IdeaRowSectionHeader(label: g.label)
                         }
                     }
                 }
@@ -236,28 +213,6 @@ struct MenuBarListView: View {
         }
     }
 
-    // MARK: title cleanup
-
-    private func clean(_ title: String, _ fallback: String) -> String {
-        let t = deNarrate(title.trimmingCharacters(in: .whitespaces))
-        if t.isEmpty || t.hasSuffix("…") || t.hasSuffix("...") {
-            let c = fallback.split(whereSeparator: { ".?!".contains($0) }).first.map(String.init) ?? fallback
-            return deNarrate(c.trimmingCharacters(in: .whitespaces))
-        }
-        return t
-    }
-    private func deNarrate(_ s: String) -> String {
-        let ps = ["The user is asking why ", "The user is asking whether ", "The user is asking what ",
-                  "The user is asking how ", "The user is asking for ", "The user is asking ",
-                  "The user is questioning ", "The user is seeking ", "The user is proposing ",
-                  "The user is claiming ", "The user decides to ", "The user claims ", "The user wants to ",
-                  "The human is asking why ", "The human is asking whether ", "The human is asking ",
-                  "The human is questioning ", "The assistant is ", "The user is ", "The human is "]
-        for p in ps where s.lowercased().hasPrefix(p.lowercased()) {
-            let r = String(s.dropFirst(p.count)); return r.prefix(1).capitalized + r.dropFirst()
-        }
-        return s
-    }
 }
 
 // MARK: - Custom segmented (exact mock styling)
@@ -285,45 +240,6 @@ private struct Segmented: View {
         }
         .padding(1.5)
         .background(Theme.ink(0.06), in: RoundedRectangle(cornerRadius: 7))
-    }
-}
-
-// MARK: - Row (exact mock: grid 16/1fr, accent fill when selected)
-
-private struct RowView: View {
-    let row: MenuBarListView.Row
-    let selected: Bool
-    @State private var hover = false
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            Glyph(kind: row.isLoop ? .loop : .idea, size: 14)
-                .foregroundStyle(selected ? Theme.onAccent(0.9) : Theme.ink(0.42))
-                .frame(width: 16).padding(.top, 1)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.title)
-                    .font(.system(size: 12.5, weight: .medium)).kerning(-0.08)
-                    .lineSpacing(1.5).lineLimit(2)
-                    .foregroundStyle(selected ? Color.white : Theme.ink(0.87))
-                if let s = row.snippet, !s.isEmpty {
-                    Text(s).font(.system(size: 11.5)).lineSpacing(1).lineLimit(2)
-                        .foregroundStyle(selected ? Theme.onAccent(0.82) : Theme.ink(0.5))
-                }
-                if !row.meta.isEmpty {
-                    Text(row.meta).font(.system(size: 11))
-                        .foregroundStyle(selected ? Theme.onAccent(0.72) : Theme.ink(0.36))
-                        .padding(.top, 1)
-                }
-            }
-        }
-        .padding(.init(top: 8, leading: 10, bottom: 9, trailing: 10))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(selected ? Theme.accent : (hover ? Theme.hoverFill : Color.clear))
-        )
-        .padding(.horizontal, 8).padding(.bottom, 1)
-        .onHover { hover = $0 }
     }
 }
 

@@ -11,6 +11,14 @@ struct PaywallBanner: View {
                 Image(systemName: "lock.fill").font(.system(size: 11)).foregroundStyle(Theme.accent)
                 Text("You've hit the Free plan's \(appState.account?.ideaCap ?? 25)-idea limit")
                     .font(.system(size: 12, weight: .semibold))
+                Spacer(minLength: 8)
+                Button {
+                    appState.dismissPaywallBanner()
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.ink(0.4))
+                .help("Dismiss until next launch")
             }
             Text("Everything you've captured is still here. Upgrade to Pro for unlimited capture and AI continuation.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)

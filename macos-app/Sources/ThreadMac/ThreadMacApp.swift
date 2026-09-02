@@ -43,6 +43,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePanel() { quickRecallPanel?.toggle() }
 
+    /// The quick-recall panel is an NSPanel, which AppKit doesn't count as a "visible window", so
+    /// activating the app (Dock click, status-item click) would otherwise trigger the default
+    /// reopen behavior and pop the big window open unbidden. The big window is only ever opened
+    /// deliberately -- "Open in Window" or Cmd+Shift+W.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         pairingServer?.stop()
     }
@@ -60,5 +68,10 @@ struct ThreadMacApp: App {
                 .environmentObject(appDelegate.appState)
         }
         .keyboardShortcut("w", modifiers: [.command, .shift])
+        .defaultSize(width: 1180, height: 760)
+        // Respect the view's minWidth/minHeight but let the window grow to any size, zoom (green
+        // button), and go full-screen. Without this a `Window` scene can lock to its content's
+        // ideal size and the maximise button does nothing.
+        .windowResizability(.contentMinSize)
     }
 }

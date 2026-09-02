@@ -92,6 +92,15 @@ export function openRegistry(): Database {
     `INSERT OR IGNORE INTO auth_tokens (token_hash, user_id, created_at)
      SELECT token_hash, id, created_at FROM users WHERE token_hash IS NOT NULL;`,
   );
+
+  // Trial-era rows carry a subscription_status like 'trialing' / 'active' from before the Paddle
+  // migration. On a free-plan account that's meaningless and leaks to the client (the Mac app
+  // shows "trialing"). Normalize once.
+  try {
+    db.exec("UPDATE users SET subscription_status = 'free' WHERE plan = 'free' AND subscription_status <> 'free';");
+  } catch {
+    // columns not present yet on a very old DB -- the ALTERs above add them; next open normalizes
+  }
   return db;
 }
 
@@ -201,6 +210,27 @@ export function attachEmail(userId: string, email: string): void {
       new Date().toISOString(),
       userId,
     );
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Moves a verified email from one account to another, atomically. Used only when the email is
+ * currently on an account with no data at all (see handler.ts) -- e.g. someone signed in on the
+ * website first, minting an empty account, and now wants to claim it onto the anonymous Mac
+ * account that actually holds their ideas. The `from` account stays, just anonymous again.
+ */
+export function reassignEmail(fromUserId: string, toUserId: string, email: string): void {
+  const db = openRegistry();
+  try {
+    const now = new Date().toISOString();
+    const tx = db.transaction(() => {
+      // NULL the old owner first -- the unique partial index on lower(email) would otherwise reject.
+      db.prepare("UPDATE users SET email = NULL, email_verified_at = NULL WHERE id = ?").run(fromUserId);
+      db.prepare("UPDATE users SET email = ?, email_verified_at = ? WHERE id = ?").run(email, now, toUserId);
+    });
+    tx();
   } finally {
     db.close();
   }

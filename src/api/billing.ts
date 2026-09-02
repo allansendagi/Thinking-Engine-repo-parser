@@ -21,7 +21,7 @@ import {
  * APP_PUBLIC_URL (portal return URL; defaults to the marketing site).
  */
 
-const PUBLIC_URL = () => process.env.APP_PUBLIC_URL ?? "https://mind-stream-continuity.vercel.app";
+const PUBLIC_URL = () => process.env.APP_PUBLIC_URL ?? "https://www.threadnow.app";
 const paddleApiBase = () =>
   process.env.PADDLE_ENV === "sandbox" ? "https://sandbox-api.paddle.com" : "https://api.paddle.com";
 

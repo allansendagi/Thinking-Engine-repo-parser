@@ -3,8 +3,11 @@ import SwiftUI
 /// Exact palette from the "Premium macOS Panel v2" design (Claude Design cf5ae711).
 /// The panel is forced light for now — every value below is the literal from the mock.
 enum Theme {
-    /// #0A6FFF — the design's default accent (options: #8944AB, #3A8D3F, #C0453B).
-    static let accent = Color(red: 10 / 255, green: 111 / 255, blue: 255 / 255)
+    /// #0A6FFF — the design's default accent (options: #8944AB, #3A8D3F, #C0453B). User-adjustable
+    /// via Settings ▸ Appearance; AppState pushes the choice into `accentOverride` so every view
+    /// that reads `Theme.accent` in its body picks it up on the next render.
+    static var accentOverride: Color?
+    static var accent: Color { accentOverride ?? AccentChoice.blue.color }
 
     // rgba(0,0,0,a) — panel is light, so ink is pure black at an alpha.
     static func ink(_ a: Double) -> Color { Color.black.opacity(a) }
@@ -95,6 +98,42 @@ struct StatePill: View {
             .padding(.horizontal, 5).padding(.vertical, 2)
             .background(Theme.stateColor(state).opacity(0.14), in: Capsule())
     }
+}
+
+// MARK: - User appearance preferences (Settings ▸ Appearance)
+
+/// Accent colour options from the design mock. `.blue` is the default #0A6FFF.
+enum AccentChoice: String, CaseIterable, Identifiable {
+    case blue, purple, green, red
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+    var color: Color {
+        switch self {
+        case .blue:   return Color(red: 10 / 255,  green: 111 / 255, blue: 255 / 255) // #0A6FFF
+        case .purple: return Color(red: 137 / 255, green: 68 / 255,  blue: 171 / 255) // #8944AB
+        case .green:  return Color(red: 58 / 255,  green: 141 / 255, blue: 63 / 255)  // #3A8D3F
+        case .red:    return Color(red: 192 / 255, green: 69 / 255,  blue: 59 / 255)  // #C0453B
+        }
+    }
+}
+
+/// Row density. Drives IdeaRowView's paddings and type sizes.
+enum Density: String, CaseIterable, Identifiable {
+    case compact, regular, comfortable
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+
+    var rowPadding: EdgeInsets {
+        switch self {
+        case .compact:     return .init(top: 8, leading: 10, bottom: 9, trailing: 10)
+        case .regular:     return .init(top: 10, leading: 12, bottom: 11, trailing: 12)
+        case .comfortable: return .init(top: 13, leading: 14, bottom: 14, trailing: 14)
+        }
+    }
+    var hSpacing: CGFloat { self == .compact ? 9 : 11 }
+    var titleSize: CGFloat { switch self { case .compact: 12.5; case .regular: 13; case .comfortable: 13.5 } }
+    var bodySize: CGFloat { switch self { case .compact: 11.5; case .regular: 12; case .comfortable: 12.5 } }
+    var glyphSize: CGFloat { self == .compact ? 14 : 15 }
 }
 
 /// The mock's secondary buttons: white fill, hairline + soft shadow.

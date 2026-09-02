@@ -4,7 +4,7 @@ import { loadCanonicalEvents, loadDiscardedEvents, loadIdeas } from "../db/queri
 import { deleteDiscardedEvents } from "../db/mutations";
 import { rankCandidates, narrowCandidates } from "../identity/signals";
 import { resolveIdentity } from "../identity/resolve";
-import { applyCognitiveEvent } from "./buildIdeaNode";
+import { applyCognitiveEvent, isConfidentExistingMatch } from "./buildIdeaNode";
 import { quickGate, strongMatchScore } from "./signalGate";
 import { persistPipelineResult, type PipelineProviders } from "./pipeline";
 
@@ -59,6 +59,10 @@ export async function replayDiscardedEvents(
 
     const narrowed = narrowCandidates(ranked).map((c) => c.idea);
     const resolution = await resolveIdentity(event, narrowed, providers.reasoning);
+    // The retrieval score got it re-examined; the idea model still has to confirm the match.
+    // If it won't, leave the row in discarded_events untouched for a future pass.
+    if (!isConfidentExistingMatch(resolution, ideas)) continue;
+
     resolutions.push(resolution);
     applyCognitiveEvent(ideas, event, resolution, sourceEvent.createdAt);
     promotedEvents.push(event);

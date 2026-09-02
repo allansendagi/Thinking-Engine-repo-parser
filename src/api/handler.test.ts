@@ -326,9 +326,8 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(secondWorks.status).toBe(200);
   });
 
-  test("claim: an anonymous account attaches an email and keeps its data; a taken email 409s", async () => {
+  test("claim: an anonymous account attaches an email and keeps its data", async () => {
     const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
-    const j = { "content-type": "application/json" };
     const { issueCode } = await import("./authCodes");
 
     const anon = await createTestUser(handler);
@@ -345,20 +344,61 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     );
     expect(claimed.status).toBe(200);
     expect(((await claimed.json()) as { email: string }).email).toBe(email);
+  });
 
-    // a second anon account can't claim the same email
-    const other = await createTestUser(handler);
-    const otherAuth = { authorization: `Bearer ${other.userId}:${other.token}`, "content-type": "application/json" };
-    await handler(new Request("http://x/v1/account/email", { method: "POST", headers: otherAuth, body: JSON.stringify({ email }) }));
-    const conflict = await handler(
-      new Request("http://x/v1/account/email/verify", {
-        method: "POST",
-        headers: otherAuth,
-        body: JSON.stringify({ email, code: await issueCode(email) }),
-      }),
-    );
-    expect(conflict.status).toBe(409);
-    expect(((await conflict.json()) as { code: string }).code).toBe("email_in_use");
+  test("claim: an email on an account that has ideas 409s; an email on an empty account is reclaimed", async () => {
+    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const { issueCode } = await import("./authCodes");
+    const { openUserDb } = await import("../db/tenancy");
+    const hdr = (u: { userId: string; token: string }) => ({
+      authorization: `Bearer ${u.userId}:${u.token}`,
+      "content-type": "application/json",
+    });
+    const claim = async (u: { userId: string; token: string }, email: string) => {
+      await handler(new Request("http://x/v1/account/email", { method: "POST", headers: hdr(u), body: JSON.stringify({ email }) }));
+      return handler(
+        new Request("http://x/v1/account/email/verify", {
+          method: "POST",
+          headers: hdr(u),
+          body: JSON.stringify({ email, code: await issueCode(email) }),
+        }),
+      );
+    };
+
+    // --- email held by an account WITH data -> 409 ---
+    const withData = await createTestUser(handler);
+    const emailA = `hasdata-${Date.now()}@example.com`;
+    expect((await claim(withData, emailA)).status).toBe(200);
+    const seed = openUserDb(withData.userId);
+    seed
+      .prepare("INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES (?, 't', 'developing', 'f', ?, ?)")
+      .run("idea_x", new Date().toISOString(), new Date().toISOString());
+    seed.close();
+
+    const rival = await createTestUser(handler);
+    const blocked = await claim(rival, emailA);
+    expect(blocked.status).toBe(409);
+    expect(((await blocked.json()) as { code: string }).code).toBe("email_in_use");
+
+    // --- email held by an EMPTY account -> reclaimed, not blocked ---
+    const strayWeb = await createTestUser(handler); // never captured anything
+    const emailB = `stray-${Date.now()}@example.com`;
+    expect((await claim(strayWeb, emailB)).status).toBe(200);
+
+    const macWithIdeas = await createTestUser(handler);
+    openUserDb(macWithIdeas.userId)
+      .prepare("INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES (?, 't', 'developing', 'f', ?, ?)")
+      .run("idea_y", new Date().toISOString(), new Date().toISOString());
+
+    const reclaimed = await claim(macWithIdeas, emailB);
+    expect(reclaimed.status).toBe(200);
+    const body = (await reclaimed.json()) as { email: string; reclaimedFromEmptyAccount?: boolean };
+    expect(body.email).toBe(emailB);
+    expect(body.reclaimedFromEmptyAccount).toBe(true);
+
+    // the stray account no longer holds the email
+    const strayAcct = await handler(new Request("http://x/v1/account", { headers: hdr(strayWeb) }));
+    expect(((await strayAcct.json()) as { email: string | null }).email).toBeNull();
   });
 
   test("capture gate: Free plan 402s at the 25-idea cap (only when billing configured); reads still work", async () => {

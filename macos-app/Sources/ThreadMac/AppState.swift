@@ -4,6 +4,31 @@ import SwiftUI
 
 @MainActor
 final class AppState: ObservableObject {
+    init() {
+        Theme.accentOverride = accent.color   // seed from the persisted choice at launch
+    }
+
+    // MARK: - Appearance preferences (Settings ▸ Appearance)
+
+    @Published var accent: AccentChoice =
+        AccentChoice(rawValue: UserDefaults.standard.string(forKey: "thread.accent") ?? "") ?? .blue
+    {
+        didSet {
+            UserDefaults.standard.set(accent.rawValue, forKey: "thread.accent")
+            Theme.accentOverride = accent.color
+        }
+    }
+    @Published var density: Density =
+        Density(rawValue: UserDefaults.standard.string(forKey: "thread.density") ?? "") ?? .regular
+    {
+        didSet { UserDefaults.standard.set(density.rawValue, forKey: "thread.density") }
+    }
+    @Published var showSnippets: Bool =
+        UserDefaults.standard.object(forKey: "thread.showSnippets") as? Bool ?? true
+    {
+        didSet { UserDefaults.standard.set(showSnippets, forKey: "thread.showSnippets") }
+    }
+
     @Published var apiBaseUrl: String = CredentialStore.apiBaseUrl
     @Published var userId: String? = CredentialStore.userId
 
@@ -79,8 +104,14 @@ final class AppState: ObservableObject {
     /// True when billing is on AND this account can no longer capture. Reads still work.
     var isLocked: Bool { (account?.billingEnabled ?? false) && !(account?.canCapture ?? true) }
 
+    /// The paywall banner is a nudge, not a wall -- the user can dismiss it for the session.
+    /// Resets on relaunch (and whenever the lock clears), so it comes back if they stay capped.
+    @Published var paywallBannerDismissed = false
+    func dismissPaywallBanner() { paywallBannerDismissed = true }
+    var showsPaywallBanner: Bool { isPaired && isLocked && !paywallBannerDismissed }
+
     /// Where the founder buys Pro / manages the account -- payment lives on the website.
-    static let marketingBaseURL = "https://mind-stream-continuity.vercel.app"
+    static let marketingBaseURL = "https://www.threadnow.app"
 
     @Published var authBusy = false
     @Published var authError: String?
