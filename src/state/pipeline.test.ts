@@ -249,4 +249,31 @@ describe("runPipeline (FakeProvider, no API key)", () => {
     expect(result.rejectedExtractions).toHaveLength(1);
     expect(result.rejectedExtractions[0]?.reason).toContain("does not exist in this conversation");
   });
+
+  test("an event quoted verbatim from an ASSISTANT message is rejected -- never filed as the user's idea", async () => {
+    const transcript: CanonicalEvent[] = [
+      { id: "u1", conversationId: "c1", source: "fixture", role: "user", text: "What should authority look like?", createdAt: "2026-08-17T00:00:00.000Z", index: 0 },
+      { id: "a1", conversationId: "c1", source: "fixture", role: "assistant", text: "Authority should be expressed as executable, independently verifiable policy.", createdAt: "2026-08-17T00:00:05.000Z", index: 1 },
+    ];
+    // The model ignores the "user turns only" instruction and lifts the assistant's suggestion,
+    // with a perfectly valid verbatim quote. Grounding must still reject it on role.
+    const extraction = new FakeProvider([
+      extractionResponse([
+        {
+          type: "new_idea",
+          statement: "Authority should be executable, independently verifiable policy.",
+          confidence: 0.95,
+          source_event_id: "a1",
+          evidence_quote: "independently verifiable policy",
+        },
+      ]),
+    ]);
+    const reasoning = new FakeProvider([]);
+
+    const result = await runPipeline(transcript, { extraction, reasoning });
+    expect(result.ideas.size).toBe(0);
+    expect(result.cognitiveEvents).toHaveLength(0);
+    expect(result.rejectedExtractions).toHaveLength(1);
+    expect(result.rejectedExtractions[0]?.reason).toContain("assistant message");
+  });
 });

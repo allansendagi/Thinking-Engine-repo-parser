@@ -11,10 +11,11 @@ function parseJsonResponse(text: string): unknown {
 
 /**
  * Deterministic hallucination guard: an extracted event is only trustworthy if (a) its
- * source_event_id refers to a message that actually exists in this conversation, and (b) its
- * evidence_quote is a substring of that message's real text. This is what the <2%
- * hallucinated-attribution gate is actually checking against, so it's enforced here rather than
- * left to the model's self-reported confidence.
+ * source_event_id refers to a message that actually exists in this conversation, (b) that message
+ * is one the HUMAN wrote (never an assistant turn -- Thread must never file an AI suggestion as
+ * the user's own idea), and (c) its evidence_quote is a substring of that message's real text.
+ * This is what the <2% hallucinated-attribution gate is actually checking against, so it's
+ * enforced here rather than left to the model following the prompt.
  *
  * Observed on a live run: given a single short message with no reply, the model sometimes
  * fabricates several additional turns of conversation wholesale -- invented user statements,
@@ -37,6 +38,9 @@ function checkGrounding(
   const source = eventsById.get(event.source_event_id);
   if (!source) {
     return { grounded: false, reason: `source_event_id "${event.source_event_id}" does not exist in this conversation -- likely fabricated` };
+  }
+  if (source.role !== "user") {
+    return { grounded: false, reason: "source_event_id points at an assistant message, not the human's -- would misattribute an AI suggestion" };
   }
   if (!source.text.toLowerCase().includes(event.evidence_quote.toLowerCase())) {
     return { grounded: false, reason: "evidence_quote not found verbatim in source_event_id" };
