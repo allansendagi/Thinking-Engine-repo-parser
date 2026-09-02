@@ -26,8 +26,8 @@
 | `PADDLE_ENV` | optional | `sandbox` \| `production` (default `production`) |
 | `PADDLE_PRICE_ID_YEARLY` | optional | reserved for a future yearly plan picker |
 | `RESEND_API_KEY` | for real email | Resend API key. Without it, sign-in codes are logged, not sent. |
-| `EMAIL_FROM` | for real email | e.g. `Thread <hello@thread.com>` |
-| `APP_PUBLIC_URL` | optional | portal return URL base (default: the marketing site) |
+| `EMAIL_FROM` | for real email | e.g. `Thread <hello@threadnow.app>` |
+| `APP_PUBLIC_URL` | optional | portal return URL base (default: `https://www.threadnow.app`) |
 
 ## Website env (Vercel)
 

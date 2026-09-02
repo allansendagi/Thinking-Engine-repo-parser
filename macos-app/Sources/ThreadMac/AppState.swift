@@ -111,7 +111,7 @@ final class AppState: ObservableObject {
     var showsPaywallBanner: Bool { isPaired && isLocked && !paywallBannerDismissed }
 
     /// Where the founder buys Pro / manages the account -- payment lives on the website.
-    static let marketingBaseURL = "https://mind-stream-continuity.vercel.app"
+    static let marketingBaseURL = "https://www.threadnow.app"
 
     @Published var authBusy = false
     @Published var authError: String?
