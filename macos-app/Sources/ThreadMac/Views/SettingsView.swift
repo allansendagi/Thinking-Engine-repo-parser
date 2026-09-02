@@ -79,6 +79,10 @@ struct SettingsView: View {
 
             Divider()
 
+            HelpSection()
+
+            Divider()
+
             DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("API base URL").font(.caption).foregroundColor(.secondary)
@@ -115,6 +119,46 @@ struct SettingsView: View {
         .padding(16)
         .frame(width: 340)
         .onAppear { urlDraft = appState.apiBaseUrl }
+    }
+}
+
+/// Settings ▸ Help — the list-symbol legend inline, plus a link to the full web guide
+/// (get-started #help). The legend mirrors IdeaRowView.glyphSymbol exactly.
+private struct HelpSection: View {
+    private let symbols: [(name: String, color: Color, label: String)] = [
+        ("circle", .secondary, "Developing"),
+        ("circle.dotted", .secondary, "Open question"),
+        ("circle.bottomhalf.filled", Theme.stateColor("contested"), "Contested — act now"),
+        ("circle.fill", .secondary.opacity(0.5), "Established"),
+        ("circle.slash", .secondary.opacity(0.5), "Rejected"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Help", systemImage: "questionmark.circle")
+                .font(.subheadline).fontWeight(.medium)
+            Text("What the list symbols mean:")
+                .font(.caption).foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(symbols, id: \.label) { sym in
+                    HStack(spacing: 7) {
+                        Image(systemName: sym.name)
+                            .font(.system(size: 11))
+                            .foregroundStyle(sym.color)
+                            .frame(width: 14)
+                        Text(sym.label).font(.caption)
+                    }
+                }
+            }
+            .padding(.leading, 2)
+            Button("Open the full guide") {
+                if let u = URL(string: "\(AppState.marketingBaseURL)/get-started#help") {
+                    NSWorkspace.shared.open(u)
+                }
+            }
+            .font(.caption)
+            .padding(.top, 2)
+        }
     }
 }
 
