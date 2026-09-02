@@ -1,5 +1,12 @@
 {
-  "_comment": "Ground truth for eval/fixture/conversations.json. N is small by design (this is a mechanics smoke test, not a statistically meaningful sample) -- see README for why the real gate numbers only mean something against a real export at the 50-100 conversation scale. acceptableTypes is deliberately broad for events whose 'true' type only becomes clear after cross-conversation identity resolution (e.g. c2_u1): extraction runs per-conversation, so it cannot know locally that something is a refinement of an idea raised in a different, earlier conversation -- that judgment belongs to identity resolution, which is scored separately below. Observed on both c2_u1 and c4_u1 across live runs -- broadened both rather than special-casing one. requiredSubstrings uses content stems (e.g. 'verif' covers verify/verification/verifiable/verifiability), not exact phrases: across repeated live runs the model chooses a different, equally valid span of the same fixed source sentence to quote as evidence_quote each time, and paraphrases the statement differently too -- an exact-phrase check breaks on that variance even though the underlying content is correctly captured every time.",
+  "_comment": "Ground truth for ./conversations.json. N is small by design (this is a mechanics smoke test, not a statistically meaningful sample) -- see README for why the real gate numbers only mean something against a real export at the 50-100 conversation scale. acceptableTypes is deliberately broad for events whose 'true' type only becomes clear after cross-conversation identity resolution (e.g. c2_u1): extraction runs per-conversation, so it cannot know locally that something is a refinement of an idea raised in a different, earlier conversation -- that judgment belongs to identity resolution, which is scored separately below. Observed on both c2_u1 and c4_u1 across live runs -- broadened both rather than special-casing one. requiredSubstrings uses content stems (e.g. 'verif' covers verify/verification/verifiable/verifiability), not exact phrases: across repeated live runs the model chooses a different, equally valid span of the same fixed source sentence to quote as evidence_quote each time, and paraphrases the statement differently too -- an exact-phrase check breaks on that variance even though the underlying content is correctly captured every time.",
+
+  "format": "chatgpt-export",
+
+  "identityGroups": [
+    { "name": "authority", "anchorSourceEventId": "c1_u1" },
+    { "name": "payments", "anchorSourceEventId": "c3_u1" }
+  ],
 
   "excludedNodeIds": ["c1_u1_orig", "c1_a1_orig"],
   "expectedCanonicalEventCount": 14,
@@ -32,7 +39,8 @@
       "required": true,
       "acceptableTypes": ["new_idea", "claim"],
       "requiredSubstrings": ["ledger"],
-      "identityGroup": "payments"
+      "identityGroup": "payments",
+      "isFirstInGroup": true
     },
     {
       "sourceEventId": "c4_u1",

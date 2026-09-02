@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, world-class-loop, production-hardening]
+    branches: [main, world-class-loop, production-hardening, continuity-sources-resume-eval]
   pull_request:
     branches: [main]
 
@@ -22,6 +22,17 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bunx tsc --noEmit
       - run: bun test src/
+      # The eval harness runs the real extraction/reasoning models, so it only runs when the key
+      # is available as a repo secret. Without it, skip cleanly -- `bun run eval` is a local step.
+      - name: eval (golden set)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::notice::ANTHROPIC_API_KEY not set -- skipping eval (calls the real model, costs tokens). Run 'bun run eval' locally."
+            exit 0
+          fi
+          bun run eval
 
   extension:
     name: extension (bun · tsc)
