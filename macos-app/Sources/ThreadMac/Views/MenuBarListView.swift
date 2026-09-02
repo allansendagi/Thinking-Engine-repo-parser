@@ -109,6 +109,19 @@ struct MenuBarListView: View {
     var body: some View {
         VStack(spacing: 0) {
             chrome
+            if !searching, tab == .recent, let s = appState.resumeSuggestion {
+                ResumeBar(
+                    suggestion: s,
+                    onResume: {
+                        appState.snoozeResume(s.ideaId)
+                        Task {
+                            await appState.openIdea(s.ideaId)
+                            await appState.continueThinking(sendTo: nil)
+                        }
+                    },
+                    onDismiss: { withAnimation(.easeOut(duration: 0.16)) { appState.snoozeResume(s.ideaId) } }
+                )
+            }
             if groups.isEmpty {
                 EmptyState(onboard: !appState.onboardingDismissed && tab != .loops,
                            dismiss: { appState.dismissOnboarding() }, loops: tab == .loops)

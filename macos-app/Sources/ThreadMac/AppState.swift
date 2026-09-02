@@ -66,6 +66,52 @@ final class AppState: ObservableObject {
         if pinnedIds.contains(id) { pinnedIds.remove(id) } else { pinnedIds.insert(id) }
         UserDefaults.standard.set(Array(pinnedIds), forKey: pinnedKey)
     }
+
+    // MARK: - Resume suggestion (the one restrained "you may be returning to…" nudge)
+
+    /// Snooze timestamps per idea. "Not now" and "Resume" both record now; the nudge only
+    /// resurfaces for an idea once it has been touched *since* you dismissed it -- new activity
+    /// is new evidence. Local-only, persisted.
+    private let resumeSnoozeKey = "thread.resumeSnoozed"
+    @Published private var resumeSnoozed: [String: Double] =
+        (UserDefaults.standard.dictionary(forKey: "thread.resumeSnoozed") as? [String: Double]) ?? [:]
+
+    func snoozeResume(_ ideaId: String) {
+        resumeSnoozed[ideaId] = Date().timeIntervalSince1970
+        UserDefaults.standard.set(resumeSnoozed, forKey: resumeSnoozeKey)
+    }
+
+    /// The single highest-confidence idea worth resuming, or nil. Deliberately conservative:
+    ///   • has an unresolved open loop OR is contested (there is genuinely something unfinished)
+    ///   • not dormant / rejected
+    ///   • last touched between 3 and 45 days ago -- long enough that you were interrupted,
+    ///     recent enough that it isn't abandoned
+    ///   • not snoozed (unless it's been worked on since)
+    /// Only the most-recently-touched qualifier is returned; if nothing qualifies, no nudge.
+    var resumeSuggestion: ResumeSuggestion? {
+        guard isPaired, let state = thinkingState else { return nil }
+
+        let openLoopIdeas = Set(state.openLoops.filter { !$0.resolved }.map(\.ideaId))
+        var lastTouched: [String: Date] = [:]
+        for c in state.recentChanges {
+            guard let d = Theme.parse(c.createdAt) else { continue }
+            if lastTouched[c.ideaId].map({ d > $0 }) ?? true { lastTouched[c.ideaId] = d }
+        }
+
+        let candidates = state.currentIdeas.compactMap { idea -> ResumeCandidate? in
+            guard let touched = lastTouched[idea.id] else { return nil }
+            return ResumeCandidate(
+                id: idea.id,
+                title: cleanIdeaTitle(idea.title, fallback: idea.currentFormulation),
+                state: idea.state,
+                source: idea.sourceLabel,
+                hasOpenLoop: openLoopIdeas.contains(idea.id),
+                lastTouched: touched
+            )
+        }
+        let snoozed = resumeSnoozed.mapValues { Date(timeIntervalSince1970: $0) }
+        return pickResumeSuggestion(candidates, snoozed: snoozed)
+    }
     @Published var continueResult: String?
     @Published var errorMessage: String?
     @Published var isLoading = false
