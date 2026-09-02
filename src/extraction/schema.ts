@@ -13,10 +13,20 @@ export const cognitiveEventTypeSchema = z.enum([
   "resolution",
 ]);
 
+export const persistenceLevelSchema = z.enum(["high", "medium", "low"]);
+
 export const extractedEventSchema = z.object({
   type: cognitiveEventTypeSchema,
   statement: z.string().min(1),
   confidence: z.number().min(0).max(1),
+  /**
+   * Worth-remembering judgment, separate from `confidence`. Defaulted to "high" so transcripts
+   * scored before this field existed -- and any model response that omits it -- keep today's
+   * behavior; the signal gate only bites on an explicit "medium"/"low".
+   */
+  persistence: persistenceLevelSchema.default("high"),
+  /** One short phrase naming the rubric bullet behind `persistence`. */
+  persistence_reason: z.string().min(1).nullable().optional(),
   source_event_id: z.string().min(1),
   evidence_quote: z.string().min(1),
   /** Only meaningful for new_idea: why this idea matters, in the model's own words. Optional. */

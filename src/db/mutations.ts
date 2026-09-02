@@ -32,7 +32,7 @@ export function deleteIdea(db: Database, ideaId: string): boolean {
   return true;
 }
 
-const VALID_STATES: IdeaState[] = ["developing", "established", "rejected", "dormant"];
+const VALID_STATES: IdeaState[] = ["developing", "established", "rejected", "dormant", "contested"];
 
 export function setIdeaState(db: Database, ideaId: string, state: IdeaState): boolean {
   if (!VALID_STATES.includes(state)) throw new Error(`Invalid idea state: ${state}`);

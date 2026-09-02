@@ -26,8 +26,8 @@ function idea(overrides: Partial<IdeaNode> = {}): IdeaNode {
 
 function cognitiveEvents(): CognitiveEvent[] {
   return [
-    { id: "cog_1", type: "new_idea", statement: "x", confidence: 0.9, sourceEventId: "src_1", evidenceQuote: "x", additionalSourceEventIds: [] },
-    { id: "cog_2", type: "contradiction", statement: "y", confidence: 0.9, sourceEventId: "src_2", evidenceQuote: "y", additionalSourceEventIds: [] },
+    { id: "cog_1", type: "new_idea", statement: "x", confidence: 0.9, persistence: "high", sourceEventId: "src_1", evidenceQuote: "x", additionalSourceEventIds: [] },
+    { id: "cog_2", type: "contradiction", statement: "y", confidence: 0.9, persistence: "high", sourceEventId: "src_2", evidenceQuote: "y", additionalSourceEventIds: [] },
   ];
 }
 
@@ -45,6 +45,20 @@ describe("buildThinkingState", () => {
     const state = buildThinkingState([idea()], cognitiveEvents());
     expect(state.contradictions).toHaveLength(1);
     expect(state.contradictions[0]?.formulation).toBe("Authority must be verifiable.");
+  });
+
+  test("an idea in the `contested` state is a contradiction even with no cognitive events loaded", () => {
+    const contested = idea({ state: "contested" });
+    const state = buildThinkingState([contested], []); // no cognitive events at all
+    expect(state.contradictions).toHaveLength(1);
+    expect(state.contradictions[0]?.ideaId).toBe("idea_1");
+    expect(state.contradictions[0]?.formulation).toBe("Authority must be verifiable.");
+  });
+
+  test("does not double-count a contested idea that also has a contradiction evolution step", () => {
+    const contested = idea({ state: "contested" });
+    const state = buildThinkingState([contested], cognitiveEvents());
+    expect(state.contradictions).toHaveLength(1);
   });
 
   test("recentChanges respects the window and excludes the old step", () => {

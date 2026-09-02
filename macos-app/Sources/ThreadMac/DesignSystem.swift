@@ -38,6 +38,7 @@ enum Theme {
         case "developing": return accent
         case "established": return Color(red: 58 / 255, green: 141 / 255, blue: 63 / 255) // #3A8D3F
         case "rejected": return Color(red: 192 / 255, green: 69 / 255, blue: 59 / 255)    // #C0453B
+        case "contested": return Color(red: 199 / 255, green: 138 / 255, blue: 42 / 255)  // #C78A2A -- unresolved tension
         default: return ink(0.4)
         }
     }

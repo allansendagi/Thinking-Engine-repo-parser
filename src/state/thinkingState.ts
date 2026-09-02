@@ -41,6 +41,7 @@ export function buildThinkingState(
   const recentChanges: ThinkingState["recentChanges"] = [];
   const contradictions: ThinkingState["contradictions"] = [];
 
+  const contradictedIdeaIds = new Set<string>();
   for (const idea of relevant) {
     for (const step of idea.evolution) {
       const stepTime = new Date(step.createdAt).getTime();
@@ -54,6 +55,7 @@ export function buildThinkingState(
       }
       const cognitiveEvent = cognitiveEventsById.get(step.cognitiveEventId);
       if (cognitiveEvent?.type === "contradiction") {
+        contradictedIdeaIds.add(idea.id);
         contradictions.push({
           ideaId: idea.id,
           ideaTitle: idea.title,
@@ -61,6 +63,19 @@ export function buildThinkingState(
           createdAt: step.createdAt,
         });
       }
+    }
+    // Primary signal is the idea's stored state: buildIdeaNode sets `contested` when a
+    // contradiction lands on an idea, so the relationship survives even when the underlying
+    // cognitive events aren't loaded. The evolution-step scan above stays as a fallback for
+    // ideas persisted before `contested` existed.
+    if (idea.state === "contested" && !contradictedIdeaIds.has(idea.id)) {
+      contradictedIdeaIds.add(idea.id);
+      contradictions.push({
+        ideaId: idea.id,
+        ideaTitle: idea.title,
+        formulation: idea.currentFormulation,
+        createdAt: idea.updatedAt,
+      });
     }
   }
 

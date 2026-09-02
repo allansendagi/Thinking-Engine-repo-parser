@@ -82,12 +82,7 @@ export interface RankOptions {
 
 const WEIGHTS = { lexical: 0.4, entity: 0.3, temporal: 0.1, relationship: 0.1, semantic: 0.4 };
 
-async function semanticScore(
-  eventStatement: string,
-  ideaFormulation: string,
-  embeddingProvider: EmbeddingProvider,
-): Promise<number> {
-  const [a, b] = await Promise.all([embeddingProvider.embed(eventStatement), embeddingProvider.embed(ideaFormulation)]);
+function cosine(a: number[], b: number[]): number {
   const dot = a.reduce((sum, v, i) => sum + v * (b[i] ?? 0), 0);
   const normA = Math.sqrt(a.reduce((sum, v) => sum + v * v, 0));
   const normB = Math.sqrt(b.reduce((sum, v) => sum + v * v, 0));
@@ -107,6 +102,12 @@ export async function rankCandidates(
 ): Promise<CandidateScore[]> {
   const scored: CandidateScore[] = [];
 
+  // Embed the event statement ONCE, not once per idea -- semanticScore used to re-embed it inside
+  // the loop, so an account with 40 ideas paid 40 identical event embeddings per cognitive event.
+  const eventVec = options.embeddingProvider
+    ? await options.embeddingProvider.embed(event.statement)
+    : null;
+
   for (const idea of ideas) {
     const lastEvolutionTime = idea.evolution.at(-1)?.createdAt ?? idea.createdAt;
     const signals: CandidateScore["signals"] = {
@@ -123,8 +124,9 @@ export async function rankCandidates(
       { weight: WEIGHTS.relationship, value: signals.relationship },
     ];
 
-    if (options.embeddingProvider) {
-      signals.semantic = await semanticScore(event.statement, idea.currentFormulation, options.embeddingProvider);
+    if (options.embeddingProvider && eventVec) {
+      const ideaVec = await options.embeddingProvider.embed(idea.currentFormulation);
+      signals.semantic = cosine(eventVec, ideaVec);
       weightsUsed.push({ weight: WEIGHTS.semantic, value: signals.semantic });
     }
 

@@ -131,6 +131,50 @@ describe("runPipeline (FakeProvider, no API key)", () => {
     expect(result.ideas.size).toBe(2);
   });
 
+  test("the signal gate discards a low-persistence event: no idea, no reasoning call, kept in discardedEvents", async () => {
+    const extraction = new FakeProvider([
+      extractionResponse([
+        {
+          type: "claim",
+          statement: "A throwaway aside, not worth remembering.",
+          confidence: 0.92,
+          persistence: "low",
+          persistence_reason: "vague gesture, no specific claim",
+          source_event_id: "u1",
+          evidence_quote: "explicit boundaries",
+        },
+      ]),
+    ]);
+    const reasoning = new FakeProvider([]); // gate must reject before identity resolution
+
+    const result = await runPipeline([conv1[0]!], { extraction, reasoning });
+    expect(result.ideas.size).toBe(0);
+    expect(result.cognitiveEvents).toHaveLength(0);
+    expect(result.discardedEvents).toHaveLength(1);
+    expect(result.discardedEvents[0]?.gateReason).toContain("persistence=low");
+    expect(result.discardedEvents[0]?.gateVersion).toBe(1);
+  });
+
+  test("a medium-persistence claim is kept only when it extends an existing idea", async () => {
+    const events: CanonicalEvent[] = [
+      { id: "u1", conversationId: "c1", source: "fixture", role: "user", text: "Authority boundaries must be explicit and enforced.", createdAt: "2026-08-17T00:00:00.000Z", index: 0 },
+      { id: "u2", conversationId: "c2", source: "fixture", role: "user", text: "Those authority boundaries should be enforced at runtime, not just written down.", createdAt: "2026-08-18T00:00:00.000Z", index: 0 },
+      { id: "u3", conversationId: "c3", source: "fixture", role: "user", text: "Unrelatedly, the office coffee machine is broken again.", createdAt: "2027-06-01T00:00:00.000Z", index: 0 },
+    ];
+    const extraction = new FakeProvider([
+      extractionResponse([{ type: "new_idea", statement: "Authority boundaries must be explicit and enforced.", confidence: 0.95, persistence: "high", source_event_id: "u1", evidence_quote: "Authority boundaries" }]),
+      extractionResponse([{ type: "claim", statement: "Authority boundaries should be enforced at runtime.", confidence: 0.9, persistence: "medium", source_event_id: "u2", evidence_quote: "enforced at runtime" }]),
+      extractionResponse([{ type: "claim", statement: "The office coffee machine is broken.", confidence: 0.9, persistence: "medium", source_event_id: "u3", evidence_quote: "coffee machine is broken" }]),
+    ]);
+    // Only the kept medium claim (u2) reaches identity resolution.
+    const reasoning = new FakeProvider([identityResponse("idea_cog_u1_0")]);
+
+    const result = await runPipeline(events, { extraction, reasoning });
+    expect(result.cognitiveEvents.map((e) => e.sourceEventId).sort()).toEqual(["u1", "u2"]);
+    expect(result.discardedEvents.map((d) => d.event.sourceEventId)).toEqual(["u3"]);
+    expect(result.ideas.size).toBe(1);
+  });
+
   test("evidence quotes that don't verbatim-match their source are rejected, not silently kept", async () => {
     const extraction = new FakeProvider([
       extractionResponse([

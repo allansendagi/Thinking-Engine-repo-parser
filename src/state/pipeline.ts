@@ -1,14 +1,19 @@
 import type { Database } from "bun:sqlite";
-import type { CanonicalEvent, CognitiveEvent, IdeaNode, IdentityResolution } from "../types";
+import type { CanonicalEvent, CognitiveEvent, DiscardedEvent, IdeaNode, IdentityResolution } from "../types";
+import { SIGNAL_GATE_VERSION } from "../types";
 import type { CompletionProvider, EmbeddingProvider } from "../providers/types";
 import { extractCognitiveEvents, type ExtractionOutcome } from "../extraction/extract";
 import { resolveIdentity } from "../identity/resolve";
 import { rankCandidates, narrowCandidates } from "../identity/signals";
+import { quickGate, strongMatchScore } from "./signalGate";
 import { applyCognitiveEvent } from "./buildIdeaNode";
 
 export interface PipelineResult {
   ideas: Map<string, IdeaNode>;
+  /** Grounded events the signal gate PROMOTED -- the ones now backing ideas. */
   cognitiveEvents: CognitiveEvent[];
+  /** Grounded events the signal gate did not promote. Stored, replayable, not attached to ideas. */
+  discardedEvents: DiscardedEvent[];
   resolutions: IdentityResolution[];
   rejectedExtractions: ExtractionOutcome["rejected"];
 }
@@ -81,22 +86,52 @@ export async function runPipeline(
 
   const ideas = options.existingIdeas ?? new Map<string, IdeaNode>();
   const resolutions: IdentityResolution[] = [];
+  const persistedEvents: CognitiveEvent[] = [];
+  const discardedEvents: DiscardedEvent[] = [];
 
   for (const event of allCognitiveEvents) {
     const sourceEvent = eventsById.get(event.sourceEventId);
     if (!sourceEvent) throw new Error(`Cognitive event ${event.id} references unknown source event`);
+
+    // Signal gate, phase 1: needs only the event, so high/low never pay for ranking.
+    const quick = quickGate(event);
+    if (quick.decision === "discard") {
+      discardedEvents.push({ event, gateReason: quick.reason, gateVersion: SIGNAL_GATE_VERSION });
+      continue;
+    }
 
     const ranked = await rankCandidates(event, sourceEvent, [...ideas.values()], {
       embeddingProvider: providers.embeddings,
     });
     const narrowed = narrowCandidates(ranked).map((c) => c.idea);
 
+    // Signal gate, phase 2: a medium-value leaky-type event is kept only if it extends an idea
+    // the user already developed (top candidate at/above the strong-match score).
+    if (quick.decision === "needs-match") {
+      const topScore = ranked[0]?.score ?? 0;
+      if (topScore < strongMatchScore()) {
+        discardedEvents.push({
+          event,
+          gateReason: `${quick.reason}; top candidate ${topScore.toFixed(3)} < ${strongMatchScore()}`,
+          gateVersion: SIGNAL_GATE_VERSION,
+        });
+        continue;
+      }
+    }
+
     const resolution = await resolveIdentity(event, narrowed, providers.reasoning);
     resolutions.push(resolution);
     applyCognitiveEvent(ideas, event, resolution, sourceEvent.createdAt);
+    persistedEvents.push(event);
   }
 
-  return { ideas, cognitiveEvents: allCognitiveEvents, resolutions, rejectedExtractions: allRejected };
+  return {
+    ideas,
+    cognitiveEvents: persistedEvents,
+    discardedEvents,
+    resolutions,
+    rejectedExtractions: allRejected,
+  };
 }
 
 export function persistPipelineResult(
@@ -113,17 +148,52 @@ export function persistPipelineResult(
   }
 
   const insertCognitive = db.prepare(
-    `INSERT OR REPLACE INTO cognitive_events (id, type, statement, confidence, source_event_id, evidence_quote, why_it_matters)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, why_it_matters)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertSource = db.prepare(
     `INSERT OR REPLACE INTO cognitive_event_sources (cognitive_event_id, canonical_event_id) VALUES (?, ?)`,
   );
   for (const e of result.cognitiveEvents) {
-    insertCognitive.run(e.id, e.type, e.statement, e.confidence, e.sourceEventId, e.evidenceQuote, e.whyItMatters ?? null);
+    insertCognitive.run(
+      e.id,
+      e.type,
+      e.statement,
+      e.confidence,
+      e.persistence ?? "high",
+      e.persistenceReason ?? null,
+      e.sourceEventId,
+      e.evidenceQuote,
+      e.whyItMatters ?? null,
+    );
     for (const additionalId of e.additionalSourceEventIds) {
       insertSource.run(e.id, additionalId);
     }
+  }
+
+  // The signal gate's audit trail: grounded events that were not promoted. Kept so a threshold
+  // or rubric change (SIGNAL_GATE_VERSION) is replayable and "why isn't my idea here" is answerable.
+  const insertDiscarded = db.prepare(
+    `INSERT OR REPLACE INTO discarded_events
+       (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, gate_reason, gate_version, discarded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const discardedAt = new Date().toISOString();
+  for (const d of result.discardedEvents) {
+    const e = d.event;
+    insertDiscarded.run(
+      e.id,
+      e.type,
+      e.statement,
+      e.confidence,
+      e.persistence ?? "high",
+      e.persistenceReason ?? null,
+      e.sourceEventId,
+      e.evidenceQuote,
+      d.gateReason,
+      d.gateVersion,
+      discardedAt,
+    );
   }
 
   const insertIdea = db.prepare(

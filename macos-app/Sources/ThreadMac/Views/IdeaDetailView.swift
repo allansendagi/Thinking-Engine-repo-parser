@@ -7,7 +7,7 @@ struct IdeaDetailView: View {
     @State private var titleDraft = ""
     @State private var editingTitle = false
 
-    private let states = ["developing", "established", "rejected", "dormant"]
+    private let states = ["developing", "established", "contested", "rejected", "dormant"]
 
     var body: some View {
         ScrollView {

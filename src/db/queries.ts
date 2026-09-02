@@ -36,6 +36,8 @@ interface CognitiveEventRow {
   type: string;
   statement: string;
   confidence: number;
+  persistence: string | null;
+  persistence_reason: string | null;
   source_event_id: string;
   evidence_quote: string;
   why_it_matters: string | null;
@@ -110,6 +112,8 @@ export function loadCognitiveEvents(db: Database): CognitiveEvent[] {
       type: r.type as CognitiveEvent["type"],
       statement: r.statement,
       confidence: r.confidence,
+      persistence: (r.persistence as CognitiveEvent["persistence"]) ?? "high",
+      persistenceReason: r.persistence_reason ?? undefined,
       sourceEventId: r.source_event_id,
       evidenceQuote: r.evidence_quote,
       whyItMatters: r.why_it_matters ?? undefined,

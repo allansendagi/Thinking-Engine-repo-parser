@@ -19,7 +19,10 @@ export interface IngestConversationInput {
 
 export interface IngestResult {
   newCanonicalEvents: number;
+  /** Grounded events the signal gate PROMOTED to ideas this call. */
   newCognitiveEvents: number;
+  /** Grounded events the signal gate declined to persist (stored for replay, not attached). */
+  discardedEvents: number;
   rejectedExtractions: number;
   ideaCount: number;
 }
@@ -39,7 +42,13 @@ export async function ingestConversation(
   const existingIdeaCount = () => loadIdeas(db).length;
 
   if (input.messages.length === 0) {
-    return { newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: existingIdeaCount() };
+    return {
+      newCanonicalEvents: 0,
+      newCognitiveEvents: 0,
+      discardedEvents: 0,
+      rejectedExtractions: 0,
+      ideaCount: existingIdeaCount(),
+    };
   }
 
   const existingIds = new Set(
@@ -61,7 +70,13 @@ export async function ingestConversation(
   const newEventIds = new Set(allEvents.filter((e) => !existingIds.has(e.id)).map((e) => e.id));
 
   if (newEventIds.size === 0) {
-    return { newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: existingIdeaCount() };
+    return {
+      newCanonicalEvents: 0,
+      newCognitiveEvents: 0,
+      discardedEvents: 0,
+      rejectedExtractions: 0,
+      ideaCount: existingIdeaCount(),
+    };
   }
 
   const existingIdeas = new Map(loadIdeas(db).map((i) => [i.id, i]));
@@ -72,6 +87,7 @@ export async function ingestConversation(
   return {
     newCanonicalEvents: newEventIds.size,
     newCognitiveEvents: result.cognitiveEvents.length,
+    discardedEvents: result.discardedEvents.length,
     rejectedExtractions: result.rejectedExtractions.length,
     ideaCount: result.ideas.size,
   };

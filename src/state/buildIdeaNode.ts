@@ -119,8 +119,22 @@ export function applyCognitiveEvent(
         resolved: false,
       });
       break;
+    case "contradiction":
+      // First-class in the graph, not re-derived by the view layer: the idea now holds a
+      // statement that conflicts with its own prior formulation. Mark it contested and file the
+      // tension as an unresolved loop so recall surfaces it as unfinished thinking.
+      idea.state = "contested";
+      idea.openLoops.push({
+        id: `loop_${event.id}`,
+        statement: `Unresolved contradiction: ${event.statement}`,
+        createdAt: sourceCreatedAt,
+        resolved: false,
+      });
+      break;
     case "resolution":
       for (const loop of idea.openLoops) loop.resolved = true;
+      // A resolution settles the contradiction that contested the idea.
+      if (idea.state === "contested") idea.state = "developing";
       break;
     case "connection":
       if (resolution.alsoRelatedIdeaId) {

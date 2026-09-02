@@ -36,7 +36,7 @@ import {
 import type { IdeaState } from "../types";
 import type { PipelineProviders } from "../state/pipeline";
 
-const VALID_IDEA_STATES: IdeaState[] = ["developing", "established", "rejected", "dormant"];
+const VALID_IDEA_STATES: IdeaState[] = ["developing", "established", "rejected", "dormant", "contested"];
 
 /**
  * The whole API as a pure (Request) => Response function, deliberately separate from Bun.serve

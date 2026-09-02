@@ -18,7 +18,28 @@ export function openDb(path: string): Database {
   if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL;");
   const schema = readFileSync(join(__dirname, "schema.sql"), "utf-8");
   db.exec(schema);
+  migrate(db);
   return db;
+}
+
+/**
+ * In-place column additions for per-user DBs that predate a schema change. schema.sql only uses
+ * CREATE TABLE IF NOT EXISTS, so a new column on an existing table needs an explicit ALTER.
+ * Idempotent: a duplicate-column error just means the migration already ran. New TABLES are
+ * handled by schema.sql itself.
+ */
+function migrate(db: Database): void {
+  const addColumns: [table: string, column: string][] = [
+    ["cognitive_events", "persistence TEXT NOT NULL DEFAULT 'high'"],
+    ["cognitive_events", "persistence_reason TEXT"],
+  ];
+  for (const [table, column] of addColumns) {
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column};`);
+    } catch {
+      // column already exists
+    }
+  }
 }
 
 /** Wipes all rows without dropping tables -- used between eval runs so results don't accumulate. */
@@ -31,6 +52,7 @@ export function resetDb(db: Database): void {
     "evolution_steps",
     "cognitive_event_sources",
     "idea_nodes",
+    "discarded_events",
     "cognitive_events",
     "canonical_events",
   ];
