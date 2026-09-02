@@ -223,7 +223,7 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(res.status).toBe(404);
   });
 
-  test("GET /v1/account reports the 14-day trial for a fresh user", async () => {
+  test("GET /v1/account reports a fresh user as Free, capture allowed", async () => {
     const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
     const { userId, token } = await createTestUser(handler);
     const res = await handler(
@@ -231,27 +231,133 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      status: string;
-      entitled: boolean;
-      trialDaysLeft: number;
+      plan: string;
+      isPro: boolean;
+      canCapture: boolean;
+      ideaCount: number;
+      ideaCap: number;
       billingEnabled: boolean;
     };
-    expect(body.status).toBe("trialing");
-    expect(body.entitled).toBe(true);
-    expect(body.trialDaysLeft).toBe(14);
-    expect(body.billingEnabled).toBe(false); // no STRIPE_* env in tests
+    expect(body.plan).toBe("free");
+    expect(body.isPro).toBe(false);
+    expect(body.canCapture).toBe(true);
+    expect(body.ideaCount).toBe(0);
+    expect(body.ideaCap).toBe(25);
+    expect(body.billingEnabled).toBe(false); // no PADDLE_* env in tests
   });
 
-  test("capture gate: 402 once the trial is over (only when billing is configured); reads still work", async () => {
-    const { updateSubscription } = await import("./auth");
+  test("email sign-in: start -> verify returns a working bearer; same email is idempotent (rotated token)", async () => {
+    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const j = { "content-type": "application/json" };
+    const email = `signin-${Date.now()}@example.com`;
+
+    const codeFromLog = async () => {
+      // The dev mailer logs the code; issue + read it back deterministically instead.
+      const { issueCode } = await import("./authCodes");
+      return issueCode(email);
+    };
+
+    // start (returns ok regardless of whether the account exists)
+    const started = await handler(
+      new Request("http://x/v1/auth/start", { method: "POST", headers: j, body: JSON.stringify({ email }) }),
+    );
+    expect(started.status).toBe(200);
+
+    // wrong code
+    const bad = await handler(
+      new Request("http://x/v1/auth/verify", {
+        method: "POST",
+        headers: j,
+        body: JSON.stringify({ email, code: "000000" }),
+      }),
+    );
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { code: string }).code).toBe("bad_code");
+
+    // real code -> new account
+    const first = await handler(
+      new Request("http://x/v1/auth/verify", {
+        method: "POST",
+        headers: j,
+        body: JSON.stringify({ email, code: await codeFromLog() }),
+      }),
+    );
+    const a = (await first.json()) as { userId: string; token: string };
+    expect(a.userId).toMatch(/^user_[a-f0-9]{24}$/);
+
+    const acct = await handler(
+      new Request("http://x/v1/account", { headers: { authorization: `Bearer ${a.userId}:${a.token}` } }),
+    );
+    expect(((await acct.json()) as { email: string }).email).toBe(email);
+
+    // same email again -> same account, fresh token, old token dead
+    const second = await handler(
+      new Request("http://x/v1/auth/verify", {
+        method: "POST",
+        headers: j,
+        body: JSON.stringify({ email, code: await codeFromLog() }),
+      }),
+    );
+    const b = (await second.json()) as { userId: string; token: string };
+    expect(b.userId).toBe(a.userId);
+    expect(b.token).not.toBe(a.token);
+
+    const stale = await handler(
+      new Request("http://x/v1/thinking-state", { headers: { authorization: `Bearer ${a.userId}:${a.token}` } }),
+    );
+    expect(stale.status).toBe(401);
+  });
+
+  test("claim: an anonymous account attaches an email and keeps its data; a taken email 409s", async () => {
+    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const j = { "content-type": "application/json" };
+    const { issueCode } = await import("./authCodes");
+
+    const anon = await createTestUser(handler);
+    const auth = { authorization: `Bearer ${anon.userId}:${anon.token}`, "content-type": "application/json" };
+    const email = `claim-${Date.now()}@example.com`;
+
+    await handler(new Request("http://x/v1/account/email", { method: "POST", headers: auth, body: JSON.stringify({ email }) }));
+    const claimed = await handler(
+      new Request("http://x/v1/account/email/verify", {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ email, code: await issueCode(email) }),
+      }),
+    );
+    expect(claimed.status).toBe(200);
+    expect(((await claimed.json()) as { email: string }).email).toBe(email);
+
+    // a second anon account can't claim the same email
+    const other = await createTestUser(handler);
+    const otherAuth = { authorization: `Bearer ${other.userId}:${other.token}`, "content-type": "application/json" };
+    await handler(new Request("http://x/v1/account/email", { method: "POST", headers: otherAuth, body: JSON.stringify({ email }) }));
+    const conflict = await handler(
+      new Request("http://x/v1/account/email/verify", {
+        method: "POST",
+        headers: otherAuth,
+        body: JSON.stringify({ email, code: await issueCode(email) }),
+      }),
+    );
+    expect(conflict.status).toBe(409);
+    expect(((await conflict.json()) as { code: string }).code).toBe("email_in_use");
+  });
+
+  test("capture gate: Free plan 402s at the 25-idea cap (only when billing configured); reads still work", async () => {
+    const { setPlan } = await import("./auth");
     const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
     const { userId, token } = await createTestUser(handler);
     const authHeader = { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" };
 
-    updateSubscription(userId, {
-      status: "canceled",
-      currentPeriodEnd: new Date(Date.now() - 1000).toISOString(),
-    });
+    // Seed 25 idea nodes directly in the user's DB.
+    const { openUserDb } = await import("../db/tenancy");
+    const seed = openUserDb(userId);
+    const stmt = seed.prepare(
+      "INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES (?, ?, 'developing', ?, ?, ?)",
+    );
+    const nowIso = new Date().toISOString();
+    for (let i = 0; i < 25; i++) stmt.run(`idea_${i}`, `t${i}`, `f${i}`, nowIso, nowIso);
+    seed.close();
 
     const capture = () =>
       handler(
@@ -262,21 +368,38 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
         }),
       );
 
-    // Billing not configured -> gate is a no-op (request gets past the gate).
+    // Billing not configured -> gate is a no-op.
     expect((await capture()).status).not.toBe(402);
 
-    process.env.STRIPE_SECRET_KEY = "sk_test";
-    process.env.STRIPE_PRICE_ID = "price_test";
+    process.env.PADDLE_API_KEY = "pdl_test";
+    process.env.PADDLE_PRICE_ID = "pri_test";
+    process.env.PADDLE_WEBHOOK_SECRET = "whsec_test";
     try {
       const gated = await capture();
       expect(gated.status).toBe(402);
-      expect(((await gated.json()) as { code: string }).code).toBe("subscription_required");
+      expect(((await gated.json()) as { code: string }).code).toBe("upgrade_required");
 
       const read = await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }));
       expect(read.status).toBe(200);
+
+      // /v1/continue is Pro-only
+      const cont = await handler(
+        new Request("http://x/v1/continue", {
+          method: "POST",
+          headers: authHeader,
+          body: JSON.stringify({ topic: "t0" }),
+        }),
+      );
+      expect(cont.status).toBe(402);
+      expect(((await cont.json()) as { code: string }).code).toBe("pro_required");
+
+      // ...but an active Pro account is not gated
+      setPlan(userId, { plan: "pro", status: "active" });
+      expect((await capture()).status).not.toBe(402);
     } finally {
-      delete process.env.STRIPE_SECRET_KEY;
-      delete process.env.STRIPE_PRICE_ID;
+      delete process.env.PADDLE_API_KEY;
+      delete process.env.PADDLE_PRICE_ID;
+      delete process.env.PADDLE_WEBHOOK_SECRET;
     }
   });
 });

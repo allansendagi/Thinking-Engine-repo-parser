@@ -1,16 +1,27 @@
 import { randomUUID } from "node:crypto";
-import { createUser, getAccount, verifyToken } from "./auth";
+import {
+  attachEmail,
+  createUser,
+  EmailInUseError,
+  findAccountByEmail,
+  getAccount,
+  rotateToken,
+  verifyToken,
+} from "./auth";
+import { consumeCode, issueCode, RateLimitedError } from "./authCodes";
+import { sendEmail, signInCodeEmail } from "./email";
 import {
   accountView,
-  applyStripeEvent,
+  applyPaddleEvent,
   billingConfigured,
-  createCheckoutSession,
-  createPortalSession,
-  isEntitled,
-  verifyStripeSignature,
+  canCapture,
+  createPortalLink,
+  isProActive,
+  verifyPaddleSignature,
 } from "./billing";
 import { openUserDb } from "../db/tenancy";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
+import { loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { parsePastedConversation } from "../import/pasteParser";
 import {
@@ -37,8 +48,20 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function error(status: number, message: string): Response {
-  return json({ error: message }, status);
+function error(status: number, message: string, code?: string): Response {
+  return json(code ? { error: message, code } : { error: message }, status);
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** This user's current idea-node count -- drives the Free plan's capture cap. */
+function ideaCountFor(userId: string): number {
+  const db = openUserDb(userId);
+  try {
+    return loadIdeas(db).length;
+  } finally {
+    db.close();
+  }
 }
 
 /** `Authorization: Bearer <userId>:<token>`. Returns the userId if valid, or a 401 Response. */
@@ -66,18 +89,60 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       return json(user, 201);
     }
 
-    // Stripe calls this -- no Thread bearer token. Verified by signature instead.
-    if (req.method === "POST" && pathname === "/v1/stripe/webhook") {
-      const secret = process.env.STRIPE_WEBHOOK_SECRET;
-      const sig = req.headers.get("stripe-signature") ?? "";
+    // --- Passwordless sign-in: email + 6-digit code (public) --------------------------------
+    if (req.method === "POST" && pathname === "/v1/auth/start") {
+      let body: { email?: string };
+      try {
+        body = (await req.json()) as { email?: string };
+      } catch {
+        return error(400, "Invalid JSON body");
+      }
+      const email = (body.email ?? "").trim();
+      if (!EMAIL_RE.test(email)) return error(400, "A valid email is required");
+      try {
+        const code = await issueCode(email);
+        await sendEmail({ to: email, ...signInCodeEmail(code) });
+      } catch (e) {
+        if (e instanceof RateLimitedError) return error(429, e.message);
+        console.error("[Thread] auth/start failed:", e);
+        return error(502, "Could not send the sign-in code");
+      }
+      return json({ ok: true }); // never reveal whether the email has an account
+    }
+
+    if (req.method === "POST" && pathname === "/v1/auth/verify") {
+      let body: { email?: string; code?: string };
+      try {
+        body = (await req.json()) as { email?: string; code?: string };
+      } catch {
+        return error(400, "Invalid JSON body");
+      }
+      const email = (body.email ?? "").trim();
+      const code = (body.code ?? "").trim();
+      if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return error(400, "Email and 6-digit code are required");
+      if (!(await consumeCode(email, code))) return error(400, "That code is wrong or expired", "bad_code");
+
+      const existing = findAccountByEmail(email);
+      if (existing) {
+        const token = await rotateToken(existing.userId); // sign-in rotates the credential
+        return json({ userId: existing.userId, token });
+      }
+      const created = await createUser(email);
+      return json(created, 201);
+    }
+
+    // Paddle calls this -- no Thread bearer token. Verified by signature instead.
+    if (req.method === "POST" && pathname === "/v1/paddle/webhook") {
+      const secret = process.env.PADDLE_WEBHOOK_SECRET;
+      const sig = req.headers.get("paddle-signature") ?? "";
       const raw = await req.text();
-      if (!secret || !verifyStripeSignature(raw, sig, secret)) {
+      if (!secret || !verifyPaddleSignature(raw, sig, secret)) {
         return error(400, "Bad signature");
       }
       try {
-        applyStripeEvent(JSON.parse(raw));
+        applyPaddleEvent(JSON.parse(raw));
       } catch (e) {
-        console.error("[Thread] stripe webhook handling failed:", e);
+        console.error("[Thread] paddle webhook handling failed:", e);
         return error(500, "Webhook handling failed");
       }
       return json({ received: true });
@@ -91,39 +156,75 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     if (req.method === "GET" && pathname === "/v1/account") {
       const account = getAccount(userId);
       if (!account) return error(404, "Account not found");
-      return json({ userId, billingEnabled: billingConfigured(), ...accountView(account) });
+      return json({ userId, ...accountView(account, ideaCountFor(userId)) });
     }
 
-    if (req.method === "POST" && pathname === "/v1/billing/checkout") {
-      if (!billingConfigured()) return error(501, "Billing is not configured");
-      const account = getAccount(userId);
-      if (!account) return error(404, "Account not found");
+    // --- Claim an anonymous account by attaching a verified email --------------------------
+    if (req.method === "POST" && pathname === "/v1/account/email") {
+      let body: { email?: string };
       try {
-        return json({ url: await createCheckoutSession(userId, account) });
-      } catch (e) {
-        return error(502, e instanceof Error ? e.message : "Checkout failed");
+        body = (await req.json()) as { email?: string };
+      } catch {
+        return error(400, "Invalid JSON body");
       }
+      const email = (body.email ?? "").trim();
+      if (!EMAIL_RE.test(email)) return error(400, "A valid email is required");
+      try {
+        const code = await issueCode(email);
+        await sendEmail({ to: email, ...signInCodeEmail(code) });
+      } catch (e) {
+        if (e instanceof RateLimitedError) return error(429, e.message);
+        return error(502, "Could not send the code");
+      }
+      return json({ ok: true });
+    }
+
+    if (req.method === "POST" && pathname === "/v1/account/email/verify") {
+      let body: { email?: string; code?: string };
+      try {
+        body = (await req.json()) as { email?: string; code?: string };
+      } catch {
+        return error(400, "Invalid JSON body");
+      }
+      const email = (body.email ?? "").trim();
+      const code = (body.code ?? "").trim();
+      if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return error(400, "Email and 6-digit code are required");
+      if (!(await consumeCode(email, code))) return error(400, "That code is wrong or expired", "bad_code");
+      try {
+        attachEmail(userId, email);
+      } catch (e) {
+        if (e instanceof EmailInUseError) {
+          return error(409, "That email already belongs to another Thread account. Sign in with it instead.", "email_in_use");
+        }
+        throw e;
+      }
+      return json({ userId, ...accountView(getAccount(userId)!, ideaCountFor(userId)) });
     }
 
     if (req.method === "GET" && pathname === "/v1/billing/portal") {
       const account = getAccount(userId);
-      if (!account?.stripeCustomerId) return error(409, "No billing account yet -- subscribe first");
+      if (!account?.paddleCustomerId) return error(409, "No billing account yet -- subscribe first");
       try {
-        return json({ url: await createPortalSession(account) });
+        return json({ url: await createPortalLink(account) });
       } catch (e) {
         return error(502, e instanceof Error ? e.message : "Portal failed");
       }
     }
 
-    // Soft lock: capture routes require an active trial or subscription. Reads are never gated.
-    // No-op until billing is actually configured, so deploying this changes nothing on its own.
+    // Soft lock. Reads are never gated. No-op until Paddle is actually configured.
     const isCaptureRoute =
       req.method === "POST" && (pathname === "/v1/conversations" || pathname === "/v1/paste");
-    if (isCaptureRoute && billingConfigured() && !isEntitled(getAccount(userId))) {
-      return json(
-        { error: "Your Thread trial has ended. Subscribe to keep capturing.", code: "subscription_required" },
+    if (isCaptureRoute && billingConfigured() && !canCapture(getAccount(userId), ideaCountFor(userId))) {
+      return error(
         402,
+        "You've hit the Free plan's 25-idea limit. Upgrade to Pro at thread.com to keep capturing.",
+        "upgrade_required",
       );
+    }
+
+    // MCP / AI continuation is a Pro feature.
+    if (req.method === "POST" && pathname === "/v1/continue" && billingConfigured() && !isProActive(getAccount(userId))) {
+      return error(402, "Continuing an idea with AI is a Pro feature. Upgrade at thread.com.", "pro_required");
     }
 
     const db = openUserDb(userId);

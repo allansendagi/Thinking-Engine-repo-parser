@@ -1,189 +1,209 @@
 import { createHmac, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
-import { findAccountByStripeCustomer, updateSubscription, type Account, type SubscriptionStatus } from "./auth";
+import {
+  findAccountByPaddleCustomer,
+  setPlan,
+  type Account,
+  type Plan,
+  type SubscriptionStatus,
+} from "./auth";
 
 /**
- * Stripe billing, done with plain `fetch` + manual webhook-signature verification -- no `stripe`
- * SDK dependency (keeps the single-binary, Railpack-friendly build). Trial is 7 days, granted at
- * account creation and tracked locally (no card); converting to Pro is a Stripe Checkout. Access
- * is a SOFT lock: reads always work so you can recover your thinking; only new captures are gated.
+ * Paddle billing (Merchant of Record), done with plain `fetch` + manual webhook-signature
+ * verification -- no Paddle SDK, keeping the single-binary build.
  *
- * Required env: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID.
- * Optional: APP_PUBLIC_URL (redirect base; defaults to the marketing site).
+ * Model: one permanent **Free** plan (capture up to FREE_IDEA_CAP idea nodes, unlimited reads
+ * forever) + one **Pro** plan (unlimited capture + MCP/AI access). No timed trial. Checkout
+ * happens on the website with Paddle.js; this module only verifies webhooks and mints the
+ * customer-portal link. Access is a SOFT lock: reads always work, only new capture / AI is gated.
+ *
+ * Required env: PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, PADDLE_PRICE_ID.
+ * Optional: PADDLE_ENV ("sandbox" | "production", default "production"), PADDLE_PRICE_ID_YEARLY,
+ * APP_PUBLIC_URL (portal return URL; defaults to the marketing site).
  */
 
-const STRIPE_API = "https://api.stripe.com/v1";
 const PUBLIC_URL = () => process.env.APP_PUBLIC_URL ?? "https://mind-stream-continuity.vercel.app";
+const paddleApiBase = () =>
+  process.env.PADDLE_ENV === "sandbox" ? "https://sandbox-api.paddle.com" : "https://api.paddle.com";
+
+/** Free accounts may capture up to this many idea nodes before Pro is required. */
+export const FREE_IDEA_CAP = 25;
 
 export function billingConfigured(): boolean {
-  return !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRICE_ID);
+  return !!(process.env.PADDLE_API_KEY && process.env.PADDLE_PRICE_ID && process.env.PADDLE_WEBHOOK_SECRET);
 }
 
-/** The gate. True = allowed to capture. Reads are never gated on this. */
-export function isEntitled(account: Account | null, now: Date = new Date()): boolean {
-  if (!account) return false;
+/** Pro and currently paying (or in grace / paid-through-period-end). Gates MCP + /v1/continue. */
+export function isProActive(account: Account | null, now: Date = new Date()): boolean {
+  if (!account || account.plan !== "pro") return false;
   switch (account.status) {
     case "active":
-    case "past_due": // grace: Stripe is still retrying payment
+    case "past_due":
       return true;
-    case "trialing":
-      return account.trialEndsAt != null && new Date(account.trialEndsAt) > now;
     case "canceled":
-      // Canceled but paid through the end of the current period.
       return account.currentPeriodEnd != null && new Date(account.currentPeriodEnd) > now;
     default:
       return false;
   }
 }
 
+/** The capture gate. `ideaCount` is this user's current idea-node count. */
+export function canCapture(account: Account | null, ideaCount: number, now: Date = new Date()): boolean {
+  if (isProActive(account, now)) return true;
+  return ideaCount < FREE_IDEA_CAP;
+}
+
 /** Shape the Mac app / website read from GET /v1/account. */
-export function accountView(account: Account, now: Date = new Date()): {
+export function accountView(account: Account, ideaCount: number, now: Date = new Date()): {
+  plan: Plan;
   status: SubscriptionStatus;
-  entitled: boolean;
-  trialEndsAt: string | null;
-  trialDaysLeft: number | null;
+  isPro: boolean;
+  canCapture: boolean;
+  ideaCount: number;
+  ideaCap: number;
   currentPeriodEnd: string | null;
+  email: string | null;
+  billingEnabled: boolean;
 } {
-  const trialDaysLeft =
-    account.status === "trialing" && account.trialEndsAt
-      ? Math.max(0, Math.ceil((new Date(account.trialEndsAt).getTime() - now.getTime()) / 86_400_000))
-      : null;
   return {
+    plan: account.plan,
     status: account.status,
-    entitled: isEntitled(account, now),
-    trialEndsAt: account.trialEndsAt,
-    trialDaysLeft,
+    isPro: isProActive(account, now),
+    canCapture: canCapture(account, ideaCount, now),
+    ideaCount,
+    ideaCap: FREE_IDEA_CAP,
     currentPeriodEnd: account.currentPeriodEnd,
+    email: account.email,
+    billingEnabled: billingConfigured(),
   };
 }
 
-async function stripe(path: string, form: Record<string, string>): Promise<Record<string, unknown>> {
-  const res = await fetch(`${STRIPE_API}${path}`, {
-    method: "POST",
+async function paddle(path: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
+  const res = await fetch(`${paddleApiBase()}${path}`, {
+    ...init,
     headers: {
-      authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
-      "content-type": "application/x-www-form-urlencoded",
+      authorization: `Bearer ${process.env.PADDLE_API_KEY}`,
+      "content-type": "application/json",
+      ...(init.headers ?? {}),
     },
-    body: new URLSearchParams(form).toString(),
   });
-  const body = (await res.json()) as Record<string, unknown>;
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
-    const err = body.error as { message?: string } | undefined;
-    throw new Error(`Stripe ${res.status}: ${err?.message ?? "request failed"}`);
+    const err = body.error as { detail?: string } | undefined;
+    throw new Error(`Paddle ${res.status}: ${err?.detail ?? "request failed"}`);
   }
   return body;
 }
 
-export async function createCheckoutSession(userId: string, account: Account): Promise<string> {
-  const form: Record<string, string> = {
-    mode: "subscription",
-    "line_items[0][price]": process.env.STRIPE_PRICE_ID!,
-    "line_items[0][quantity]": "1",
-    client_reference_id: userId,
-    "subscription_data[metadata][thread_user_id]": userId,
-    success_url: `${PUBLIC_URL()}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${PUBLIC_URL()}/pricing?canceled=1`,
-    allow_promotion_codes: "true",
-  };
-  if (account.stripeCustomerId) form.customer = account.stripeCustomerId;
-  const session = await stripe("/checkout/sessions", form);
-  return session.url as string;
-}
-
-export async function createPortalSession(account: Account): Promise<string> {
-  if (!account.stripeCustomerId) throw new Error("No Stripe customer for this account");
-  const session = await stripe("/billing_portal/sessions", {
-    customer: account.stripeCustomerId,
-    return_url: `${PUBLIC_URL()}/account`,
+/** An authenticated Paddle customer-portal link (self-serve cancel / update card / invoices). */
+export async function createPortalLink(account: Account): Promise<string> {
+  if (!account.paddleCustomerId) throw new Error("No Paddle customer for this account");
+  const body = await paddle(`/customers/${account.paddleCustomerId}/portal-sessions`, {
+    method: "POST",
+    body: JSON.stringify(
+      account.paddleSubscriptionId ? { subscription_ids: [account.paddleSubscriptionId] } : {},
+    ),
   });
-  return session.url as string;
+  const data = body.data as
+    | { urls?: { general?: { overview?: string } } }
+    | undefined;
+  const url = data?.urls?.general?.overview;
+  if (!url) throw new Error("Paddle did not return a portal URL");
+  return url;
 }
 
-// --- Webhook signature verification (Stripe's t=/v1= scheme) ---------------------------------
+// --- Webhook signature verification (Paddle's `ts=..;h1=..` scheme) --------------------------
 
 const TOLERANCE_SECONDS = 300;
 
-export function verifyStripeSignature(payload: string, sigHeader: string, secret: string, now = Date.now()): boolean {
+export function verifyPaddleSignature(payload: string, sigHeader: string, secret: string, now = Date.now()): boolean {
   const parts = Object.fromEntries(
-    sigHeader.split(",").map((kv) => {
+    sigHeader.split(";").map((kv) => {
       const [k, v] = kv.split("=");
       return [k?.trim(), v?.trim()];
     }),
-  ) as { t?: string; v1?: string };
-  if (!parts.t || !parts.v1) return false;
+  ) as { ts?: string; h1?: string };
+  if (!parts.ts || !parts.h1) return false;
 
-  const timestamp = Number(parts.t);
+  const timestamp = Number(parts.ts);
   if (!Number.isFinite(timestamp) || Math.abs(now / 1000 - timestamp) > TOLERANCE_SECONDS) return false;
 
-  const expected = createHmac("sha256", secret).update(`${parts.t}.${payload}`).digest("hex");
+  const expected = createHmac("sha256", secret).update(`${parts.ts}:${payload}`).digest("hex");
   const a = Buffer.from(expected, "hex");
-  const b = Buffer.from(parts.v1, "hex");
+  const b = Buffer.from(parts.h1, "hex");
   return a.length === b.length && nodeTimingSafeEqual(a, b);
 }
 
-interface StripeEvent {
-  type: string;
-  data: { object: Record<string, unknown> };
+interface PaddleEvent {
+  event_type: string;
+  data: Record<string, unknown>;
 }
 
-/** Apply a verified webhook event to the local account row. Idempotent. */
-export function applyStripeEvent(event: StripeEvent): void {
-  const obj = event.data.object;
+/** Map a Paddle subscription status onto our local union. */
+export function mapPaddleStatus(status: string): SubscriptionStatus {
+  switch (status) {
+    case "active":
+    case "trialing":
+      return "active";
+    case "past_due":
+      return "past_due";
+    case "canceled":
+    case "paused":
+      return "canceled";
+    default:
+      return "incomplete";
+  }
+}
 
-  const userIdFromEvent = (): string | null => {
-    const ref = (obj.client_reference_id as string) ?? null;
-    if (ref) return ref;
-    const meta = (obj.metadata as Record<string, string> | undefined) ?? {};
-    if (meta.thread_user_id) return meta.thread_user_id;
-    const customer = obj.customer as string | undefined;
-    if (customer) return findAccountByStripeCustomer(customer)?.userId ?? null;
+/** Apply a verified Paddle webhook event to the local account row. Idempotent. */
+export function applyPaddleEvent(event: PaddleEvent): void {
+  const data = event.data ?? {};
+  const customData = (data.custom_data as Record<string, string> | null) ?? {};
+  const customerId = (data.customer_id as string | undefined) ?? undefined;
+
+  const resolveUserId = (): string | null => {
+    if (customData.thread_user_id) return customData.thread_user_id;
+    if (customerId) return findAccountByPaddleCustomer(customerId)?.userId ?? null;
     return null;
   };
 
-  switch (event.type) {
-    case "checkout.session.completed": {
-      const userId = userIdFromEvent();
+  switch (event.event_type) {
+    case "subscription.activated":
+    case "subscription.created":
+    case "subscription.updated":
+    case "subscription.resumed": {
+      const userId = resolveUserId();
       if (!userId) return;
-      updateSubscription(userId, {
-        status: "active",
-        stripeCustomerId: obj.customer as string,
+      const period = data.current_billing_period as { ends_at?: string } | undefined;
+      setPlan(userId, {
+        plan: "pro",
+        status: mapPaddleStatus(data.status as string),
+        paddleCustomerId: customerId ?? null,
+        paddleSubscriptionId: (data.id as string | undefined) ?? null,
+        currentPeriodEnd: period?.ends_at ?? null,
       });
       return;
     }
-    case "customer.subscription.created":
-    case "customer.subscription.updated": {
-      const userId = userIdFromEvent();
+    case "subscription.past_due": {
+      const userId = resolveUserId();
       if (!userId) return;
-      const status = mapSubStatus(obj.status as string);
-      const periodEnd = obj.current_period_end as number | undefined;
-      updateSubscription(userId, {
-        status,
-        stripeCustomerId: obj.customer as string,
-        currentPeriodEnd: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
-      });
+      setPlan(userId, { plan: "pro", status: "past_due", paddleCustomerId: customerId ?? null });
       return;
     }
-    case "customer.subscription.deleted": {
-      const userId = userIdFromEvent();
+    case "subscription.canceled":
+    case "subscription.paused": {
+      const userId = resolveUserId();
       if (!userId) return;
-      updateSubscription(userId, { status: "canceled" });
+      // Stays Pro until currentPeriodEnd; the capture gate treats it as Free after that.
+      setPlan(userId, { status: "canceled" });
+      return;
+    }
+    case "transaction.completed": {
+      // Activation rides the subscription event; just make sure we can resolve the customer later.
+      const userId = customData.thread_user_id ?? null;
+      if (userId && customerId) setPlan(userId, { paddleCustomerId: customerId });
       return;
     }
     default:
       return; // ignore everything else
-  }
-}
-
-function mapSubStatus(stripeStatus: string): SubscriptionStatus {
-  switch (stripeStatus) {
-    case "active":
-    case "trialing":
-      return "active"; // a Stripe trial still means "paying customer" to us
-    case "past_due":
-    case "unpaid":
-      return "past_due";
-    case "canceled":
-      return "canceled";
-    default:
-      return "incomplete";
   }
 }
