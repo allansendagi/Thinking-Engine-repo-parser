@@ -30,6 +30,15 @@ export type CognitiveEventType =
   | "resolution";
 
 /**
+ * The extractor's second judgment, orthogonal to `confidence`. `confidence` = "did this
+ * genuinely happen in the human's thinking" (extraction reliability). `persistence` = "is this
+ * worth carrying into the long-term thinking graph" (editorial worth). A genuine but throwaway
+ * "hmm, maybe X could work differently" is high-confidence, low-persistence. The signal gate
+ * (state/signalGate.ts) routes on this.
+ */
+export type PersistenceLevel = "high" | "medium" | "low";
+
+/**
  * What the extraction pass thinks happened in one canonical event. Not yet attached to an
  * IdeaNode -- that's identity resolution's job. `confidence` is the extractor's own estimate
  * that this is a substantive cognitive event at all, not extraction noise.
@@ -40,6 +49,10 @@ export interface CognitiveEvent {
   /** The candidate statement, in the extractor's words grounded in the source text. */
   statement: string;
   confidence: number; // 0..1
+  /** Worth-remembering judgment. See PersistenceLevel. Treated as "high" for pre-gate data. */
+  persistence: PersistenceLevel;
+  /** Which rubric bullet drove `persistence` -- one short phrase, so a discard is auditable. */
+  persistenceReason?: string;
   /** Primary source -- the ONLY one covered by the grounding/hallucination guarantee. */
   sourceEventId: string;
   /** Verbatim quote from the source CanonicalEvent that grounds this extraction. */
@@ -50,7 +63,24 @@ export interface CognitiveEvent {
   additionalSourceEventIds: string[];
 }
 
-export type IdeaState = "developing" | "established" | "rejected" | "dormant";
+/**
+ * A grounded cognitive event the signal gate chose NOT to promote. Stored (not dropped) so a
+ * threshold or rubric change is replayable, so "why didn't my idea show up" is answerable, and
+ * so eval can score the gate. `gateReason` is the deterministic rule that fired.
+ */
+export interface DiscardedEvent {
+  event: CognitiveEvent;
+  gateReason: string;
+  gateVersion: number;
+}
+
+/**
+ * `contested` is set when a `contradiction` event lands on an existing idea: the idea now holds
+ * a statement that conflicts with its own current formulation, and that tension is recorded as
+ * an unresolved open loop. A later `resolution` clears the loop and returns the idea to
+ * `developing`. See state/buildIdeaNode.ts.
+ */
+export type IdeaState = "developing" | "established" | "rejected" | "dormant" | "contested";
 
 export interface EvolutionStep {
   cognitiveEventId: string;
@@ -104,16 +134,48 @@ export interface IdentityResolution {
 export const IDENTITY_RESOLUTION_MERGE_THRESHOLD = 0.75;
 
 /**
+ * Signal gate (state/signalGate.ts). Bumped whenever the gate's rubric or routing changes, so a
+ * stored discard can be traced to the ruleset that produced it and a threshold change is
+ * replayable. Not a probability -- a schema version.
+ */
+export const SIGNAL_GATE_VERSION = 1;
+
+/**
+ * A ranked candidate at or above this score counts as "this event attaches to an idea the user
+ * already developed", which lets a medium-persistence event through the gate. Deliberately low:
+ * a missed-persist is silent and unrecoverable-in-place, a false-persist is a prunable list
+ * entry, so the gate leans permissive. Env-overridable (THREAD_SIGNAL_GATE_STRONG_MATCH) for
+ * tuning against a real eval set without a redeploy.
+ */
+export const SIGNAL_GATE_STRONG_MATCH_SCORE = 0.18;
+
+/**
  * The aggregation the spec calls the primary object handed to a human or an AI (THREAD.md §10).
  * Built fresh from IdeaNode[] + CognitiveEvent[] on every request -- it is a view, not a stored
  * object, so it can never drift out of sync with the underlying ideas.
  */
 export interface ThinkingState {
   topic: string | null;
-  currentIdeas: { id: string; title: string; state: IdeaState; currentFormulation: string }[];
+  currentIdeas: {
+    id: string;
+    title: string;
+    state: IdeaState;
+    currentFormulation: string;
+    /** Tool the idea was most recently developed in ("chatgpt" | "claude" | ...), or null. */
+    latestSource: string | null;
+  }[];
   recentChanges: { ideaId: string; ideaTitle: string; formulation: string; createdAt: string }[];
   decisions: { ideaId: string; ideaTitle: string; statement: string; decidedAt: string }[];
-  openLoops: { ideaId: string; ideaTitle: string; loopId: string; statement: string; resolved: boolean }[];
+  openLoops: {
+    ideaId: string;
+    ideaTitle: string;
+    loopId: string;
+    statement: string;
+    resolved: boolean;
+    createdAt: string;
+    /** Tool the parent idea was most recently developed in, or null. Mirrors currentIdeas[].latestSource. */
+    latestSource: string | null;
+  }[];
   contradictions: { ideaId: string; ideaTitle: string; formulation: string; createdAt: string }[];
   relatedIdeas: { id: string; title: string }[];
 }

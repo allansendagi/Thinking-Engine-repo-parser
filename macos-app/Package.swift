@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "ThreadMac",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(name: "ThreadMac"),
         .testTarget(name: "ThreadMacTests", dependencies: ["ThreadMac"]),

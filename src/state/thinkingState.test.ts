@@ -26,8 +26,8 @@ function idea(overrides: Partial<IdeaNode> = {}): IdeaNode {
 
 function cognitiveEvents(): CognitiveEvent[] {
   return [
-    { id: "cog_1", type: "new_idea", statement: "x", confidence: 0.9, sourceEventId: "src_1", evidenceQuote: "x", additionalSourceEventIds: [] },
-    { id: "cog_2", type: "contradiction", statement: "y", confidence: 0.9, sourceEventId: "src_2", evidenceQuote: "y", additionalSourceEventIds: [] },
+    { id: "cog_1", type: "new_idea", statement: "x", confidence: 0.9, persistence: "high", sourceEventId: "src_1", evidenceQuote: "x", additionalSourceEventIds: [] },
+    { id: "cog_2", type: "contradiction", statement: "y", confidence: 0.9, persistence: "high", sourceEventId: "src_2", evidenceQuote: "y", additionalSourceEventIds: [] },
   ];
 }
 
@@ -47,6 +47,20 @@ describe("buildThinkingState", () => {
     expect(state.contradictions[0]?.formulation).toBe("Authority must be verifiable.");
   });
 
+  test("an idea in the `contested` state is a contradiction even with no cognitive events loaded", () => {
+    const contested = idea({ state: "contested" });
+    const state = buildThinkingState([contested], []); // no cognitive events at all
+    expect(state.contradictions).toHaveLength(1);
+    expect(state.contradictions[0]?.ideaId).toBe("idea_1");
+    expect(state.contradictions[0]?.formulation).toBe("Authority must be verifiable.");
+  });
+
+  test("does not double-count a contested idea that also has a contradiction evolution step", () => {
+    const contested = idea({ state: "contested" });
+    const state = buildThinkingState([contested], cognitiveEvents());
+    expect(state.contradictions).toHaveLength(1);
+  });
+
   test("recentChanges respects the window and excludes the old step", () => {
     const state = buildThinkingState([idea()], cognitiveEvents(), { recentWindowDays: 30 });
     expect(state.recentChanges).toHaveLength(1);
@@ -63,5 +77,23 @@ describe("buildThinkingState", () => {
     const related = idea({ id: "idea_2", title: "Unrelated On Purpose", currentFormulation: "Nothing.", evolution: [], relatedIdeaIds: [] });
     const state = buildThinkingState([idea(), related], cognitiveEvents(), { topic: "authority" });
     expect(state.relatedIdeas.map((r) => r.id)).toEqual(["idea_2"]);
+  });
+
+  test("latestSource resolves the tool of the newest evolution step for ideas and their open loops", () => {
+    const sourceByEventId = new Map([
+      ["src_1", "chatgpt"],
+      ["src_2", "claude"],
+    ]);
+    const state = buildThinkingState([idea()], cognitiveEvents(), {}, sourceByEventId);
+
+    expect(state.currentIdeas[0]?.latestSource).toBe("claude");
+    expect(state.openLoops[0]?.latestSource).toBe("claude");
+    expect(state.openLoops[0]?.createdAt).toBe(now);
+  });
+
+  test("latestSource is null when no source map is supplied", () => {
+    const state = buildThinkingState([idea()], cognitiveEvents());
+    expect(state.currentIdeas[0]?.latestSource).toBeNull();
+    expect(state.openLoops[0]?.latestSource).toBeNull();
   });
 });

@@ -16,9 +16,30 @@ CREATE TABLE IF NOT EXISTS cognitive_events (
   type TEXT NOT NULL,
   statement TEXT NOT NULL,
   confidence REAL NOT NULL,
+  -- Worth-remembering judgment, a separate axis from confidence: 'high' | 'medium' | 'low'.
+  -- Defaulted so rows written before the signal gate keep today's behavior.
+  persistence TEXT NOT NULL DEFAULT 'high',
+  persistence_reason TEXT,
   source_event_id TEXT NOT NULL REFERENCES canonical_events(id),
   evidence_quote TEXT NOT NULL,
   why_it_matters TEXT
+);
+
+-- Signal-gate audit trail: grounded cognitive events that were NOT promoted to ideas. Stored so
+-- a gate threshold/rubric change (gate_version) can be replayed, and so "why isn't my idea here"
+-- is answerable. Never joined into the idea graph.
+CREATE TABLE IF NOT EXISTS discarded_events (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  statement TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  persistence TEXT NOT NULL,
+  persistence_reason TEXT,
+  source_event_id TEXT NOT NULL REFERENCES canonical_events(id),
+  evidence_quote TEXT NOT NULL,
+  gate_reason TEXT NOT NULL,
+  gate_version INTEGER NOT NULL,
+  discarded_at TEXT NOT NULL
 );
 
 -- Contributing context beyond the primary (source_event_id, evidence_quote) pair. NOT covered

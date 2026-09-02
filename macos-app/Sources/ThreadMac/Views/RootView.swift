@@ -6,15 +6,20 @@ struct RootView: View {
     @State private var showSettings = false
     @State private var showPaste = false
 
+    private var inDetail: Bool { appState.selectedIdeaId != nil }
+
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+
+            if appState.isPaired && appState.isLocked && !inDetail {
+                PaywallBanner()
+            }
 
             Group {
                 if !appState.isPaired {
                     PairingView()
-                } else if appState.selectedIdeaId != nil {
+                } else if inDetail {
                     IdeaDetailView()
                 } else {
                     MenuBarListView()
@@ -23,104 +28,131 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if let error = appState.errorMessage, appState.isPaired {
-                Divider()
                 Text(error)
-                    .font(.caption)
+                    .font(.system(size: 11))
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
             }
 
-            Divider()
-            StatusFooter()
+            footer
         }
         .frame(width: Theme.panelWidth, height: Theme.panelHeight)
-        .background(Theme.panelBackground)
+        .background {
+            // Exact demo surface: #F6F6F8 @ 82% over a light frosted material (the mock's
+            // rgba(246,246,248,.82) + backdrop-filter blur).
+            ZStack {
+                VisualEffectBackground()
+                Theme.panelTint.opacity(0.82)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.corner))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.corner)
+                .inset(by: 0.25)
+                .stroke(Color.white.opacity(0.7), lineWidth: 0.5)   // inset highlight
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.corner)
+                .stroke(Color.black.opacity(0.22), lineWidth: 0.5)   // edge hairline
+        )
+        .preferredColorScheme(.light)  // the design is a light frosted panel, deliberately
         .task { await appState.refresh() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
-        // Escape: step back out of a detail view; from the list, let the panel close itself.
         .onExitCommand {
-            if appState.selectedIdeaId != nil { appState.closeIdea() }
-            else { NSApp.keyWindow?.orderOut(nil) }
+            if inDetail { appState.closeIdea() }
+            else { NotificationCenter.default.post(name: .threadDismissPanel, object: nil) }
         }
     }
+
+    // MARK: header (52pt)
 
     private var header: some View {
         HStack(spacing: 8) {
-            if appState.selectedIdeaId != nil {
-                Button(action: { appState.closeIdea() }) {
-                    Image(systemName: "chevron.left")
+            if inDetail {
+                HeaderButton(size: 26) { appState.closeIdea() } label: {
+                    Glyph(kind: .back, size: 15).foregroundStyle(Theme.ink(0.6))
                 }
-                .buttonStyle(.plain)
-                .help("Back")
+                .padding(.leading, -6)
             }
-            Text("Thread").font(.system(size: 15, weight: .semibold))
-            Spacer()
+            Text(inDetail ? "Recent" : "Thread")
+                .font(.system(size: inDetail ? 13 : 15, weight: inDetail ? .medium : .semibold))
+                .kerning(inDetail ? -0.104 : -0.225)
+                .foregroundStyle(Theme.ink(inDetail ? 0.6 : 0.85))
+
+            Spacer(minLength: 0)
+
             if appState.isPaired {
-                Button(action: { showPaste = true }) { Image(systemName: "plus") }
-                    .buttonStyle(.plain)
-                    .help("Add a conversation by pasting it")
-                Button(action: { Task { await appState.refresh() } }) { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain)
-                    .help("Refresh")
-                Button(action: { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }) {
-                    Image(systemName: "macwindow")
+                HStack(spacing: 1) {
+                    HeaderButton { Task { await appState.refresh() } } label: {
+                        Glyph(kind: .refresh, size: 15)
+                    }.help("Refresh")
+                    HeaderButton {
+                        openWindow(id: "main")
+                        NSApp.activate(ignoringOtherApps: true)
+                        NotificationCenter.default.post(name: .threadDismissPanel, object: nil)
+                    } label: {
+                        Glyph(kind: .window, size: 15)
+                    }.help("Open in Window")
+                    HeaderButton { showPaste = true } label: {
+                        Glyph(kind: .plus, size: 16)
+                    }.help("Add a conversation")
+                    HeaderButton { showSettings = true } label: {
+                        Image(systemName: "gearshape").font(.system(size: 12, weight: .regular))
+                    }.help("Settings")
                 }
-                .buttonStyle(.plain)
-                .help("Open in Window")
+                .foregroundStyle(Theme.ink(0.55))
             }
-            Button(action: { showSettings = true }) { Image(systemName: "gearshape") }
-                .buttonStyle(.plain)
-                .help("Settings")
         }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-}
-
-/// "Trustworthy" principle: status is always visible -- account + whether capture is live.
-struct StatusFooter: View {
-    @EnvironmentObject var appState: AppState
-
-    private var dotColor: Color {
-        switch appState.captureStatus {
-        case .capturing: return Theme.accent
-        case .idle: return .secondary
-        case .unpaired: return .orange
-        }
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .frame(height: 52)
     }
 
-    private var captureLabel: String {
+    // MARK: footer (26pt)
+
+    private var footer: some View {
+        HStack(spacing: 6) {
+            Glyph(kind: .cloud, size: 12)
+            Text(statusText).font(.system(size: 11))
+            Spacer(minLength: 0)
+            if let n = appState.thinkingState?.currentIdeas.count {
+                Text("\(n) idea\(n == 1 ? "" : "s")")
+                    .font(.system(size: 11)).monospacedDigit()
+            }
+        }
+        .foregroundStyle(Theme.ink(0.42))
+        .padding(.horizontal, 14)
+        .frame(height: 26)
+        .overlay(Rectangle().fill(Theme.ink(0.1)).frame(height: 0.5), alignment: .top)
+    }
+
+    private var statusText: String {
         switch appState.captureStatus {
         case .capturing: return "Capturing"
-        case .idle: return "Connected"
+        case .idle: return appState.lastExtensionHandshake == nil ? "Connected" : "Updated just now"
         case .unpaired: return "Not paired"
         }
     }
+}
+
+/// A 28pt square header icon button with a soft hover fill (the mock's toolbar buttons).
+struct HeaderButton<Label: View>: View {
+    var size: CGFloat = 28
+    let action: () -> Void
+    @ViewBuilder let label: Label
+    @State private var hover = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(dotColor).frame(width: 7, height: 7)
-            // capture status · privacy mode · idea count -- the three the spec asks to always show
-            Text(captureLabel).font(.system(size: 11)).foregroundStyle(.secondary)
-            if appState.isPaired {
-                dot
-                Text(appState.privacyMode).font(.system(size: 11)).foregroundStyle(.secondary)
-                if let n = appState.thinkingState?.currentIdeas.count {
-                    dot
-                    Text("\(n) idea\(n == 1 ? "" : "s")").font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
+        Button(action: action) {
+            label
+                .frame(width: size, height: size)
+                .background(hover ? Theme.ink(0.07) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-    }
-
-    private var dot: some View {
-        Text("·").font(.system(size: 11)).foregroundStyle(.tertiary)
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
     }
 }

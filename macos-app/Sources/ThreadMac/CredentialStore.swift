@@ -28,6 +28,23 @@ enum CredentialStore {
         return base.appendingPathComponent("credential.json")
     }
 
+    /// Coerces whatever the user typed into a usable absolute base URL. A bare host
+    /// ("api.example.com") or a blank both become `URL(string:)` values that URLSession rejects
+    /// with "unsupported URL" on every request -- so add the scheme, drop trailing slashes, and
+    /// fall back to the default if the result still isn't a real https URL.
+    static func normalizeBaseURL(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { return defaultApiBaseUrl }
+        if !s.lowercased().hasPrefix("http://") && !s.lowercased().hasPrefix("https://") {
+            s = "https://" + s
+        }
+        while s.hasSuffix("/") { s.removeLast() }
+        guard let u = URL(string: s), let scheme = u.scheme, scheme.hasPrefix("http"), u.host != nil else {
+            return defaultApiBaseUrl
+        }
+        return s
+    }
+
     static var apiBaseUrl: String {
         get {
             let stored = UserDefaults.standard.string(forKey: apiBaseUrlKey)?.trimmingCharacters(in: .whitespaces)
@@ -37,9 +54,9 @@ enum CredentialStore {
             return stored
         }
         set {
-            let v = newValue.trimmingCharacters(in: .whitespaces)
-            if v.hasPrefix("http") { UserDefaults.standard.set(v, forKey: apiBaseUrlKey) }
-            else { UserDefaults.standard.removeObject(forKey: apiBaseUrlKey) }
+            let v = normalizeBaseURL(newValue)
+            if v == defaultApiBaseUrl { UserDefaults.standard.removeObject(forKey: apiBaseUrlKey) }
+            else { UserDefaults.standard.set(v, forKey: apiBaseUrlKey) }
         }
     }
 

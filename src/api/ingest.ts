@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { CanonicalEvent, Role } from "../types";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { runPipeline, persistPipelineResult, type PipelineProviders } from "../state/pipeline";
+import { replayDiscardedEvents } from "../state/replayDiscarded";
 
 export interface IncomingMessage {
   id: string;
@@ -19,7 +20,12 @@ export interface IngestConversationInput {
 
 export interface IngestResult {
   newCanonicalEvents: number;
+  /** Grounded events the signal gate PROMOTED to ideas this call. */
   newCognitiveEvents: number;
+  /** Grounded events the signal gate declined to persist (stored for replay, not attached). */
+  discardedEvents: number;
+  /** Earlier discards this call promoted into ideas because the idea they belong to now exists. */
+  promotedFromDiscard: number;
   rejectedExtractions: number;
   ideaCount: number;
 }
@@ -39,7 +45,14 @@ export async function ingestConversation(
   const existingIdeaCount = () => loadIdeas(db).length;
 
   if (input.messages.length === 0) {
-    return { newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: existingIdeaCount() };
+    return {
+      newCanonicalEvents: 0,
+      newCognitiveEvents: 0,
+      discardedEvents: 0,
+      promotedFromDiscard: 0,
+      rejectedExtractions: 0,
+      ideaCount: existingIdeaCount(),
+    };
   }
 
   const existingIds = new Set(
@@ -61,7 +74,14 @@ export async function ingestConversation(
   const newEventIds = new Set(allEvents.filter((e) => !existingIds.has(e.id)).map((e) => e.id));
 
   if (newEventIds.size === 0) {
-    return { newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: existingIdeaCount() };
+    return {
+      newCanonicalEvents: 0,
+      newCognitiveEvents: 0,
+      discardedEvents: 0,
+      promotedFromDiscard: 0,
+      rejectedExtractions: 0,
+      ideaCount: existingIdeaCount(),
+    };
   }
 
   const existingIdeas = new Map(loadIdeas(db).map((i) => [i.id, i]));
@@ -69,10 +89,16 @@ export async function ingestConversation(
   const result = await runPipeline(allEvents, providers, { existingIdeas, newEventIds });
   persistPipelineResult(db, allEvents, result);
 
+  // Reconsider earlier medium-value discards now that this call may have created the idea they
+  // belong to. Incremental-only -- see replayDiscardedEvents.
+  const replay = await replayDiscardedEvents(db, providers);
+
   return {
     newCanonicalEvents: newEventIds.size,
-    newCognitiveEvents: result.cognitiveEvents.length,
+    newCognitiveEvents: result.cognitiveEvents.length + replay.promoted,
+    discardedEvents: result.discardedEvents.length,
+    promotedFromDiscard: replay.promoted,
     rejectedExtractions: result.rejectedExtractions.length,
-    ideaCount: result.ideas.size,
+    ideaCount: loadIdeas(db).length,
   };
 }

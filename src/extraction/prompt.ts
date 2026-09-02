@@ -23,6 +23,31 @@ A cognitive event is a high-signal moment in the human's thinking -- not everyth
 - open_loop: something left unresolved
 - resolution: an open question that gets resolved
 
+claim and question are the two leaky types -- "I think X" and "how does Y work" cover both real
+thinking and throwaway remarks. Hold them to a higher bar than the others. "Tell me more about
+NOMOS", "how does this work", "can you explain X" are requests for information, NOT questions the
+human is trying to resolve -- do not extract them at all.
+
+TWO SEPARATE JUDGMENTS per event:
+- confidence (0..1): did this genuinely happen in the human's thinking? High even for a quick
+  aside, as long as it really is a claim/idea/decision/etc and not you over-reading a pleasantry.
+- persistence ("high" | "medium" | "low"): would this still matter for reconstructing the
+  human's thinking weeks from now -- is it worth carrying into the long-term graph?
+  Score it against this rubric and name the matching bullet in persistence_reason:
+    HIGH -- establishes a new concept; changes an existing belief; materially refines an idea;
+      makes a decision; identifies a genuine unresolved question; rejects a direction; connects
+      two ideas; resolves an important uncertainty.
+    LOW -- requests information or asks the AI to elaborate; a meta-instruction to the AI
+      ("format that as a table", "use bullet points"); restating the AI's own output back;
+      repeats something already established earlier in the transcript; a vague gesture at a
+      direction with no specific claim; temporary wording likely to be rephrased; acknowledgements
+      and filler; a procedural instruction.
+    MEDIUM -- a real thought that is early, tentative, or minor: worth keeping only if it turns
+      out to attach to an idea the human is already developing.
+  Example: "Hmm, maybe authority could work differently." -> confidence 0.9, persistence "low"
+  (vague gesture, no specific claim). "Institutional authority should be independently
+  verifiable." -> confidence 0.97, persistence "high" (establishes a concept).
+
 Rules:
 - Only extract from the human's (user) turns. Assistant turns are context, not source material.
 - Some messages are marked [ALREADY PROCESSED] -- they were extracted in a previous pass. They are
@@ -33,9 +58,8 @@ Rules:
   message's text. Do not paraphrase the quote. If you cannot quote it exactly, do not extract it.
 - Every event MUST include source_event_id: the id of the message the evidence_quote came from --
   copied exactly from one of the [id] markers below, and it MUST be one of the [NEW] messages.
-- confidence reflects how confident you are this is a genuine cognitive event worth persisting,
-  not how confident you are in the extraction mechanics. Casual remarks, pleasantries, and
-  exploratory "what if" musing that isn't actually a claim should score low or be omitted.
+- confidence and persistence are different axes -- a genuine thought can be high confidence and
+  low persistence. Score both. Still omit anything that isn't a real cognitive event at all.
 - Do not invent events not grounded in the transcript. When in doubt, omit. A conversation with
   no substantive events at all is a perfectly valid, common result -- return {"events": []}.
 - Write "statement" in the human's own voice as a direct declarative sentence or a direct
@@ -51,7 +75,7 @@ Rules:
   it for genuine contributing context, not as a way to attach more evidence.
 
 Respond with JSON matching this shape exactly, and nothing else -- no commentary before or after:
-{"events": [{"type": "...", "statement": "...", "confidence": 0.0-1.0, "source_event_id": "...", "evidence_quote": "...", "why_it_matters": "... (optional)", "additional_source_event_ids": ["... (optional)"]}]}`;
+{"events": [{"type": "...", "statement": "...", "confidence": 0.0-1.0, "persistence": "high|medium|low", "persistence_reason": "...", "source_event_id": "...", "evidence_quote": "...", "why_it_matters": "... (optional)", "additional_source_event_ids": ["... (optional)"]}]}`;
 
 /**
  * `newEventIds` marks which of `events` should actually be extracted from -- the rest are

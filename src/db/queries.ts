@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { CanonicalEvent, CognitiveEvent, IdeaNode, IdeaState, Role } from "../types";
+import type { CanonicalEvent, CognitiveEvent, DiscardedEvent, IdeaNode, IdeaState, Role } from "../types";
 
 interface IdeaRow {
   id: string;
@@ -36,6 +36,8 @@ interface CognitiveEventRow {
   type: string;
   statement: string;
   confidence: number;
+  persistence: string | null;
+  persistence_reason: string | null;
   source_event_id: string;
   evidence_quote: string;
   why_it_matters: string | null;
@@ -110,12 +112,47 @@ export function loadCognitiveEvents(db: Database): CognitiveEvent[] {
       type: r.type as CognitiveEvent["type"],
       statement: r.statement,
       confidence: r.confidence,
+      persistence: (r.persistence as CognitiveEvent["persistence"]) ?? "high",
+      persistenceReason: r.persistence_reason ?? undefined,
       sourceEventId: r.source_event_id,
       evidenceQuote: r.evidence_quote,
       whyItMatters: r.why_it_matters ?? undefined,
       additionalSourceEventIds: additional,
     };
   });
+}
+
+interface DiscardedEventRow {
+  id: string;
+  type: string;
+  statement: string;
+  confidence: number;
+  persistence: string;
+  persistence_reason: string | null;
+  source_event_id: string;
+  evidence_quote: string;
+  gate_reason: string;
+  gate_version: number;
+}
+
+/** The signal gate's audit trail: grounded events that were not promoted. See discarded_events. */
+export function loadDiscardedEvents(db: Database): DiscardedEvent[] {
+  const rows = db.query("SELECT * FROM discarded_events").all() as DiscardedEventRow[];
+  return rows.map((r) => ({
+    event: {
+      id: r.id,
+      type: r.type as CognitiveEvent["type"],
+      statement: r.statement,
+      confidence: r.confidence,
+      persistence: (r.persistence as CognitiveEvent["persistence"]) ?? "high",
+      persistenceReason: r.persistence_reason ?? undefined,
+      sourceEventId: r.source_event_id,
+      evidenceQuote: r.evidence_quote,
+      additionalSourceEventIds: [],
+    },
+    gateReason: r.gate_reason,
+    gateVersion: r.gate_version,
+  }));
 }
 
 export function loadCanonicalEvents(db: Database): CanonicalEvent[] {

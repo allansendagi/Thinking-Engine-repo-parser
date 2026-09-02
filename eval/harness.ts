@@ -105,6 +105,15 @@ export async function runEval(): Promise<void> {
     console.log("");
   }
 
+  if (result.discardedEvents.length > 0) {
+    console.log(`=== Signal-gate discards (${result.discardedEvents.length}) -- grounded but not worth persisting ===`);
+    for (const d of result.discardedEvents) {
+      console.log(`  [${d.event.type}] source=${d.event.sourceEventId} persistence=${d.event.persistence} -- ${d.gateReason}`);
+      console.log(`    statement: ${d.event.statement}`);
+    }
+    console.log("");
+  }
+
   // --- Idea-attribution precision / recall --------------------------------------------------
   const requiredLabels = labels.substantiveEvents.filter((s) => s.required);
   let recallHits = 0;
@@ -133,9 +142,26 @@ export async function runEval(): Promise<void> {
       ? 1
       : (result.cognitiveEvents.length - falsePositives.length) / result.cognitiveEvents.length;
 
+  // --- Signal gate ---------------------------------------------------------------------------
+  // Of the labeled noise events, how many the model extracted at all vs. how many the gate then
+  // caught. A noise event that never reaches an idea is a win whether extraction omitted it or
+  // the gate discarded it -- this just shows which layer is doing the work.
+  const noiseExtracted = [...result.cognitiveEvents, ...result.discardedEvents.map((d) => d.event)].filter((e) =>
+    noiseSet.has(e.sourceEventId),
+  ).length;
+  const noiseGated = result.discardedEvents.filter((d) => noiseSet.has(d.event.sourceEventId)).length;
+  // A required event that the gate discarded is a false-discard -- the worst error class.
+  const requiredDiscarded = result.discardedEvents.filter((d) =>
+    requiredLabels.some((l) => l.sourceEventId === d.event.sourceEventId),
+  );
+
   // --- Provenance accuracy / hallucination rate ----------------------------------------------
-  const totalModelClaims = result.cognitiveEvents.length + result.rejectedExtractions.length;
-  const provenanceAccuracy = totalModelClaims === 0 ? 1 : result.cognitiveEvents.length / totalModelClaims;
+  // Discarded events are still GROUNDED (they passed the verbatim check; the signal gate dropped
+  // them for value, not truth), so they count as correctly-attributed claims here -- otherwise
+  // adding the gate would silently move the hallucination denominator.
+  const groundedClaims = result.cognitiveEvents.length + result.discardedEvents.length;
+  const totalModelClaims = groundedClaims + result.rejectedExtractions.length;
+  const provenanceAccuracy = totalModelClaims === 0 ? 1 : groundedClaims / totalModelClaims;
   const hallucinationRate = totalModelClaims === 0 ? 0 : result.rejectedExtractions.length / totalModelClaims;
 
   // --- Identity resolution precision -----------------------------------------------------------
@@ -200,6 +226,24 @@ export async function runEval(): Promise<void> {
     );
   }
   console.log(`${openLoopFound ? "PASS" : "FAIL"}  Open-loop captured ("who performs the verification")`);
+
+  // If the model never scores anything below "high", the gate is effectively off and every
+  // number above it is measuring a no-op. Persistence defaults to "high" on a missing field, so
+  // an all-high run is indistinguishable from the model silently dropping the judgment.
+  const allScored = [...result.cognitiveEvents, ...result.discardedEvents.map((d) => d.event)];
+  const belowHigh = allScored.filter((e) => e.persistence !== "high").length;
+
+  console.log(
+    `\n=== Signal gate ===\n` +
+      `Discarded ${result.discardedEvents.length} grounded event(s). ` +
+      `Labeled noise: ${noiseExtracted} extracted, ${noiseGated} of those caught by the gate.\n` +
+      `Persistence scored below "high" on ${belowHigh}/${allScored.length} events` +
+      (belowHigh === 0 ? "  <-- WARN: model may not be emitting persistence; gate is a no-op" : "") +
+      `\n${requiredDiscarded.length === 0 ? "PASS" : "FAIL"}  No required event was discarded by the gate` +
+      (requiredDiscarded.length > 0
+        ? ` (lost: ${requiredDiscarded.map((d) => d.event.sourceEventId).join(", ")})`
+        : ""),
+  );
 
   console.log("\n=== Reconstructed idea (for human review) ===");
   if (authorityIdea) {

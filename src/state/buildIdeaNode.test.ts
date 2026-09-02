@@ -11,6 +11,7 @@ function makeEvent(overrides: Partial<CognitiveEvent> = {}): CognitiveEvent {
     type: "new_idea",
     statement: "Authority needs explicit boundaries.",
     confidence: 0.9,
+    persistence: "high",
     sourceEventId: "src_1",
     evidenceQuote: "explicit boundaries",
     additionalSourceEventIds: [],
@@ -95,6 +96,40 @@ describe("applyCognitiveEvent", () => {
     expect(idea.state).toBe("established");
     expect(idea.decisions).toHaveLength(1);
     expect(idea.decisions[0]?.statement).toBe("Going with per-agent scoping.");
+  });
+
+  test("a contradiction on an existing idea contests it and files the tension as an open loop", () => {
+    const ideas = new Map<string, IdeaNode>();
+    applyCognitiveEvent(ideas, makeEvent(), { cognitiveEventId: "cog_1", matchedIdeaId: null, confidence: 1, reasoning: "seed" }, T);
+    const existingId = [...ideas.keys()][0] as string;
+
+    applyCognitiveEvent(
+      ideas,
+      makeEvent({
+        id: "cog_2",
+        sourceEventId: "src_2",
+        type: "contradiction",
+        statement: "Actually, explicit boundaries make authority brittle under multiple obligations.",
+      }),
+      { cognitiveEventId: "cog_2", matchedIdeaId: existingId, confidence: 0.95, reasoning: "conflicts with the boundaries claim" },
+      "2026-08-20T00:00:00.000Z",
+    );
+
+    const idea = ideas.get(existingId) as IdeaNode;
+    expect(idea.state).toBe("contested");
+    expect(idea.openLoops).toHaveLength(1);
+    expect(idea.openLoops[0]?.resolved).toBe(false);
+    expect(idea.openLoops[0]?.statement).toContain("Unresolved contradiction");
+
+    // A later resolution settles it and returns the idea to developing.
+    applyCognitiveEvent(
+      ideas,
+      makeEvent({ id: "cog_3", sourceEventId: "src_3", type: "resolution", statement: "Resolved: obligations accumulate, they don't compete." }),
+      { cognitiveEventId: "cog_3", matchedIdeaId: existingId, confidence: 0.95, reasoning: "resolves the contradiction" },
+      "2026-08-22T00:00:00.000Z",
+    );
+    expect((ideas.get(existingId) as IdeaNode).state).toBe("developing");
+    expect((ideas.get(existingId) as IdeaNode).openLoops.every((l) => l.resolved)).toBe(true);
   });
 
   test("connection events link two ideas symmetrically without merging them", () => {

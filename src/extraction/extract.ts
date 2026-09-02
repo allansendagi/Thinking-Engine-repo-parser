@@ -92,6 +92,8 @@ export async function extractCognitiveEvents(
       type: candidate.type,
       statement: candidate.statement,
       confidence: candidate.confidence,
+      persistence: candidate.persistence,
+      persistenceReason: candidate.persistence_reason ?? undefined,
       sourceEventId: candidate.source_event_id,
       evidenceQuote: candidate.evidence_quote,
       whyItMatters: candidate.why_it_matters ?? undefined,

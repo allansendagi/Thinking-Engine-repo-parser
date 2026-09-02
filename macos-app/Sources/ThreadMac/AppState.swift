@@ -12,6 +12,24 @@ final class AppState: ObservableObject {
     @Published var thinkingState: ThinkingStateResponse?
     @Published var selectedIdeaId: String?
     @Published var selectedTrace: IdeaTrace?
+
+    /// Which list row is highlighted blue. Lives here (not in MenuBarListView's local @State) so
+    /// it survives the list⇄detail swap — click a row, open it, come back, and it's still the
+    /// selected one, exactly like the design mock's persistent `state.sel`.
+    @Published var listSelection: String?
+
+    /// Idea ids the user has pinned. Shown as a "Pinned" group at the top of the All tab.
+    /// Local-only (no backend concept), persisted across launches.
+    private let pinnedKey = "thread.pinnedIds"
+    @Published private(set) var pinnedIds: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: "thread.pinnedIds") ?? [])
+
+    func isPinned(_ id: String) -> Bool { pinnedIds.contains(id) }
+
+    func togglePin(_ id: String) {
+        if pinnedIds.contains(id) { pinnedIds.remove(id) } else { pinnedIds.insert(id) }
+        UserDefaults.standard.set(Array(pinnedIds), forKey: pinnedKey)
+    }
     @Published var continueResult: String?
     @Published var errorMessage: String?
     @Published var isLoading = false
@@ -21,6 +39,18 @@ final class AppState: ObservableObject {
     /// Last time a client (the browser extension / desktop agent) pulled credentials from the
     /// loopback pairing server. Drives the footer's "capturing" indicator.
     @Published var lastExtensionHandshake: Date?
+
+    /// Trial / subscription state. nil until first fetched.
+    @Published var account: AccountStatus?
+    @Published var billingBusy = false
+
+    private let onboardingKey = "thread.onboardingDismissed"
+    @Published var onboardingDismissed = UserDefaults.standard.bool(forKey: "thread.onboardingDismissed")
+
+    func dismissOnboarding() {
+        onboardingDismissed = true
+        UserDefaults.standard.set(true, forKey: onboardingKey)
+    }
 
     var client: APIClient {
         APIClient(baseURL: apiBaseUrl, credentials: CredentialStore.credentials)
@@ -43,10 +73,99 @@ final class AppState: ObservableObject {
         lastExtensionHandshake = Date()
     }
 
-    /// The footer's privacy indicator. Only one mode exists today: conversations are extracted by
-    /// the hosted backend. Local / zero-knowledge modes are a future capability, not a toggle to
-    /// surface as if it worked.
-    var privacyMode: String { "Cloud" }
+    /// Footer's third slot: "Free · N/25" / "Pro" once billing is live, else "Cloud".
+    var planLabel: String { account?.footerLabel ?? "Cloud" }
+
+    /// True when billing is on AND this account can no longer capture. Reads still work.
+    var isLocked: Bool { (account?.billingEnabled ?? false) && !(account?.canCapture ?? true) }
+
+    /// Where the founder buys Pro / manages the account -- payment lives on the website.
+    static let marketingBaseURL = "https://mind-stream-continuity.vercel.app"
+
+    @Published var authBusy = false
+    @Published var authError: String?
+
+    func refreshAccount() async {
+        guard isPaired else { return }
+        account = try? await client.getAccount()
+    }
+
+    /// Payment happens on the website. This just opens the account page in the browser.
+    func openUpgradePage() {
+        if let u = URL(string: "\(Self.marketingBaseURL)/account") { NSWorkspace.shared.open(u) }
+    }
+
+    func openBillingPortal() async {
+        billingBusy = true
+        defer { billingBusy = false }
+        do {
+            NSWorkspace.shared.open(try await client.billingPortalURL())
+        } catch {
+            openUpgradePage() // no Paddle customer yet -> send them to the site to subscribe
+        }
+    }
+
+    // MARK: - Email sign-in / claim
+
+    /// Sends a 6-digit code for signing in on this Mac with an existing account's email.
+    func sendSignInCode(email: String) async -> Bool {
+        authBusy = true
+        authError = nil
+        defer { authBusy = false }
+        do {
+            try await APIClient.authStart(baseURL: apiBaseUrl, email: email)
+            return true
+        } catch {
+            authError = "Couldn't send the code. Check the address."
+            return false
+        }
+    }
+
+    /// Signs this Mac in to the account for `email` (creates it if new). Replaces local credentials.
+    func signIn(email: String, code: String) async -> Bool {
+        authBusy = true
+        authError = nil
+        defer { authBusy = false }
+        do {
+            let created = try await APIClient.authVerify(baseURL: apiBaseUrl, email: email, code: code)
+            useExistingCredentials(userId: created.userId, token: created.token)
+            await refreshAccount()
+            return true
+        } catch {
+            authError = "That code is wrong or expired."
+            return false
+        }
+    }
+
+    /// Attaches an email to *this* (already paired) account, keeping all its ideas.
+    func sendClaimCode(email: String) async -> Bool {
+        authBusy = true
+        authError = nil
+        defer { authBusy = false }
+        do {
+            try await client.accountEmailStart(email: email)
+            return true
+        } catch {
+            authError = "Couldn't send the code."
+            return false
+        }
+    }
+
+    func claimEmail(email: String, code: String) async -> Bool {
+        authBusy = true
+        authError = nil
+        defer { authBusy = false }
+        do {
+            account = try await client.accountEmailVerify(email: email, code: code)
+            return true
+        } catch let APIError.http(status, _) where status == 409 {
+            authError = "That email is already on another account. Sign in with it instead."
+            return false
+        } catch {
+            authError = "That code is wrong or expired."
+            return false
+        }
+    }
 
     /// The one-line credential the browser extension needs when the automatic local handshake
     /// isn't available. Format matches the extension's `parsePairingString`.
@@ -74,6 +193,7 @@ final class AppState: ObservableObject {
                 _ = try await APIClient(baseURL: apiBaseUrl, credentials: cred).getThinkingState()
                 userId = cred.userId
                 await refresh()
+                await refreshAccount()
                 return
             } catch let APIError.http(status, _) where status == 401 {
                 CredentialStore.clear() // stale account -- fall through and re-pair
@@ -114,8 +234,9 @@ final class AppState: ObservableObject {
     }
 
     func setApiBaseUrl(_ url: String) {
-        apiBaseUrl = url
-        CredentialStore.apiBaseUrl = url
+        let clean = CredentialStore.normalizeBaseURL(url)
+        apiBaseUrl = clean
+        CredentialStore.apiBaseUrl = clean
     }
 
     func refresh() async {
@@ -128,6 +249,7 @@ final class AppState: ObservableObject {
             errorMessage = error.localizedDescription
         }
         isLoading = false
+        await refreshAccount()
     }
 
     func search() async {

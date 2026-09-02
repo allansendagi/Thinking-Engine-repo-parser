@@ -1,7 +1,27 @@
 import { randomUUID } from "node:crypto";
-import { createUser, verifyToken } from "./auth";
+import {
+  attachEmail,
+  createUser,
+  EmailInUseError,
+  findAccountByEmail,
+  getAccount,
+  issueToken,
+  verifyToken,
+} from "./auth";
+import { consumeCode, issueCode, RateLimitedError } from "./authCodes";
+import { sendEmail, signInCodeEmail } from "./email";
+import {
+  accountView,
+  applyPaddleEvent,
+  billingConfigured,
+  canCapture,
+  createPortalLink,
+  isProActive,
+  verifyPaddleSignature,
+} from "./billing";
 import { openUserDb } from "../db/tenancy";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
+import { loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { parsePastedConversation } from "../import/pasteParser";
 import {
@@ -16,7 +36,7 @@ import {
 import type { IdeaState } from "../types";
 import type { PipelineProviders } from "../state/pipeline";
 
-const VALID_IDEA_STATES: IdeaState[] = ["developing", "established", "rejected", "dormant"];
+const VALID_IDEA_STATES: IdeaState[] = ["developing", "established", "rejected", "dormant", "contested"];
 
 /**
  * The whole API as a pure (Request) => Response function, deliberately separate from Bun.serve
@@ -28,8 +48,34 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function error(status: number, message: string): Response {
-  return json({ error: message }, status);
+function error(status: number, message: string, code?: string): Response {
+  return json(code ? { error: message, code } : { error: message }, status);
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Idea / open-loop ids can contain characters a strict HTTP client (Foundation's URLSession, in
+ * the Mac app) will only send percent-encoded -- notably `:` from paste-sourced ids like
+ * `<conv>::<n>`. `URL.pathname` is NOT auto-decoded, so decode the captured segment here. A raw,
+ * un-encoded id has no `%` and decodes to itself, so this is safe for the existing clients.
+ */
+function decodePathId(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw; // malformed %-escape -- fall back to the literal, the lookup will 404
+  }
+}
+
+/** This user's current idea-node count -- drives the Free plan's capture cap. */
+function ideaCountFor(userId: string): number {
+  const db = openUserDb(userId);
+  try {
+    return loadIdeas(db).length;
+  } finally {
+    db.close();
+  }
 }
 
 /** `Authorization: Bearer <userId>:<token>`. Returns the userId if valid, or a 401 Response. */
@@ -57,13 +103,155 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       return json(user, 201);
     }
 
+    // --- Passwordless sign-in: email + 6-digit code (public) --------------------------------
+    if (req.method === "POST" && pathname === "/v1/auth/start") {
+      let body: { email?: string };
+      try {
+        body = (await req.json()) as { email?: string };
+      } catch {
+        return error(400, "Invalid JSON body");
+      }
+      const email = (body.email ?? "").trim();
+      if (!EMAIL_RE.test(email)) return error(400, "A valid email is required");
+      try {
+        const code = await issueCode(email);
+        await sendEmail({ to: email, ...signInCodeEmail(code) });
+      } catch (e) {
+        if (e instanceof RateLimitedError) return error(429, e.message);
+        console.error("[Thread] auth/start failed:", e);
+        return error(502, "Could not send the sign-in code");
+      }
+      return json({ ok: true }); // never reveal whether the email has an account
+    }
+
+    if (req.method === "POST" && pathname === "/v1/auth/verify") {
+      let body: { email?: string; code?: string };
+      try {
+        body = (await req.json()) as { email?: string; code?: string };
+      } catch {
+        return error(400, "Invalid JSON body");
+      }
+      const email = (body.email ?? "").trim();
+      const code = (body.code ?? "").trim();
+      if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return error(400, "Email and 6-digit code are required");
+      if (!(await consumeCode(email, code))) return error(400, "That code is wrong or expired", "bad_code");
+
+      const existing = findAccountByEmail(email);
+      if (existing) {
+        // Sign-in issues a token for *this* device. Other devices (Mac app, extension,
+        // desktop agent) keep their own tokens -- see auth.ts `auth_tokens`.
+        const token = await issueToken(existing.userId);
+        return json({ userId: existing.userId, token });
+      }
+      const created = await createUser(email);
+      return json(created, 201);
+    }
+
+    // Paddle calls this -- no Thread bearer token. Verified by signature instead.
+    if (req.method === "POST" && pathname === "/v1/paddle/webhook") {
+      const secret = process.env.PADDLE_WEBHOOK_SECRET;
+      const sig = req.headers.get("paddle-signature") ?? "";
+      const raw = await req.text();
+      if (!secret || !verifyPaddleSignature(raw, sig, secret)) {
+        return error(400, "Bad signature");
+      }
+      try {
+        applyPaddleEvent(JSON.parse(raw));
+      } catch (e) {
+        console.error("[Thread] paddle webhook handling failed:", e);
+        return error(500, "Webhook handling failed");
+      }
+      return json({ received: true });
+    }
+
     // Every route below requires auth.
     const auth = await authenticate(req);
     if (auth instanceof Response) return auth;
     const userId = auth;
+
+    if (req.method === "GET" && pathname === "/v1/account") {
+      const account = getAccount(userId);
+      if (!account) return error(404, "Account not found");
+      return json({ userId, ...accountView(account, ideaCountFor(userId)) });
+    }
+
+    // --- Claim an anonymous account by attaching a verified email --------------------------
+    if (req.method === "POST" && pathname === "/v1/account/email") {
+      let body: { email?: string };
+      try {
+        body = (await req.json()) as { email?: string };
+      } catch {
+        return error(400, "Invalid JSON body");
+      }
+      const email = (body.email ?? "").trim();
+      if (!EMAIL_RE.test(email)) return error(400, "A valid email is required");
+      try {
+        const code = await issueCode(email);
+        await sendEmail({ to: email, ...signInCodeEmail(code) });
+      } catch (e) {
+        if (e instanceof RateLimitedError) return error(429, e.message);
+        return error(502, "Could not send the code");
+      }
+      return json({ ok: true });
+    }
+
+    if (req.method === "POST" && pathname === "/v1/account/email/verify") {
+      let body: { email?: string; code?: string };
+      try {
+        body = (await req.json()) as { email?: string; code?: string };
+      } catch {
+        return error(400, "Invalid JSON body");
+      }
+      const email = (body.email ?? "").trim();
+      const code = (body.code ?? "").trim();
+      if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return error(400, "Email and 6-digit code are required");
+      if (!(await consumeCode(email, code))) return error(400, "That code is wrong or expired", "bad_code");
+      try {
+        attachEmail(userId, email);
+      } catch (e) {
+        if (e instanceof EmailInUseError) {
+          return error(409, "That email already belongs to another Thread account. Sign in with it instead.", "email_in_use");
+        }
+        throw e;
+      }
+      return json({ userId, ...accountView(getAccount(userId)!, ideaCountFor(userId)) });
+    }
+
+    if (req.method === "GET" && pathname === "/v1/billing/portal") {
+      const account = getAccount(userId);
+      if (!account?.paddleCustomerId) return error(409, "No billing account yet -- subscribe first");
+      try {
+        return json({ url: await createPortalLink(account) });
+      } catch (e) {
+        return error(502, e instanceof Error ? e.message : "Portal failed");
+      }
+    }
+
     const db = openUserDb(userId);
 
     try {
+      // Soft lock. Reads are never gated. No-op until Paddle is actually configured.
+      // One DB open serves both the gate check and the request body below.
+      const isCaptureRoute =
+        req.method === "POST" && (pathname === "/v1/conversations" || pathname === "/v1/paste");
+      if (isCaptureRoute && billingConfigured() && !canCapture(getAccount(userId), loadIdeas(db).length)) {
+        return error(
+          402,
+          "You've hit the Free plan's 25-idea limit. Upgrade to Pro from your Thread account to keep capturing.",
+          "upgrade_required",
+        );
+      }
+
+      // MCP / AI continuation is a Pro feature.
+      if (
+        req.method === "POST" &&
+        pathname === "/v1/continue" &&
+        billingConfigured() &&
+        !isProActive(getAccount(userId))
+      ) {
+        return error(402, "Continuing an idea with AI is a Pro feature. Upgrade from your Thread account.", "pro_required");
+      }
+
       if (req.method === "POST" && pathname === "/v1/conversations") {
         let body: IngestConversationInput;
         try {
@@ -113,19 +301,20 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
 
       const ideaMatch = pathname.match(/^\/v1\/ideas\/([^/]+)(\/trace)?$/);
       if (req.method === "GET" && ideaMatch) {
-        const [, ideaId, isTrace] = ideaMatch;
-        const result = isTrace ? traceIdea(db, ideaId as string) : getIdea(db, ideaId as string);
+        const [, rawIdeaId, isTrace] = ideaMatch;
+        const ideaId = decodePathId(rawIdeaId as string);
+        const result = isTrace ? traceIdea(db, ideaId) : getIdea(db, ideaId);
         return result ? json(result) : error(404, "Idea not found");
       }
 
       if (req.method === "DELETE" && ideaMatch && !ideaMatch[2]) {
-        const ideaId = ideaMatch[1] as string;
+        const ideaId = decodePathId(ideaMatch[1] as string);
         const deleted = deleteIdea(db, ideaId);
         return deleted ? json({ deleted: true }) : error(404, "Idea not found");
       }
 
       if (req.method === "PATCH" && ideaMatch && !ideaMatch[2]) {
-        const ideaId = ideaMatch[1] as string;
+        const ideaId = decodePathId(ideaMatch[1] as string);
         let body: { state?: string; title?: string };
         try {
           body = (await req.json()) as { state?: string; title?: string };
@@ -154,7 +343,7 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
 
       const loopMatch = pathname.match(/^\/v1\/open-loops\/([^/]+)$/);
       if (req.method === "PATCH" && loopMatch) {
-        const loopId = loopMatch[1] as string;
+        const loopId = decodePathId(loopMatch[1] as string);
         let body: { resolved?: boolean };
         try {
           body = (await req.json()) as { resolved?: boolean };

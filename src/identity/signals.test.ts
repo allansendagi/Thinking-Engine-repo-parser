@@ -66,6 +66,7 @@ describe("rankCandidates / narrowCandidates", () => {
       statement:
         "Execution isn't enough. Authority also needs to be independently verifiable by a separate party.",
       confidence: 0.9,
+      persistence: "high",
       sourceEventId: "c4_u1",
       evidenceQuote: "independently verifiable",
       additionalSourceEventIds: [],
