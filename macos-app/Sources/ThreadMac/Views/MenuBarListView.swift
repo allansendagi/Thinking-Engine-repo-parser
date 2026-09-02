@@ -113,10 +113,15 @@ struct MenuBarListView: View {
         .onChange(of: flatIDs) { _ in selectFirstIfNeeded() }
     }
 
-    /// The design shows a row already highlighted blue at rest. Pre-select the first row so
-    /// "whatever you select turns blue" is true from the moment the list appears.
+    /// The design shows a row already highlighted blue at rest, so pre-select the first row --
+    /// EXCEPT on the Open loops tab, where an unresolved question isn't a thing you're "on" and a
+    /// default blue fill reads as noise. There, start with nothing selected.
     private func selectFirstIfNeeded() {
         guard !searching else { return }
+        if tab == .loops {
+            if let s = selection, !flatIDs.contains(s) { selection = nil }
+            return
+        }
         if selection == nil || !(flatIDs.contains(selection!)) {
             selection = flatIDs.first
         }
@@ -147,7 +152,7 @@ struct MenuBarListView: View {
 
             if !searching {
                 Segmented(selection: $tab)
-                    .onChange(of: tab) { _ in selection = flatIDs.first }
+                    .onChange(of: tab) { newTab in selection = newTab == .loops ? nil : flatIDs.first }
             }
         }
         .padding(.horizontal, 12).padding(.bottom, 10)
