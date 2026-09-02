@@ -11,6 +11,12 @@ import type { IdeaState } from "../types";
  * conversation that produced it, and the raw events remain available for a future re-processing
  * pass to reconsider.
  *
+ * `discarded_events` is deliberately NOT cleaned up by deleteIdea: those rows key off
+ * canonical_events, not idea_nodes (the gate declined to build an idea from them at all), and
+ * the same "don't destroy source-adjacent evidence" invariant applies -- a threshold change
+ * should still be able to replay them. deleteDiscardedEvents exists only for the replay pass
+ * that promotes one into a real idea.
+ *
  * NOT implemented here: merging two ideas, or editing an idea's current formulation directly.
  * Both are real THREAD.md §23 actions still pending -- see README. Editing the formulation in
  * particular isn't a simple field update: every existing evolution step is provenance-linked to
@@ -56,4 +62,11 @@ export function setOpenLoopResolved(db: Database, loopId: string, resolved: bool
     .prepare("UPDATE open_loops SET resolved = ? WHERE id = ?")
     .run(resolved ? 1 : 0, loopId);
   return result.changes > 0;
+}
+
+/** Removes discarded_events rows the replay pass has since promoted into real ideas. */
+export function deleteDiscardedEvents(db: Database, ids: string[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM discarded_events WHERE id IN (${placeholders})`).run(...ids);
 }

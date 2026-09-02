@@ -227,11 +227,19 @@ export async function runEval(): Promise<void> {
   }
   console.log(`${openLoopFound ? "PASS" : "FAIL"}  Open-loop captured ("who performs the verification")`);
 
+  // If the model never scores anything below "high", the gate is effectively off and every
+  // number above it is measuring a no-op. Persistence defaults to "high" on a missing field, so
+  // an all-high run is indistinguishable from the model silently dropping the judgment.
+  const allScored = [...result.cognitiveEvents, ...result.discardedEvents.map((d) => d.event)];
+  const belowHigh = allScored.filter((e) => e.persistence !== "high").length;
+
   console.log(
     `\n=== Signal gate ===\n` +
       `Discarded ${result.discardedEvents.length} grounded event(s). ` +
       `Labeled noise: ${noiseExtracted} extracted, ${noiseGated} of those caught by the gate.\n` +
-      `${requiredDiscarded.length === 0 ? "PASS" : "FAIL"}  No required event was discarded by the gate` +
+      `Persistence scored below "high" on ${belowHigh}/${allScored.length} events` +
+      (belowHigh === 0 ? "  <-- WARN: model may not be emitting persistence; gate is a no-op" : "") +
+      `\n${requiredDiscarded.length === 0 ? "PASS" : "FAIL"}  No required event was discarded by the gate` +
       (requiredDiscarded.length > 0
         ? ` (lost: ${requiredDiscarded.map((d) => d.event.sourceEventId).join(", ")})`
         : ""),

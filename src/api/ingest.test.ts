@@ -41,6 +41,63 @@ describe("ingestConversation against a real DB (simulates repeated HTTP calls as
     expect(loadIdeas(db)).toHaveLength(1); // still exactly one idea, not duplicated
   });
 
+  test("a medium claim discarded for lack of a match is replayed once its idea arrives on a later call", async () => {
+    const db = openDb(":memory:");
+
+    // Call 1: a medium-persistence claim arrives BEFORE the idea it belongs to. Nothing to attach
+    // to, so the signal gate discards it. newEventIds guarantees extraction never re-emits m1, so
+    // without the replay pass this would be a permanent loss.
+    const call1 = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_1",
+        source: "fixture",
+        messages: [{ id: "m1", role: "user", text: "Authority boundaries should be enforced at runtime.", createdAt: "2026-08-17T00:00:00.000Z" }],
+      },
+      {
+        extraction: new FakeProvider([
+          extractionResponse([
+            { type: "claim", statement: "Authority boundaries should be enforced at runtime.", confidence: 0.9, persistence: "medium", source_event_id: "m1", evidence_quote: "enforced at runtime" },
+          ]),
+        ]),
+        reasoning: new FakeProvider([]),
+      },
+    );
+    expect(call1.ideaCount).toBe(0);
+    expect(call1.discardedEvents).toBe(1);
+    expect(loadIdeas(db)).toHaveLength(0);
+
+    // Call 2: the founding idea arrives. The replay pass reconsiders the m1 discard against the
+    // now-current idea set, finds a strong match, and promotes it.
+    const call2 = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_1",
+        source: "fixture",
+        messages: [
+          { id: "m1", role: "user", text: "Authority boundaries should be enforced at runtime.", createdAt: "2026-08-17T00:00:00.000Z" },
+          { id: "m2", role: "user", text: "Authority boundaries must be explicit and enforced.", createdAt: "2026-08-18T00:00:00.000Z" },
+        ],
+      },
+      {
+        extraction: new FakeProvider([
+          extractionResponse([
+            { type: "new_idea", statement: "Authority boundaries must be explicit and enforced.", confidence: 0.95, source_event_id: "m2", evidence_quote: "Authority boundaries" },
+          ]),
+        ]),
+        // Exactly one identity call: the replay pass resolving the promoted m1 claim. The m2
+        // new_idea has no candidates yet, so identity is skipped for it.
+        reasoning: new FakeProvider([identityResponse("idea_cog_m2_0")]),
+      },
+    );
+
+    expect(call2.promotedFromDiscard).toBe(1);
+    expect(call2.ideaCount).toBe(1);
+    const ideas = loadIdeas(db);
+    expect(ideas).toHaveLength(1);
+    expect(ideas[0]?.evolution.map((e) => e.sourceEventId).sort()).toEqual(["m1", "m2"]);
+  });
+
   test("a growing conversation extends the same idea across three separate calls", async () => {
     const db = openDb(":memory:");
 
