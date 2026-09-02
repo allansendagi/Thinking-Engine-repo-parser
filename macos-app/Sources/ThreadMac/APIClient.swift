@@ -32,8 +32,11 @@ final class APIClient {
     }
 
     private func request<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil) async throws -> T {
-        guard let url = URL(string: baseURL + path) else {
-            throw APIError.http(status: 0, message: "Invalid URL: \(baseURL + path)")
+        // A base URL with no scheme (e.g. a bare host typed into Settings) still yields a non-nil
+        // *relative* URL here, which URLSession then rejects with the opaque "unsupported URL".
+        // Catch it with a clear message instead.
+        guard let url = URL(string: baseURL + path), let scheme = url.scheme, scheme.hasPrefix("http"), url.host != nil else {
+            throw APIError.http(status: 0, message: "Invalid API base URL: \(baseURL) — set it to something like https://api.thread.app in Settings ▸ Advanced.")
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
@@ -109,29 +112,38 @@ final class APIClient {
         return try await request("/v1/ideas?q=\(q)")
     }
 
+    /// Idea/loop ids can contain `:` (paste-sourced ids look like `<conv>::<n>`), which
+    /// URLSession rejects raw in a path with "unsupported URL". Encode to RFC 3986 unreserved
+    /// only; the backend decodeURIComponent's it back.
+    private static func pathSegment(_ s: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
+    }
+
     func traceIdea(id: String) async throws -> IdeaTrace {
-        try await request("/v1/ideas/\(id)/trace")
+        try await request("/v1/ideas/\(Self.pathSegment(id))/trace")
     }
 
     func renameIdea(id: String, title: String) async throws -> IdeaDetail {
         let body = try JSONEncoder().encode(["title": title])
-        return try await request("/v1/ideas/\(id)", method: "PATCH", body: body)
+        return try await request("/v1/ideas/\(Self.pathSegment(id))", method: "PATCH", body: body)
     }
 
     func setIdeaState(id: String, state: String) async throws -> IdeaDetail {
         let body = try JSONEncoder().encode(["state": state])
-        return try await request("/v1/ideas/\(id)", method: "PATCH", body: body)
+        return try await request("/v1/ideas/\(Self.pathSegment(id))", method: "PATCH", body: body)
     }
 
     func deleteIdea(id: String) async throws {
         struct Empty: Decodable {}
-        let _: Empty = try await request("/v1/ideas/\(id)", method: "DELETE")
+        let _: Empty = try await request("/v1/ideas/\(Self.pathSegment(id))", method: "DELETE")
     }
 
     func setOpenLoopResolved(id: String, resolved: Bool) async throws {
         struct Empty: Decodable {}
         let body = try JSONEncoder().encode(["resolved": resolved])
-        let _: Empty = try await request("/v1/open-loops/\(id)", method: "PATCH", body: body)
+        let _: Empty = try await request("/v1/open-loops/\(Self.pathSegment(id))", method: "PATCH", body: body)
     }
 
     func continueThinking(topic: String) async throws -> ContinueResponse {

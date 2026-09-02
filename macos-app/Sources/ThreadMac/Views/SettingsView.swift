@@ -80,7 +80,6 @@ struct SettingsView: View {
                     Text("API base URL").font(.caption).foregroundColor(.secondary)
                     TextField("https://…", text: $urlDraft)
                         .textFieldStyle(.roundedBorder)
-                        .onAppear { urlDraft = appState.apiBaseUrl }
                     if let userId = appState.userId {
                         Text("Account: \(userId)").font(.caption2).foregroundColor(.secondary)
                             .textSelection(.enabled)
@@ -98,7 +97,11 @@ struct SettingsView: View {
             HStack {
                 Spacer()
                 Button("Done") {
-                    if urlDraft != appState.apiBaseUrl { appState.setApiBaseUrl(urlDraft) }
+                    // Only write if the field was actually populated and changed. It starts empty
+                    // and only fills in via .onAppear below -- without the isEmpty guard, opening
+                    // Settings and hitting Done without touching Advanced would blank the API URL.
+                    let trimmed = urlDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty && trimmed != appState.apiBaseUrl { appState.setApiBaseUrl(trimmed) }
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
@@ -107,5 +110,6 @@ struct SettingsView: View {
         }
         .padding(16)
         .frame(width: 340)
+        .onAppear { urlDraft = appState.apiBaseUrl }
     }
 }

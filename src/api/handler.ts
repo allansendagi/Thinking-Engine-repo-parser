@@ -54,6 +54,20 @@ function error(status: number, message: string, code?: string): Response {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/**
+ * Idea / open-loop ids can contain characters a strict HTTP client (Foundation's URLSession, in
+ * the Mac app) will only send percent-encoded -- notably `:` from paste-sourced ids like
+ * `<conv>::<n>`. `URL.pathname` is NOT auto-decoded, so decode the captured segment here. A raw,
+ * un-encoded id has no `%` and decodes to itself, so this is safe for the existing clients.
+ */
+function decodePathId(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw; // malformed %-escape -- fall back to the literal, the lookup will 404
+  }
+}
+
 /** This user's current idea-node count -- drives the Free plan's capture cap. */
 function ideaCountFor(userId: string): number {
   const db = openUserDb(userId);
@@ -287,19 +301,20 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
 
       const ideaMatch = pathname.match(/^\/v1\/ideas\/([^/]+)(\/trace)?$/);
       if (req.method === "GET" && ideaMatch) {
-        const [, ideaId, isTrace] = ideaMatch;
-        const result = isTrace ? traceIdea(db, ideaId as string) : getIdea(db, ideaId as string);
+        const [, rawIdeaId, isTrace] = ideaMatch;
+        const ideaId = decodePathId(rawIdeaId as string);
+        const result = isTrace ? traceIdea(db, ideaId) : getIdea(db, ideaId);
         return result ? json(result) : error(404, "Idea not found");
       }
 
       if (req.method === "DELETE" && ideaMatch && !ideaMatch[2]) {
-        const ideaId = ideaMatch[1] as string;
+        const ideaId = decodePathId(ideaMatch[1] as string);
         const deleted = deleteIdea(db, ideaId);
         return deleted ? json({ deleted: true }) : error(404, "Idea not found");
       }
 
       if (req.method === "PATCH" && ideaMatch && !ideaMatch[2]) {
-        const ideaId = ideaMatch[1] as string;
+        const ideaId = decodePathId(ideaMatch[1] as string);
         let body: { state?: string; title?: string };
         try {
           body = (await req.json()) as { state?: string; title?: string };
@@ -328,7 +343,7 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
 
       const loopMatch = pathname.match(/^\/v1\/open-loops\/([^/]+)$/);
       if (req.method === "PATCH" && loopMatch) {
-        const loopId = loopMatch[1] as string;
+        const loopId = decodePathId(loopMatch[1] as string);
         let body: { resolved?: boolean };
         try {
           body = (await req.json()) as { resolved?: boolean };

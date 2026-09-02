@@ -199,6 +199,19 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     const body = (await res.json()) as { ideaCount: number; conversationId: string };
     expect(body.ideaCount).toBe(1);
     expect(body.conversationId).toBe("conv_paste");
+
+    // The idea id derives from a paste source id (`conv_paste::0`), so it contains `::` -- a
+    // strict HTTP client (the Mac app) can only send that percent-encoded. The handler must
+    // decode the path segment back before the lookup.
+    const state = (await (await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }))).json()) as {
+      currentIdeas: { id: string }[];
+    };
+    const ideaId = state.currentIdeas[0]!.id;
+    expect(ideaId).toContain("::");
+    const encoded = encodeURIComponent(ideaId);
+    expect(encoded).not.toBe(ideaId); // proves the id actually needs encoding
+    const trace = await handler(new Request(`http://x/v1/ideas/${encoded}/trace`, { headers: authHeader }));
+    expect(trace.status).toBe(200);
   });
 
   test("POST /v1/paste rejects empty text", async () => {

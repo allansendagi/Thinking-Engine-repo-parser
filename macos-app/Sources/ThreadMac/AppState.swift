@@ -234,8 +234,9 @@ final class AppState: ObservableObject {
     }
 
     func setApiBaseUrl(_ url: String) {
-        apiBaseUrl = url
-        CredentialStore.apiBaseUrl = url
+        let clean = CredentialStore.normalizeBaseURL(url)
+        apiBaseUrl = clean
+        CredentialStore.apiBaseUrl = clean
     }
 
     func refresh() async {
