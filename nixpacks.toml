@@ -5,3 +5,11 @@
 # trusting auto-detection to not reach for a legacy Node alongside it.
 [phases.setup]
 nixPkgs = ["bun"]
+
+# ...but pinning setup to bun-only removed node/npm from PATH, and Nixpacks' Node provider still
+# defaults the INSTALL command to `npm i` -- so the build died with "npm: command not found".
+# Force the Bun installer. bun.lock is gitignored (its lockfileVersion 2 format is unreadable by
+# the older Bun in Railway's build image), so this is a plain resolve from package.json, not
+# --frozen-lockfile.
+[phases.install]
+cmds = ["bun install"]
