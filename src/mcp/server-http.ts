@@ -13,6 +13,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { makeClient, resolveCredentials } from "./httpClient";
+import { resolveContinueToken } from "./tools";
 
 const creds = await resolveCredentials();
 const api = makeClient(creds);
@@ -69,8 +70,10 @@ server.tool(
   "Summarize where the user's thinking on a topic currently stands and suggest a next step.",
   { topic: z.string() },
   async ({ topic }) => {
-    const { text } = await api.continueThinking(topic);
-    return { content: [{ type: "text" as const, text }] };
+    const { text, packet } = await api.continueThinking(topic);
+    // The HTTP endpoint leaves the "Continue from here" token in place for the Mac app's local
+    // editing; a prose consumer wants it filled with the suggested line.
+    return { content: [{ type: "text" as const, text: resolveContinueToken(text, packet.suggestedNext) }] };
   },
 );
 

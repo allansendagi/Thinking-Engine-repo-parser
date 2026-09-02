@@ -4,12 +4,16 @@ import { persistPipelineResult, runPipeline } from "../state/pipeline";
 import { FakeProvider } from "../providers/fake";
 import {
   buildContinuationPacket,
+  CONTINUE_TOKEN,
   getIdea,
   getOpenLoops,
   getRecentChanges,
   getThreadState,
+  renderPacket,
+  resolveContinueToken,
   searchIdeas,
   traceIdea,
+  type ContinuationPacket,
 } from "./tools";
 import type { CanonicalEvent } from "../types";
 
@@ -140,6 +144,12 @@ describe("buildContinuationPacket", () => {
     expect(text).toContain("Aug 17, ChatGPT:");
     expect(text).toContain("Unresolved question");
     expect(text).toContain("Continue from here");
+    // The suggested line is NOT baked into the render -- a token sits in its place.
+    expect(text).toContain(CONTINUE_TOKEN);
+    expect(text).not.toContain(packet.suggestedNext);
+    expect(packet.evolutionUnverified).toBe(false);
+    expect(resolveContinueToken(text, packet.suggestedNext)).toContain(packet.suggestedNext);
+    expect(resolveContinueToken(text, packet.suggestedNext)).not.toContain(CONTINUE_TOKEN);
 
     // Eyeball the actual handoff -- fails nothing, but prints it so a human reads it once.
     console.log("\n----- continuation packet text -----\n" + text + "------------------------------------");
@@ -168,5 +178,59 @@ describe("buildContinuationPacket", () => {
     expect(r!.packet.unresolvedQuestion).toBeNull();
     expect(r!.text).not.toContain("Unresolved question");
     expect(r!.text).toContain("Continue from here");
+  });
+
+  test("drops steps that aren't a verified user message; says so honestly", async () => {
+    const db = await seedAuthorityThread();
+    // Legacy shape: evolution steps exist but their source events are gone, so traceIdea can't
+    // confirm a role -- sourceRole is null (unknown), which the strict filter must NOT treat as
+    // the user.
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.query("DELETE FROM canonical_events").run();
+    db.exec("PRAGMA foreign_keys = ON");
+    const r = await buildContinuationPacket(db, { ideaId: "idea_cog_u1_0" });
+    expect(r).not.toBeNull();
+    expect(r!.packet.evolution).toHaveLength(0);
+    expect(r!.packet.evolutionUnverified).toBe(true);
+    expect(r!.text).toContain("captured before source-role verification");
+    expect(r!.text).not.toContain("Aug 17");
+  });
+});
+
+describe("renderPacket", () => {
+  const baseStep = (n: number): ContinuationPacket["evolution"][number] => ({
+    when: `2026-08-${String(10 + n).padStart(2, "0")}T00:00:00.000Z`,
+    source: "ChatGPT",
+    formulation: `Position ${n}`,
+    sourceText: null,
+  });
+  const basePacket = (evolution: ContinuationPacket["evolution"]): ContinuationPacket => ({
+    idea: { id: "i", title: "T", state: "developing" },
+    whereYouLeftOff: "here",
+    contested: false,
+    evolution,
+    evolutionUnverified: false,
+    decisions: [],
+    unresolvedQuestion: null,
+    suggestedNext: "do the next thing",
+  });
+
+  test("abridges a long history to first + latest two, keeps the full list on the packet", () => {
+    const packet = basePacket([1, 2, 3, 4, 5, 6].map(baseStep));
+    const text = renderPacket(packet);
+    expect(text).toContain("Position 1");
+    expect(text).toContain("Position 5");
+    expect(text).toContain("Position 6");
+    expect(text).not.toContain("Position 2");
+    expect(text).not.toContain("Position 3");
+    expect(text).toContain("3 earlier steps — full history in Thread");
+    expect(text).toContain(CONTINUE_TOKEN);
+    expect(packet.evolution).toHaveLength(6); // structured data untouched
+  });
+
+  test("shows every step when there are four or fewer", () => {
+    const text = renderPacket(basePacket([1, 2, 3, 4].map(baseStep)));
+    for (const n of [1, 2, 3, 4]) expect(text).toContain(`Position ${n}`);
+    expect(text).not.toContain("earlier step");
   });
 });

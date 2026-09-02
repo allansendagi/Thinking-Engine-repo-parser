@@ -489,19 +489,14 @@ final class AppState: ObservableObject {
     /// The user's edit of "Continue from here". Empty = use packet.suggestedNext untouched.
     @Published var nextStepDraft: String = ""
 
-    /// The paste string, with one well-defined substitution if the user edited the next line.
-    /// Never a client re-render -- that's how the two representations would drift.
+    /// The paste string. The backend leaves a token where the "Continue from here" line goes;
+    /// we fill it with the user's edit or the suggested default in one literal replace. No
+    /// client-side re-render, no fuzzy anchor matching -- the token can't collide or drift.
     var continuationCopyText: String? {
         guard let text = continuationText, let packet = continuationPacket else { return nil }
         let edited = nextStepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !edited.isEmpty, edited != packet.suggestedNext else { return text }
-        // Anchor on the trailing "Continue from here" block so we only rewrite that one line,
-        // not an incidental echo of the same phrase in an evolution bullet.
-        let anchor = "Continue from here\n" + packet.suggestedNext
-        if text.contains(anchor) {
-            return text.replacingOccurrences(of: anchor, with: "Continue from here\n" + edited)
-        }
-        return text.replacingOccurrences(of: packet.suggestedNext, with: edited)
+        let line = edited.isEmpty ? packet.suggestedNext : edited
+        return text.replacingOccurrences(of: ContinuationPacket.continueToken, with: line)
     }
 
     /// The payoff. Builds the continuation packet for the selected idea, copies the paste-ready

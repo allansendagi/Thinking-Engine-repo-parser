@@ -192,10 +192,19 @@ struct ContinuationPacket: Codable {
     let idea: Idea
     let whereYouLeftOff: String
     let contested: Bool
+    /// Verified user-authored steps only (see `evolutionUnverified`). The full list — the paste
+    /// text abridges a long one; the preview can show all.
     let evolution: [EvolutionStep]
+    /// The idea has history but none of it is a verified user message (pre source-role data).
+    /// `evolution` is then empty and the UI says so rather than implying steps are the user's.
+    let evolutionUnverified: Bool
     let decisions: [PacketDecision]
     let unresolvedQuestion: String?
     let suggestedNext: String
+
+    /// The backend's rendered `text` carries this where the "Continue from here" line goes.
+    /// Fill it with one literal replace — no client-side re-rendering of the packet.
+    static let continueToken = "{{CONTINUE_FROM_HERE}}"
 }
 
 struct APIErrorBody: Codable {

@@ -249,6 +249,17 @@ private struct EvolutionRow: View {
 private struct ContinuationPreview: View {
     let packet: ContinuationPacket
     @EnvironmentObject var appState: AppState
+    @State private var showAllEvolution = false
+
+    /// Match the paste text: show everything up to 4 steps, else first + latest two.
+    private var shownEvolution: [ContinuationPacket.EvolutionStep] {
+        let all = packet.evolution
+        if showAllEvolution || all.count <= 4 { return all }
+        return [all.first!] + all.suffix(2)
+    }
+    private var hiddenEvolutionCount: Int {
+        max(0, packet.evolution.count - shownEvolution.count)
+    }
 
     private func eyebrow(_ s: String) -> some View {
         Text(s).font(.system(size: 10, weight: .semibold)).textCase(.uppercase).kerning(0.5)
@@ -280,10 +291,17 @@ private struct ContinuationPreview: View {
                 }
             }
 
-            if !packet.evolution.isEmpty {
+            if packet.evolutionUnverified {
+                VStack(alignment: .leading, spacing: 4) {
+                    eyebrow("How this evolved")
+                    Text("Captured before source-role verification — its earlier wording isn't shown.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.ink(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else if !packet.evolution.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
                     eyebrow("How this evolved")
-                    ForEach(packet.evolution) { step in
+                    ForEach(shownEvolution) { step in
                         HStack(alignment: .top, spacing: 6) {
                             Text("•").foregroundStyle(Theme.ink(0.3))
                             VStack(alignment: .leading, spacing: 1) {
@@ -293,6 +311,15 @@ private struct ContinuationPreview: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
+                    }
+                    if hiddenEvolutionCount > 0 {
+                        Button("Show all \(packet.evolution.count) steps") { showAllEvolution = true }
+                            .buttonStyle(.plain).font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                    } else if showAllEvolution && packet.evolution.count > 4 {
+                        Button("Show less") { showAllEvolution = false }
+                            .buttonStyle(.plain).font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Theme.ink(0.4))
                     }
                 }
             }

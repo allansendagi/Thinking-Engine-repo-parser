@@ -470,6 +470,9 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       expect(cp.packet.whereYouLeftOff).toBe("f0");
       expect(cp.text).toContain("Resume: ");
       expect(cp.packet.suggestedNext.length).toBeGreaterThan(0);
+      // The endpoint hands back the render with the token still in place; the client fills it.
+      expect(cp.text).toContain("{{CONTINUE_FROM_HERE}}");
+      expect(cp.text).not.toContain(cp.packet.suggestedNext);
 
       const missing = await handler(
         new Request("http://x/v1/continue", { method: "POST", headers: authHeader, body: JSON.stringify({ ideaId: "idea_nope" }) }),

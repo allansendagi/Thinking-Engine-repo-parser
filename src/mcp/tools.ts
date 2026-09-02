@@ -127,6 +127,23 @@ function firstSentence(s: string): string {
   return (m ? m[0] : s).trim();
 }
 
+/**
+ * Rendered `text` carries this token at the "Continue from here" position instead of the
+ * suggested line itself. A client drops in the user's edited line with ONE literal replace --
+ * no re-rendering the packet, no fragile natural-language anchor matching. Resolve it with
+ * `resolveContinueToken` before the text is shown to anyone (the MCP prose path does; the Mac
+ * app substitutes locally so the field stays editable offline).
+ */
+export const CONTINUE_TOKEN = "{{CONTINUE_FROM_HERE}}";
+
+export function resolveContinueToken(text: string, line: string): string {
+  return text.replace(CONTINUE_TOKEN, line);
+}
+
+/** Beyond this many evolution steps, the paste text shows first + latest two and points at
+ *  Thread for the rest. `packet.evolution` still carries the full list for the in-app preview. */
+const MAX_INLINE_EVOLUTION_STEPS = 4;
+
 export interface ContinuationEvolutionStep {
   when: string; // ISO
   source: string | null; // display label ("ChatGPT" | "Claude" | ...)
@@ -140,7 +157,12 @@ export interface ContinuationPacket {
   /** = current formulation. "Where you left off." */
   whereYouLeftOff: string;
   contested: boolean;
+  /** Verified user-authored steps only, full history (the paste text abridges; the app preview
+   *  can show all). Empty when the idea predates source-role verification -- see `evolutionUnverified`. */
   evolution: ContinuationEvolutionStep[];
+  /** True when the idea HAS provenance but none of it is a verified user message (legacy data).
+   *  The packet then says so plainly instead of presenting unattributable steps as the user's. */
+  evolutionUnverified: boolean;
   decisions: { statement: string; decidedAt: string }[];
   /** The most relevant unresolved loop (contradiction preferred when contested), or null. */
   unresolvedQuestion: string | null;
@@ -188,15 +210,18 @@ export async function buildContinuationPacket(
   if (!idea) return null;
 
   const trace = traceIdea(db, idea.id)!;
+  // Strict: only steps we can prove the human wrote. `sourceRole === null` is UNKNOWN, not the
+  // user -- including it would make an attribution claim the data can't back. Legacy ideas whose
+  // steps are all unknown fall through to `evolutionUnverified` and an honest line in the text.
   const evolution: ContinuationEvolutionStep[] = trace.provenance
-    // Grounding now guarantees user-authored steps; pre-fix rows may be null -- never assistant.
-    .filter((p) => p.sourceRole === "user" || p.sourceRole === null)
+    .filter((p) => p.sourceRole === "user")
     .map((p) => ({
       when: p.createdAt,
       source: sourceLabel(p.source),
       formulation: p.formulation,
       sourceText: p.sourceText,
     }));
+  const evolutionUnverified = evolution.length === 0 && trace.provenance.length > 0;
 
   const unresolvedQuestion = mostRelevantOpenLoop(idea);
   const decisions = idea.decisions.map((d) => ({ statement: d.statement, decidedAt: d.decidedAt }));
@@ -228,6 +253,7 @@ export async function buildContinuationPacket(
     whereYouLeftOff: idea.currentFormulation,
     contested: idea.state === "contested",
     evolution,
+    evolutionUnverified,
     decisions,
     unresolvedQuestion,
     suggestedNext,
@@ -235,7 +261,12 @@ export async function buildContinuationPacket(
   return { text: renderPacket(packet), packet };
 }
 
-/** The one place the paste-ready text is produced. Clients copy this verbatim. */
+/**
+ * The one place the paste-ready text is produced. The "Continue from here" line is emitted as
+ * `CONTINUE_TOKEN`, not the suggested sentence -- resolve it with `resolveContinueToken` (the
+ * MCP prose path) or substitute locally (the Mac app). A long history is abridged to first +
+ * latest two here; the full list stays in `p.evolution` for the in-app preview.
+ */
 export function renderPacket(p: ContinuationPacket): string {
   const out: string[] = [`Resume: ${p.idea.title}`, "", "Where you left off", p.whereYouLeftOff];
   if (p.contested) out.push("(This idea is contested — a later point conflicts with the above.)");
@@ -245,11 +276,25 @@ export function renderPacket(p: ContinuationPacket): string {
   // show up twice -- once here, once in its own block. Keep the paste clean: drop the echo.
   const q = p.unresolvedQuestion ? stripLoopPrefix(p.unresolvedQuestion).toLowerCase() : null;
   const steps = p.evolution.filter((e) => e.formulation.toLowerCase() !== q);
-  if (steps.length > 0) {
+  const line = (e: ContinuationEvolutionStep) => {
+    const tag = e.source ? `${shortDate(e.when)}, ${e.source}` : shortDate(e.when);
+    return `• ${tag}: ${e.formulation}`;
+  };
+  if (p.evolutionUnverified) {
+    out.push(
+      "How this evolved",
+      "This thought was captured before source-role verification — its earlier wording isn't shown.",
+      "",
+    );
+  } else if (steps.length > 0) {
     out.push("How this evolved");
-    for (const e of steps) {
-      const tag = e.source ? `${shortDate(e.when)}, ${e.source}` : shortDate(e.when);
-      out.push(`• ${tag}: ${e.formulation}`);
+    if (steps.length <= MAX_INLINE_EVOLUTION_STEPS) {
+      for (const e of steps) out.push(line(e));
+    } else {
+      const hidden = steps.length - 3;
+      out.push(line(steps[0]!));
+      out.push(`• … ${hidden} earlier step${hidden === 1 ? "" : "s"} — full history in Thread …`);
+      out.push(line(steps[steps.length - 2]!), line(steps[steps.length - 1]!));
     }
     out.push("");
   }
@@ -264,7 +309,7 @@ export function renderPacket(p: ContinuationPacket): string {
     out.push("Unresolved question", stripLoopPrefix(p.unresolvedQuestion), "");
   }
 
-  out.push("Continue from here", p.suggestedNext);
+  out.push("Continue from here", CONTINUE_TOKEN);
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
 
@@ -279,5 +324,6 @@ export async function continueThinking(
 ): Promise<string> {
   const result = await buildContinuationPacket(db, { topic }, provider);
   if (!result) throw new Error(`No ideas found matching topic "${topic}"`);
-  return result.text;
+  // Prose consumer: bake the suggested line in where the token sits.
+  return resolveContinueToken(result.text, result.packet.suggestedNext);
 }

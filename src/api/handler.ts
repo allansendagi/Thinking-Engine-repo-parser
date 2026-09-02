@@ -405,8 +405,10 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
           return error(400, "Invalid JSON body");
         }
         if (!body.topic && !body.ideaId) return error(400, "topic or ideaId is required");
-        // Returns { text, packet }: `text` is the paste-ready render, `packet` the structured
-        // fields (source affordances, editable next step). Clients copy `text` verbatim.
+        // Returns { text, packet }. `text` is the paste-ready render with a CONTINUE_TOKEN where
+        // the "Continue from here" line goes -- a client fills it with packet.suggestedNext or
+        // the user's edit (see resolveContinueToken) so the field stays editable offline.
+        // `packet` carries the structured fields (source affordances, full evolution list).
         const result = await buildContinuationPacket(
           db,
           { ideaId: body.ideaId, topic: body.topic },
