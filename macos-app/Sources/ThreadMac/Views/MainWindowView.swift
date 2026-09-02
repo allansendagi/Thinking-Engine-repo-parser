@@ -136,15 +136,31 @@ private struct IdeaListColumn: View {
     }
 
     var body: some View {
-        Group {
-            if groups.isEmpty {
-                ColumnEmptyState(
-                    icon: searching ? "magnifyingglass" : "sparkles",
-                    title: searching ? "No matches" : "Nothing captured yet",
-                    subtitle: searching ? nil : "Talk to ChatGPT, Claude, Gemini or Cursor and your first idea shows up here."
+        VStack(spacing: 0) {
+            if !searching, let s = appState.resumeSuggestion {
+                ResumeBar(
+                    suggestion: s,
+                    onResume: {
+                        appState.snoozeResume(s.ideaId)
+                        Task {
+                            await appState.openIdea(s.ideaId)
+                            await appState.continueThinking(sendTo: nil)
+                        }
+                    },
+                    onDismiss: { withAnimation(.easeOut(duration: 0.16)) { appState.snoozeResume(s.ideaId) } }
                 )
-            } else {
-                GroupedRowScroller(groups: groups)
+                .padding(.top, 4)
+            }
+            Group {
+                if groups.isEmpty {
+                    ColumnEmptyState(
+                        icon: searching ? "magnifyingglass" : "sparkles",
+                        title: searching ? "No matches" : "Nothing captured yet",
+                        subtitle: searching ? nil : "Talk to ChatGPT, Claude, Gemini or Cursor and your first idea shows up here."
+                    )
+                } else {
+                    GroupedRowScroller(groups: groups)
+                }
             }
         }
         // .safeAreaInset pins the field above the scrolling rows and insets them beneath it. The

@@ -85,9 +85,27 @@ built here:
   client + keychain-access-groups, at minimum), and App Store Connect submission with your own
   listing copy, screenshots, and privacy answers
 
-Tell me which of those you want when you're ready and I'll prepare the entitlements file and
-signing step in `package.sh` -- the actual signing/notarization/submission commands still need to
-run with your credentials, not mine.
+### The signing path is already wired -- just add credentials
+
+`Thread.entitlements` (hardened-runtime: network client + network server, nothing else) and the
+signing/notarizing block in `package.sh` are in place. Once you have a Developer ID:
+
+```sh
+# one-time: store a notarytool profile in the keychain
+xcrun notarytool store-credentials thread-notary \
+  --apple-id you@example.com --team-id TEAMID --password <app-specific-password>
+
+# then every build:
+THREAD_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+THREAD_NOTARY_PROFILE=thread-notary \
+  ./package.sh
+```
+
+`package.sh` then signs the `.app` with `--options runtime --timestamp --entitlements
+Thread.entitlements`, signs the DMG, submits it to `notarytool --wait`, and staples. With
+`THREAD_SIGN_IDENTITY` unset it falls back to the ad-hoc path above (what CI produces). Instead
+of the keychain profile you can pass `THREAD_NOTARY_APPLE_ID` + `THREAD_NOTARY_PASSWORD` +
+`THREAD_NOTARY_TEAM_ID`.
 
 ## Setup
 
