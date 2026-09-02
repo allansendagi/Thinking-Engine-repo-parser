@@ -16,7 +16,7 @@ struct PaywallBanner: View {
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                Button("Upgrade at thread.com") { appState.openUpgradePage() }
+                Button("Upgrade to Pro") { appState.openUpgradePage() }
                     .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
 
                 if appState.account?.email != nil {

@@ -135,10 +135,10 @@ async function handleCapture(
       // Account is fine, just at the Free plan's idea cap -- keep credentials, surface it, stop hammering.
       await setPairingState({
         status: "paired",
-        detail: "Free plan limit reached. Upgrade to Pro at thread.com to keep capturing.",
+        detail: "Free plan limit reached. Upgrade to Pro from your Thread account to keep capturing.",
       });
       await setBadge(true);
-      return { ok: false, error: "Free plan limit reached -- upgrade to Pro at thread.com." };
+      return { ok: false, error: "Free plan limit reached -- upgrade to Pro from your Thread account." };
     }
     const detail = err instanceof ApiError ? `${err.status} ${err.message}` : String(err);
     console.error(`[Thread] ingest failed for ${message.conversationId}:`, detail);

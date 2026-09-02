@@ -246,7 +246,7 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(body.billingEnabled).toBe(false); // no PADDLE_* env in tests
   });
 
-  test("email sign-in: start -> verify returns a working bearer; same email is idempotent (rotated token)", async () => {
+  test("email sign-in: start -> verify returns a working bearer; same email is idempotent (per-device token, others stay live)", async () => {
     const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
     const j = { "content-type": "application/json" };
     const email = `signin-${Date.now()}@example.com`;
@@ -290,7 +290,7 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     );
     expect(((await acct.json()) as { email: string }).email).toBe(email);
 
-    // same email again -> same account, fresh token, old token dead
+    // same email again (a second device) -> same account, a distinct token...
     const second = await handler(
       new Request("http://x/v1/auth/verify", {
         method: "POST",
@@ -302,10 +302,15 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(b.userId).toBe(a.userId);
     expect(b.token).not.toBe(a.token);
 
-    const stale = await handler(
+    // ...and the first device's token is STILL valid -- tokens are per-device.
+    const firstStillWorks = await handler(
       new Request("http://x/v1/thinking-state", { headers: { authorization: `Bearer ${a.userId}:${a.token}` } }),
     );
-    expect(stale.status).toBe(401);
+    expect(firstStillWorks.status).toBe(200);
+    const secondWorks = await handler(
+      new Request("http://x/v1/thinking-state", { headers: { authorization: `Bearer ${b.userId}:${b.token}` } }),
+    );
+    expect(secondWorks.status).toBe(200);
   });
 
   test("claim: an anonymous account attaches an email and keeps its data; a taken email 409s", async () => {

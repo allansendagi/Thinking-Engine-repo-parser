@@ -5,7 +5,7 @@ import {
   EmailInUseError,
   findAccountByEmail,
   getAccount,
-  rotateToken,
+  issueToken,
   verifyToken,
 } from "./auth";
 import { consumeCode, issueCode, RateLimitedError } from "./authCodes";
@@ -124,7 +124,9 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
 
       const existing = findAccountByEmail(email);
       if (existing) {
-        const token = await rotateToken(existing.userId); // sign-in rotates the credential
+        // Sign-in issues a token for *this* device. Other devices (Mac app, extension,
+        // desktop agent) keep their own tokens -- see auth.ts `auth_tokens`.
+        const token = await issueToken(existing.userId);
         return json({ userId: existing.userId, token });
       }
       const created = await createUser(email);
@@ -211,25 +213,31 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       }
     }
 
-    // Soft lock. Reads are never gated. No-op until Paddle is actually configured.
-    const isCaptureRoute =
-      req.method === "POST" && (pathname === "/v1/conversations" || pathname === "/v1/paste");
-    if (isCaptureRoute && billingConfigured() && !canCapture(getAccount(userId), ideaCountFor(userId))) {
-      return error(
-        402,
-        "You've hit the Free plan's 25-idea limit. Upgrade to Pro at thread.com to keep capturing.",
-        "upgrade_required",
-      );
-    }
-
-    // MCP / AI continuation is a Pro feature.
-    if (req.method === "POST" && pathname === "/v1/continue" && billingConfigured() && !isProActive(getAccount(userId))) {
-      return error(402, "Continuing an idea with AI is a Pro feature. Upgrade at thread.com.", "pro_required");
-    }
-
     const db = openUserDb(userId);
 
     try {
+      // Soft lock. Reads are never gated. No-op until Paddle is actually configured.
+      // One DB open serves both the gate check and the request body below.
+      const isCaptureRoute =
+        req.method === "POST" && (pathname === "/v1/conversations" || pathname === "/v1/paste");
+      if (isCaptureRoute && billingConfigured() && !canCapture(getAccount(userId), loadIdeas(db).length)) {
+        return error(
+          402,
+          "You've hit the Free plan's 25-idea limit. Upgrade to Pro from your Thread account to keep capturing.",
+          "upgrade_required",
+        );
+      }
+
+      // MCP / AI continuation is a Pro feature.
+      if (
+        req.method === "POST" &&
+        pathname === "/v1/continue" &&
+        billingConfigured() &&
+        !isProActive(getAccount(userId))
+      ) {
+        return error(402, "Continuing an idea with AI is a Pro feature. Upgrade from your Thread account.", "pro_required");
+      }
+
       if (req.method === "POST" && pathname === "/v1/conversations") {
         let body: IngestConversationInput;
         try {

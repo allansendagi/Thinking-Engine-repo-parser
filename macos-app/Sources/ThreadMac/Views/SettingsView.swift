@@ -24,7 +24,7 @@ struct SettingsView: View {
                             Button("Manage billing") { Task { await appState.openBillingPortal() } }
                                 .controlSize(.small)
                         } else {
-                            Button("Upgrade at thread.com") { appState.openUpgradePage() }
+                            Button("Upgrade to Pro") { appState.openUpgradePage() }
                                 .controlSize(.small)
                         }
                         Button("Sign out", role: .destructive) { appState.unpair(); dismiss() }

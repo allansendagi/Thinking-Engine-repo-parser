@@ -6,9 +6,11 @@ import { dirname } from "node:path";
 /**
  * Opaque bearer tokens, hashed at rest, constant-time compared -- the same shape real API tokens
  * (GitHub PATs, Stripe keys) use. Identity is now email-backed: an account can carry a verified
- * email, and sign-in (email + 6-digit code, see authCodes.ts) rotates the token. An account with
- * no email is still valid -- the Mac app auto-creates one on first launch so capture works with
- * zero setup, and the user attaches an email later to claim it.
+ * email, and sign-in (email + 6-digit code, see authCodes.ts) issues an *additional* token for
+ * the device that's signing in. Tokens are per-device (see the `auth_tokens` table): signing in
+ * on the website must not knock the Mac app, the desktop agent, or the extension offline. An
+ * account with no email is still valid -- the Mac app auto-creates one on first launch so
+ * capture works with zero setup, and the user attaches an email later to claim it.
  */
 
 // Read lazily (not as a module-level const) so tests can override THREAD_REGISTRY_PATH before
@@ -74,7 +76,39 @@ export function openRegistry(): Database {
   } catch {
     // index already exists
   }
+
+  // Per-device tokens. An account can have several live tokens at once (the Mac app, the
+  // website, the desktop agent) -- signing in on one device must not knock the others offline.
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS auth_tokens (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL
+    );`,
+  );
+  db.exec("CREATE INDEX IF NOT EXISTS auth_tokens_user ON auth_tokens(user_id);");
+  // Backfill from the original single-token column for accounts that predate this table.
+  db.exec(
+    `INSERT OR IGNORE INTO auth_tokens (token_hash, user_id, created_at)
+     SELECT token_hash, id, created_at FROM users WHERE token_hash IS NOT NULL;`,
+  );
   return db;
+}
+
+/** Adds a token for an account and returns it once. Existing tokens stay valid. */
+export async function issueToken(userId: string): Promise<string> {
+  const db = openRegistry();
+  try {
+    const token = randomBytes(32).toString("hex");
+    db.prepare("INSERT INTO auth_tokens (token_hash, user_id, created_at) VALUES (?, ?, ?)").run(
+      await sha256Hex(token),
+      userId,
+      new Date().toISOString(),
+    );
+    return token;
+  } finally {
+    db.close();
+  }
 }
 
 export type Plan = "free" | "pro";
@@ -233,19 +267,12 @@ export async function createUser(email?: string): Promise<CreatedUser> {
       `INSERT INTO users (id, token_hash, created_at, subscription_status, plan, email, email_verified_at)
        VALUES (?, ?, ?, 'free', 'free', ?, ?)`,
     ).run(userId, tokenHash, now, email ?? null, email ? now : null);
+    db.prepare("INSERT INTO auth_tokens (token_hash, user_id, created_at) VALUES (?, ?, ?)").run(
+      tokenHash,
+      userId,
+      now,
+    );
     return { userId, token };
-  } finally {
-    db.close();
-  }
-}
-
-/** Issues a fresh token for an existing account and invalidates the old one. Used by sign-in. */
-export async function rotateToken(userId: string): Promise<string> {
-  const db = openRegistry();
-  try {
-    const token = randomBytes(32).toString("hex");
-    db.prepare("UPDATE users SET token_hash = ? WHERE id = ?").run(await sha256Hex(token), userId);
-    return token;
   } finally {
     db.close();
   }
@@ -254,11 +281,16 @@ export async function rotateToken(userId: string): Promise<string> {
 export async function verifyToken(userId: string, token: string): Promise<boolean> {
   const db = openRegistry();
   try {
-    const row = db.query("SELECT token_hash FROM users WHERE id = ?").get(userId) as
-      | { token_hash: string }
-      | null;
-    if (!row) return false;
-    return timingSafeEqual(await sha256Hex(token), row.token_hash);
+    const rows = db.query("SELECT token_hash FROM auth_tokens WHERE user_id = ?").all(userId) as {
+      token_hash: string;
+    }[];
+    if (rows.length === 0) return false;
+    const presented = await sha256Hex(token);
+    // Check every live token; the loop is constant per-row so it stays timing-safe against
+    // which token matched (there are at most a handful per account).
+    let matched = false;
+    for (const row of rows) if (timingSafeEqual(presented, row.token_hash)) matched = true;
+    return matched;
   } finally {
     db.close();
   }

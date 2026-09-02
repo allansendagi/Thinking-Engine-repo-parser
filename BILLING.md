@@ -54,7 +54,7 @@
 | Route | Auth | Does |
 |---|---|---|
 | `POST /v1/auth/start` | — | email a 6-digit sign-in code |
-| `POST /v1/auth/verify` | — | `{ userId, token }` — finds-or-creates the account; rotates the token |
+| `POST /v1/auth/verify` | — | `{ userId, token }` — finds-or-creates the account; issues a per-device token (other devices stay signed in) |
 | `POST /v1/account/email` + `/verify` | bearer | attach a verified email to this account (claim); 409 `email_in_use` |
 | `GET /v1/account` | bearer | `{ plan, status, isPro, canCapture, ideaCount, ideaCap, email, billingEnabled }` |
 | `GET /v1/billing/portal` | bearer | `{ url }` — a Paddle customer-portal link (409 if never subscribed) |
@@ -66,7 +66,8 @@
   checkout, Manage billing → portal, Download), `/billing/success` polls `/v1/account` until Pro.
   The bearer credential lives in an httpOnly cookie set by a server function.
 - **Mac app:** `GET /v1/account` on launch + refresh. Footer shows `Free · N/25` or `Pro`. At
-  the cap, a banner offers **Upgrade at thread.com** + **Manage billing** (if the account has
-  an email). Settings → **Add email** claims an anonymous account.
+  the cap, a banner offers **Upgrade to Pro** (opens the website account page) + **Manage
+  billing** (if the account has an email). Settings → **Add email** claims an anonymous account.
+  Signing in on the website does **not** sign the Mac app out — tokens are per-device.
 - **Extension:** on 402 during capture it keeps the (valid) credentials, badges the toolbar,
-  and shows "Free plan limit reached — upgrade to Pro at thread.com".
+  and shows "Free plan limit reached — upgrade to Pro from your Thread account".
