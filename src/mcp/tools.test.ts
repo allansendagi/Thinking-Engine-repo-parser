@@ -195,6 +195,33 @@ describe("buildContinuationPacket", () => {
     expect(r!.text).toContain("captured before source-role verification");
     expect(r!.text).not.toContain("Aug 17");
   });
+
+  test("carries each step's conversation URL as a structured field, never into the paste text", async () => {
+    const db = await seedAuthorityThread();
+    db.query("UPDATE canonical_events SET source_url = ? WHERE conversation_id = 'c1'").run("https://chatgpt.com/c/c1");
+    db.query("UPDATE canonical_events SET source_url = ? WHERE conversation_id = 'c3'").run("https://claude.ai/chat/c3");
+
+    const trace = traceIdea(db, "idea_cog_u1_0")!;
+    expect(trace.provenance[0]?.sourceUrl).toBe("https://chatgpt.com/c/c1");
+    expect(trace.provenance[1]?.sourceUrl).toBeNull(); // c2 (cursor) never got a URL
+    expect(trace.provenance[2]?.sourceUrl).toBe("https://claude.ai/chat/c3");
+
+    const r = await buildContinuationPacket(db, { ideaId: "idea_cog_u1_0" });
+    expect(r!.packet.evolution[0]?.sourceUrl).toBe("https://chatgpt.com/c/c1");
+    expect(r!.packet.evolution[2]?.sourceUrl).toBe("https://claude.ai/chat/c3");
+    // A link to another chat is noise for the model the text is pasted into -- keep it out.
+    expect(r!.text).not.toContain("https://");
+  });
+
+  test("a null source_url on a later capture never clears one already stored", async () => {
+    const db = await seedAuthorityThread();
+    db.query("UPDATE canonical_events SET source_url = 'https://claude.ai/chat/c3' WHERE id = 'u3'").run();
+    // A later flush re-persists the same row with no URL (mid-navigation). COALESCE must keep it.
+    const u3: CanonicalEvent = { id: "u3", conversationId: "c3", source: "claude", role: "user", text: "But who actually performs that verification, and why should we trust them?", createdAt: "2026-08-23T11:00:00.000Z", index: 0 };
+    persistPipelineResult(db, [u3], { ideas: new Map(), cognitiveEvents: [], discardedEvents: [], resolutions: [], rejectedExtractions: [] });
+    const row = db.query("SELECT source_url AS u FROM canonical_events WHERE id = 'u3'").get() as { u: string | null };
+    expect(row.u).toBe("https://claude.ai/chat/c3");
+  });
 });
 
 describe("renderPacket", () => {
@@ -203,6 +230,7 @@ describe("renderPacket", () => {
     source: "ChatGPT",
     formulation: `Position ${n}`,
     sourceText: null,
+    sourceUrl: null,
   });
   const basePacket = (evolution: ContinuationPacket["evolution"]): ContinuationPacket => ({
     idea: { id: "i", title: "T", state: "developing" },

@@ -116,7 +116,7 @@ async function handleCapture(
   }
 
   try {
-    const result = await ingestConversation(message.conversationId, message.source, message.messages);
+    const result = await ingestConversation(message.conversationId, message.source, message.messages, message.sourceUrl);
     console.log(`[Thread] ingested ${message.conversationId}:`, result);
     await markPaired((await getSettings()).credentials!.userId, "Capturing.");
     return { ok: true, result };
@@ -126,7 +126,7 @@ async function handleCapture(
       await setPairingState({ status: "rejected", detail: "Credentials rejected mid-capture. Re-pairing…" });
       const repaired = await ensurePaired("capture-401");
       if (repaired) {
-        const result = await ingestConversation(message.conversationId, message.source, message.messages);
+        const result = await ingestConversation(message.conversationId, message.source, message.messages, message.sourceUrl);
         return { ok: true, result };
       }
       return { ok: false, error: "Credentials expired -- reconnect Thread for Mac." };

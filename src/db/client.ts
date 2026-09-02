@@ -32,6 +32,7 @@ function migrate(db: Database): void {
   const addColumns: [table: string, column: string][] = [
     ["cognitive_events", "persistence TEXT NOT NULL DEFAULT 'high'"],
     ["cognitive_events", "persistence_reason TEXT"],
+    ["canonical_events", "source_url TEXT"],
   ];
   for (const [table, column] of addColumns) {
     try {

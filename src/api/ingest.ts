@@ -16,6 +16,12 @@ export interface IngestConversationInput {
   source: CanonicalEvent["source"];
   /** The full transcript known so far, not just what's new -- see module doc. */
   messages: IncomingMessage[];
+  /**
+   * Canonical URL of the conversation (origin + path). Optional -- the extension sends it, paste
+   * has none. Applied to every canonical event of this conversation; a null here never clears a
+   * URL a prior call already stored (COALESCE in persistPipelineResult).
+   */
+  sourceUrl?: string | null;
 }
 
 export interface IngestResult {
@@ -69,6 +75,7 @@ export async function ingestConversation(
     text: m.text,
     createdAt: m.createdAt,
     index: i,
+    sourceUrl: input.sourceUrl ?? null,
   }));
 
   const newEventIds = new Set(allEvents.filter((e) => !existingIds.has(e.id)).map((e) => e.id));

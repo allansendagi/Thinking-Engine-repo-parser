@@ -305,8 +305,19 @@ private struct ContinuationPreview: View {
                         HStack(alignment: .top, spacing: 6) {
                             Text("•").foregroundStyle(Theme.ink(0.3))
                             VStack(alignment: .leading, spacing: 1) {
-                                Text("\(Theme.ago(step.when))\(step.source.map { " · \($0)" } ?? "")")
-                                    .font(.system(size: 10)).foregroundStyle(Theme.ink(0.36))
+                                HStack(spacing: 5) {
+                                    Text("\(Theme.ago(step.when))\(step.source.map { " · \($0)" } ?? "")")
+                                        .font(.system(size: 10)).foregroundStyle(Theme.ink(0.36))
+                                    if let raw = step.sourceUrl, let url = URL(string: raw) {
+                                        Button {
+                                            NSWorkspace.shared.open(url)
+                                        } label: {
+                                            Text("View source").font(.system(size: 10, weight: .medium))
+                                        }
+                                        .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                                        .help(raw)
+                                    }
+                                }
                                 Text(step.formulation).font(.system(size: 12)).foregroundStyle(Theme.ink(0.72))
                                     .fixedSize(horizontal: false, vertical: true)
                             }

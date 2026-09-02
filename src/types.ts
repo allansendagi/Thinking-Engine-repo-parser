@@ -15,6 +15,14 @@ export interface CanonicalEvent {
   createdAt: string; // ISO 8601
   /** Position of this message within its conversation's kept path, 0-indexed. */
   index: number;
+  /**
+   * Canonical URL of the conversation this message was captured from (origin + path, no query
+   * or hash) -- e.g. `https://claude.ai/chat/<id>`. One value per conversation; every event in
+   * it carries the same URL. Null for pasted transcripts (no URL) and for data captured before
+   * this field existed. A structured "view source" affordance only -- never rendered into the
+   * paste-ready continuation text.
+   */
+  sourceUrl?: string | null;
 }
 
 export type CognitiveEventType =

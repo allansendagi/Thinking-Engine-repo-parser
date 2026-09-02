@@ -50,6 +50,7 @@ interface CanonicalEventRow {
   text: string;
   created_at: string;
   idx: number;
+  source_url: string | null;
 }
 
 /** Loads every idea, with its evolution/open loops/decisions/related ids, from SQLite. */
@@ -165,6 +166,7 @@ export function loadCanonicalEvents(db: Database): CanonicalEvent[] {
     text: r.text,
     createdAt: r.created_at,
     index: r.idx,
+    sourceUrl: r.source_url ?? null,
   }));
 }
 
@@ -179,5 +181,6 @@ export function loadCanonicalEvent(db: Database, id: string): CanonicalEvent | u
     text: row.text,
     createdAt: row.created_at,
     index: row.idx,
+    sourceUrl: row.source_url ?? null,
   };
 }

@@ -69,6 +69,22 @@ function decodePathId(raw: string): string {
   }
 }
 
+/**
+ * A conversation `sourceUrl` is client-supplied and only ever used as a "view source" link, so
+ * keep it to a plain absolute http(s) URL and drop it otherwise. Strips query + hash (the
+ * canonical conversation URL never needs them) so nothing sensitive rides along in a stored link.
+ */
+function sanitizeSourceUrl(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > 2048) return null;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.origin + u.pathname;
+  } catch {
+    return null;
+  }
+}
+
 /** This user's current idea-node count -- drives the Free plan's capture cap. */
 function ideaCountFor(userId: string): number {
   const db = openUserDb(userId);
@@ -288,6 +304,9 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
         if (!body.conversationId || !Array.isArray(body.messages)) {
           return error(400, "conversationId and messages[] are required");
         }
+        // Accept only a plain http(s) URL; anything else (or absent) is stored as null rather
+        // than trusted verbatim into the DB.
+        body.sourceUrl = sanitizeSourceUrl(body.sourceUrl);
         const result = await ingestConversation(db, body, providers);
         return json(result);
       }
