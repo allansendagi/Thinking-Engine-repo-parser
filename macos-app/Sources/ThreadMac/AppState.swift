@@ -297,6 +297,17 @@ final class AppState: ObservableObject {
     }
 
     func openIdea(_ id: String) async {
+        // Switching to a different idea: drop any continuation preview/draft from the previous
+        // one so it can't linger under the new idea's detail (panel and full window share this
+        // AppState, and the full window changes ideas by selecting a row, not via closeIdea()).
+        if id != selectedIdeaId {
+            continueResult = nil
+            continuationPacket = nil
+            continuationText = nil
+            nextStepDraft = ""
+            continueCopied = false
+            sentToTool = nil
+        }
         selectedIdeaId = id
         errorMessage = nil
         do {
@@ -439,6 +450,12 @@ final class AppState: ObservableObject {
         guard let text = continuationText, let packet = continuationPacket else { return nil }
         let edited = nextStepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !edited.isEmpty, edited != packet.suggestedNext else { return text }
+        // Anchor on the trailing "Continue from here" block so we only rewrite that one line,
+        // not an incidental echo of the same phrase in an evolution bullet.
+        let anchor = "Continue from here\n" + packet.suggestedNext
+        if text.contains(anchor) {
+            return text.replacingOccurrences(of: anchor, with: "Continue from here\n" + edited)
+        }
         return text.replacingOccurrences(of: packet.suggestedNext, with: edited)
     }
 
