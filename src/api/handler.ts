@@ -6,6 +6,7 @@ import {
   findAccountByEmail,
   getAccount,
   issueToken,
+  reassignEmail,
   verifyToken,
 } from "./auth";
 import { consumeCode, issueCode, RateLimitedError } from "./authCodes";
@@ -21,7 +22,7 @@ import {
 } from "./billing";
 import { openUserDb } from "../db/tenancy";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
-import { loadIdeas } from "../db/queries";
+import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { parsePastedConversation } from "../import/pasteParser";
 import {
@@ -73,6 +74,16 @@ function ideaCountFor(userId: string): number {
   const db = openUserDb(userId);
   try {
     return loadIdeas(db).length;
+  } finally {
+    db.close();
+  }
+}
+
+/** No ideas AND no captured messages -- an account that was minted and never actually used. */
+function accountIsEmpty(userId: string): boolean {
+  const db = openUserDb(userId);
+  try {
+    return loadIdeas(db).length === 0 && loadCanonicalEvents(db).length === 0;
   } finally {
     db.close();
   }
@@ -210,7 +221,22 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
         attachEmail(userId, email);
       } catch (e) {
         if (e instanceof EmailInUseError) {
-          return error(409, "That email already belongs to another Thread account. Sign in with it instead.", "email_in_use");
+          // If the email is sitting on an account that was minted and never used (0 ideas, 0
+          // captured messages -- e.g. a stray website sign-in), just move it here rather than
+          // stranding the user. Only a real account with data gets protected with a 409.
+          if (accountIsEmpty(e.ownerUserId)) {
+            reassignEmail(e.ownerUserId, userId, email);
+            return json({
+              userId,
+              ...accountView(getAccount(userId)!, ideaCountFor(userId)),
+              reclaimedFromEmptyAccount: true,
+            });
+          }
+          return error(
+            409,
+            "That email is already on another Thread account that has ideas in it. Sign in with that email instead.",
+            "email_in_use",
+          );
         }
         throw e;
       }
