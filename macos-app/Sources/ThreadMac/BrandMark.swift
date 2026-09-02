@@ -37,9 +37,3 @@ enum BrandMark {
         return image
     }()
 }
-
-struct MenuBarGlyph: View {
-    var body: some View {
-        Image(nsImage: BrandMark.menuBarImage)
-    }
-}

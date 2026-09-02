@@ -39,12 +39,23 @@ struct RootView: View {
             footer
         }
         .frame(width: Theme.panelWidth, height: Theme.panelHeight)
-        .background(VisualEffectBackground())
+        .background {
+            // Exact demo surface: #F6F6F8 @ 82% over a light frosted material (the mock's
+            // rgba(246,246,248,.82) + backdrop-filter blur).
+            ZStack {
+                VisualEffectBackground()
+                Theme.panelTint.opacity(0.82)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: Theme.corner))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.corner)
-                .strokeBorder(Color.white.opacity(0.7), lineWidth: 0.5)
-                .blendMode(.plusLighter)
+                .inset(by: 0.25)
+                .stroke(Color.white.opacity(0.7), lineWidth: 0.5)   // inset highlight
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.corner)
+                .stroke(Color.black.opacity(0.22), lineWidth: 0.5)   // edge hairline
         )
         .preferredColorScheme(.light)  // the design is a light frosted panel, deliberately
         .task { await appState.refresh() }

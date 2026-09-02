@@ -1,39 +1,42 @@
 import AppKit
 import SwiftUI
 
-/// A floating, key-able NSPanel shown/hidden by the global hotkey -- the "press a shortcut,
-/// recall your thinking" interaction from the original design. Reuses RootView rather than a
-/// separate UI, both hosted with the same AppState so pairing/search/selection stay consistent
-/// whether opened from the menu bar or the hotkey.
+/// A borderless key-capable panel — the standard Spotlight/Raycast-style host. `.titled` +
+/// transparent + fullSizeContentView is the flaky combo that made the panel flash and vanish;
+/// a plain borderless NSPanel with an explicit `canBecomeKey` is stable.
+private final class FloatingPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 final class QuickRecallPanel {
-    private let panel: NSPanel
-    private let appState: AppState
+    private let panel: FloatingPanel
+    /// The menu-bar status button, if opened from the menu bar — anchors the panel under it.
+    weak var anchorButton: NSStatusBarButton?
 
     init(appState: AppState) {
-        self.appState = appState
-
         let hosting = NSHostingController(rootView: RootView().environmentObject(appState))
-        let panel = NSPanel(
+        hosting.view.wantsLayer = true
+
+        let panel = FloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: Theme.panelWidth, height: Theme.panelHeight),
-            styleMask: [.titled, .closable, .nonactivatingPanel, .fullSizeContentView],
+            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         panel.contentViewController = hosting
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.isMovableByWindowBackground = true
         panel.isFloatingPanel = true
         panel.level = .floating
+        panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        // Transparent window -- the SwiftUI root paints its own translucent material and clips to
-        // a 12pt rounded rect. The panel just provides the drop shadow.
+        panel.animationBehavior = .none
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // Transparent window; the SwiftUI root paints its #F6F6F8 material and clips to a 12pt
+        // rounded rect. The window only supplies the drop shadow.
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.contentView?.wantsLayer = true
-        panel.contentView?.layer?.masksToBounds = false
         self.panel = panel
     }
 
@@ -41,20 +44,27 @@ final class QuickRecallPanel {
         if panel.isVisible {
             panel.orderOut(nil)
         } else {
-            centerOnActiveScreen()
+            position()
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
         }
     }
 
-    private func centerOnActiveScreen() {
-        guard let screen = NSScreen.main else { return }
-        let screenFrame = screen.visibleFrame
+    /// Anchor under the menu-bar item when we have it; otherwise top-centre of the active screen.
+    /// Never re-centres once shown, so it can't "jump".
+    private func position() {
         let size = panel.frame.size
-        let origin = NSPoint(
-            x: screenFrame.midX - size.width / 2,
-            y: screenFrame.midY - size.height / 2 + screenFrame.height * 0.15
-        )
-        panel.setFrameOrigin(origin)
+        if let win = anchorButton?.window {
+            let b = win.convertToScreen(anchorButton!.convert(anchorButton!.bounds, to: nil))
+            let screen = win.screen ?? NSScreen.main
+            let visible = screen?.visibleFrame ?? .zero
+            var x = b.midX - size.width / 2
+            x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
+            let y = b.minY - size.height - 6
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        } else if let screen = NSScreen.main {
+            let f = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(x: f.midX - size.width / 2, y: f.maxY - size.height - 12))
+        }
     }
 }

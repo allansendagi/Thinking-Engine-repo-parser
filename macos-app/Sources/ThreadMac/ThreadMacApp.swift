@@ -7,21 +7,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKey: GlobalHotKey?
     private var quickRecallPanel: QuickRecallPanel?
     private var pairingServer: PairingServer?
+    private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panel = QuickRecallPanel(appState: appState)
         quickRecallPanel = panel
 
-        // Default: Cmd+Shift+T. kVK_ANSI_T = 0x11. Not user-configurable yet -- see README.
-        hotKey = GlobalHotKey(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(cmdKey | shiftKey)) {
-            panel.toggle()
+        // Menu-bar item — a single NSStatusItem whose click toggles the ONE panel. (A SwiftUI
+        // MenuBarExtra would create a second RootView window, which is what made it "jump".)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.image = BrandMark.menuBarImage
+        item.button?.action = #selector(togglePanel)
+        item.button?.target = self
+        statusItem = item
+        panel.anchorButton = item.button
+
+        // Cmd+Shift+T opens the same panel.
+        hotKey = GlobalHotKey(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(cmdKey | shiftKey)) { [weak panel] in
+            panel?.toggle()
         }
         if hotKey == nil {
             print("[ThreadMac] Failed to register the global hotkey (Cmd+Shift+T) -- it may be in use by another app.")
         }
 
-        // Serve credentials to the browser extension over loopback so it never mints its own
-        // account. Started before bootstrap so a fast extension retry catches a fresh account.
         let state = appState
         let server = PairingServer(
             payloadProvider: { state.pairingPayload() },
@@ -33,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await appState.bootstrap() }
     }
 
+    @objc private func togglePanel() { quickRecallPanel?.toggle() }
+
     func applicationWillTerminate(_ notification: Notification) {
         pairingServer?.stop()
     }
@@ -43,14 +53,6 @@ struct ThreadMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        MenuBarExtra {
-            RootView()
-                .environmentObject(appDelegate.appState)
-        } label: {
-            MenuBarGlyph()
-        }
-        .menuBarExtraStyle(.window)
-
         // The optional Full Window (spec §4). Opened with "Open in Window" from the panel, or
         // Cmd+Shift+W. Single instance.
         Window("Thread", id: "main") {
