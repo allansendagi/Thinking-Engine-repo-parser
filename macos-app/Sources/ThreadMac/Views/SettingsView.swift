@@ -13,6 +13,38 @@ struct SettingsView: View {
             Text("Settings").font(.headline)
 
             VStack(alignment: .leading, spacing: 6) {
+                Label("Account", systemImage: "person.crop.circle")
+                    .font(.subheadline).fontWeight(.medium)
+                if let email = appState.account?.email {
+                    Text(email).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    Text(appState.planLabel == "Cloud" ? "Signed in" : appState.planLabel)
+                        .font(.caption).foregroundColor(.secondary)
+                    HStack(spacing: 8) {
+                        if appState.account?.isPro == true {
+                            Button("Manage billing") { Task { await appState.openBillingPortal() } }
+                                .controlSize(.small)
+                        } else {
+                            Button("Upgrade at thread.com") { appState.openUpgradePage() }
+                                .controlSize(.small)
+                        }
+                        Button("Sign out", role: .destructive) { appState.unpair(); dismiss() }
+                            .controlSize(.small)
+                    }
+                } else {
+                    Text("This Mac uses an account with no email. Add one to buy Pro on the website and sign in on other devices — your ideas stay.")
+                        .font(.caption).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    EmailCodeForm(
+                        title: "Add your email",
+                        sendCode: { await appState.sendClaimCode(email: $0) },
+                        verify: { await appState.claimEmail(email: $0, code: $1) }
+                    )
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
                 Label("Browser extension", systemImage: "puzzlepiece.extension")
                     .font(.subheadline).fontWeight(.medium)
                 Text("While Thread is running, the extension connects automatically. If it can't, paste this pairing string into the extension popup.")

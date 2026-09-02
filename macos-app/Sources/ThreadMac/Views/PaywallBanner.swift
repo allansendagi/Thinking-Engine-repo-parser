@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Soft paywall: shown above the list once the trial ends. Reads still work (you can recover
-/// everything you've captured); this is the nudge to subscribe so new capture resumes.
+/// Soft paywall: shown above the list once the Free plan's 25-idea cap is reached. Reads still
+/// work (you can recover everything); this is the nudge to upgrade. Payment is on the website.
 struct PaywallBanner: View {
     @EnvironmentObject var appState: AppState
 
@@ -9,22 +9,20 @@ struct PaywallBanner: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "lock.fill").font(.system(size: 11)).foregroundStyle(Theme.accent)
-                Text("Your Thread trial has ended").font(.system(size: 12, weight: .semibold))
+                Text("You've hit the Free plan's \(appState.account?.ideaCap ?? 25)-idea limit")
+                    .font(.system(size: 12, weight: .semibold))
             }
-            Text("Everything you've captured is still here. Subscribe to keep adding new thinking from your AI chats.")
+            Text("Everything you've captured is still here. Upgrade to Pro for unlimited capture and AI continuation.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                Button {
-                    Task { await appState.openCheckout() }
-                } label: {
-                    Text(appState.billingBusy ? "Opening…" : "Upgrade to Pro")
-                }
-                .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
-                .disabled(appState.billingBusy)
+                Button("Upgrade at thread.com") { appState.openUpgradePage() }
+                    .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
 
-                Button("Manage billing") { Task { await appState.openBillingPortal() } }
-                    .controlSize(.small)
+                if appState.account?.email != nil {
+                    Button("Manage billing") { Task { await appState.openBillingPortal() } }
+                        .controlSize(.small)
+                }
 
                 Button("Refresh") { Task { await appState.refreshAccount() } }
                     .controlSize(.small)

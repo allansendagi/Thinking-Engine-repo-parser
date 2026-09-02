@@ -15,7 +15,7 @@ export function isUnauthorized(err: unknown): boolean {
   return err instanceof ApiError && err.status === 401;
 }
 
-/** True when the account is valid but out of trial / unsubscribed -- capture is gated, not broken. */
+/** True when the account is valid but at the Free plan's idea cap -- capture is gated, not broken. */
 export function isPaymentRequired(err: unknown): boolean {
   return err instanceof ApiError && err.status === 402;
 }

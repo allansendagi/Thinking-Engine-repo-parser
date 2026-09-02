@@ -2,26 +2,28 @@ import SwiftUI
 
 struct PairingView: View {
     @EnvironmentObject var appState: AppState
-    @State private var existingUserId = ""
-    @State private var existingToken = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Not paired with a Thread account yet.")
-                .font(.callout)
-            Button("Create a new account") { Task { await appState.pairNewAccount() } }
-                .buttonStyle(.borderedProminent)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Set up Thread").font(.headline)
+
+            EmailCodeForm(
+                title: "Sign in with your email",
+                sendCode: { await appState.sendSignInCode(email: $0) },
+                verify: { await appState.signIn(email: $0, code: $1) }
+            )
 
             Divider()
 
-            Text("Or use an existing account").font(.caption).foregroundColor(.secondary)
-            TextField("User ID", text: $existingUserId).textFieldStyle(.roundedBorder)
-            SecureField("Token", text: $existingToken).textFieldStyle(.roundedBorder)
-            Button("Use these credentials") {
-                appState.useExistingCredentials(userId: existingUserId, token: existingToken)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Or start fresh").font(.caption).foregroundColor(.secondary)
+                Button("Create a new account") { Task { await appState.pairNewAccount() } }
+                Text("Captures right away. Add an email later from Settings to link this account to the website.")
+                    .font(.caption2).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .disabled(existingUserId.isEmpty || existingToken.isEmpty)
         }
-        .padding(14)
+        .padding(16)
+        .frame(width: 320)
     }
 }

@@ -73,25 +73,26 @@ final class AppState: ObservableObject {
         lastExtensionHandshake = Date()
     }
 
-    /// Footer's third slot: "Trial · Nd" / "Pro" / "Trial ended" once billing is live, else "Cloud".
+    /// Footer's third slot: "Free · N/25" / "Pro" once billing is live, else "Cloud".
     var planLabel: String { account?.footerLabel ?? "Cloud" }
 
     /// True when billing is on AND this account can no longer capture. Reads still work.
-    var isLocked: Bool { (account?.billingEnabled ?? false) && !(account?.entitled ?? true) }
+    var isLocked: Bool { (account?.billingEnabled ?? false) && !(account?.canCapture ?? true) }
+
+    /// Where the founder buys Pro / manages the account -- payment lives on the website.
+    static let marketingBaseURL = "https://mind-stream-continuity.vercel.app"
+
+    @Published var authBusy = false
+    @Published var authError: String?
 
     func refreshAccount() async {
         guard isPaired else { return }
         account = try? await client.getAccount()
     }
 
-    func openCheckout() async {
-        billingBusy = true
-        defer { billingBusy = false }
-        do {
-            NSWorkspace.shared.open(try await client.billingCheckoutURL())
-        } catch {
-            errorMessage = "Couldn't start checkout: \(error.localizedDescription)"
-        }
+    /// Payment happens on the website. This just opens the account page in the browser.
+    func openUpgradePage() {
+        if let u = URL(string: "\(Self.marketingBaseURL)/account") { NSWorkspace.shared.open(u) }
     }
 
     func openBillingPortal() async {
@@ -100,8 +101,69 @@ final class AppState: ObservableObject {
         do {
             NSWorkspace.shared.open(try await client.billingPortalURL())
         } catch {
-            // No customer yet -> send them to checkout instead.
-            await openCheckout()
+            openUpgradePage() // no Paddle customer yet -> send them to the site to subscribe
+        }
+    }
+
+    // MARK: - Email sign-in / claim
+
+    /// Sends a 6-digit code for signing in on this Mac with an existing account's email.
+    func sendSignInCode(email: String) async -> Bool {
+        authBusy = true
+        authError = nil
+        defer { authBusy = false }
+        do {
+            try await APIClient.authStart(baseURL: apiBaseUrl, email: email)
+            return true
+        } catch {
+            authError = "Couldn't send the code. Check the address."
+            return false
+        }
+    }
+
+    /// Signs this Mac in to the account for `email` (creates it if new). Replaces local credentials.
+    func signIn(email: String, code: String) async -> Bool {
+        authBusy = true
+        authError = nil
+        defer { authBusy = false }
+        do {
+            let created = try await APIClient.authVerify(baseURL: apiBaseUrl, email: email, code: code)
+            useExistingCredentials(userId: created.userId, token: created.token)
+            await refreshAccount()
+            return true
+        } catch {
+            authError = "That code is wrong or expired."
+            return false
+        }
+    }
+
+    /// Attaches an email to *this* (already paired) account, keeping all its ideas.
+    func sendClaimCode(email: String) async -> Bool {
+        authBusy = true
+        authError = nil
+        defer { authBusy = false }
+        do {
+            try await client.accountEmailStart(email: email)
+            return true
+        } catch {
+            authError = "Couldn't send the code."
+            return false
+        }
+    }
+
+    func claimEmail(email: String, code: String) async -> Bool {
+        authBusy = true
+        authError = nil
+        defer { authBusy = false }
+        do {
+            account = try await client.accountEmailVerify(email: email, code: code)
+            return true
+        } catch let APIError.http(status, _) where status == 409 {
+            authError = "That email is already on another account. Sign in with it instead."
+            return false
+        } catch {
+            authError = "That code is wrong or expired."
+            return false
         }
     }
 

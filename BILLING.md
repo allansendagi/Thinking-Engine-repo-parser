@@ -1,63 +1,72 @@
-# Billing — 14-day trial, Stripe subscription, soft lock
+# Billing — permanent Free tier + Pro, via Paddle (Merchant of Record)
 
 ## Model
 
-- **Trial:** 14 days, no card. Granted at account creation (`createUser` sets `trial_ends_at`).
-- **Convert:** Stripe Checkout (subscription mode). The Thread `userId` rides along as
-  `client_reference_id` + `subscription_data.metadata.thread_user_id`.
-- **Lock:** *soft*. Reads (`/v1/thinking-state`, `/v1/ideas`, `/trace`, `/continue`, …) always
-  work — you can always recover what you've captured. Only `POST /v1/conversations` and
-  `POST /v1/paste` are gated; they return **402** `{ code: "subscription_required" }` when the
-  trial is over and there's no active subscription.
-- **Kill switch:** the gate is a no-op until `STRIPE_SECRET_KEY` + `STRIPE_PRICE_ID` are set.
-  Deploying this code changes nothing on its own.
+- **Free** (default, no card, forever): capture up to **25 idea nodes**; unlimited reads /
+  recall / trace. No timed trial.
+- **Pro** ($15/month): unlimited capture **+ AI continuation** (`POST /v1/continue`, MCP
+  `continueThinking`).
+- **Identity is an email.** An account can be anonymous (the Mac app auto-creates one on first
+  launch so capture works with zero setup) and later *claimed* by verifying an email. Sign-in
+  is passwordless: email + 6-digit code.
+- **Payment happens on the website**, not in the app. Paddle is Merchant of Record — it owns
+  checkout, recurring billing, tax/VAT, invoices, fraud, dunning and the customer portal.
+- **Soft lock:** reads always work. Only `POST /v1/conversations` / `POST /v1/paste` (402
+  `upgrade_required` at the 25-idea cap) and `POST /v1/continue` (402 `pro_required`) are gated.
+- **Kill switch:** every gate is a no-op until `PADDLE_API_KEY` + `PADDLE_PRICE_ID` +
+  `PADDLE_WEBHOOK_SECRET` are all set.
 
-## Backend env vars (Railway)
+## Backend env (Railway)
 
 | Var | Required | Purpose |
 |---|---|---|
-| `STRIPE_SECRET_KEY` | to enable billing | `sk_live_…` / `sk_test_…` |
-| `STRIPE_PRICE_ID` | to enable billing | the recurring Price for Thread Pro |
-| `STRIPE_WEBHOOK_SECRET` | for the webhook | `whsec_…` from the endpoint you create |
-| `APP_PUBLIC_URL` | optional | redirect base for Checkout success/cancel (default: the marketing site) |
+| `PADDLE_API_KEY` | to enable billing | Paddle API key (server-side; portal links) |
+| `PADDLE_PRICE_ID` | to enable billing | the recurring `pri_…` for Thread Pro |
+| `PADDLE_WEBHOOK_SECRET` | to enable billing | `pdl_ntfset_…` signing secret for the webhook destination |
+| `PADDLE_ENV` | optional | `sandbox` \| `production` (default `production`) |
+| `PADDLE_PRICE_ID_YEARLY` | optional | reserved for a future yearly plan picker |
+| `RESEND_API_KEY` | for real email | Resend API key. Without it, sign-in codes are logged, not sent. |
+| `EMAIL_FROM` | for real email | e.g. `Thread <hello@thread.com>` |
+| `APP_PUBLIC_URL` | optional | portal return URL base (default: the marketing site) |
 
-## Stripe dashboard setup (one time)
+## Website env (Vercel)
 
-1. **Product + Price:** create "Thread Pro" — a recurring **$15/month** Price (and optionally a
-   **$12/month billed yearly** = $144/yr Price). Copy the monthly `price_…` id into
-   `STRIPE_PRICE_ID`. (A yearly option needs a plan-picker in Checkout — add later; monthly ships
-   the flow.)
-2. **Webhook:** Developers → Webhooks → Add endpoint →
-   `https://<your-api>/v1/stripe/webhook`, events:
-   `checkout.session.completed`, `customer.subscription.created`,
-   `customer.subscription.updated`, `customer.subscription.deleted`.
-   Copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
-3. **Customer Portal:** Settings → Billing → Customer portal → activate (lets `/v1/billing/portal`
-   mint sessions so users self-serve cancel / update card).
+| Var | Purpose |
+|---|---|
+| `API_BASE` | Railway API base URL (server functions call it) |
+| `VITE_PADDLE_CLIENT_TOKEN` | Paddle client-side token for Paddle.js |
+| `VITE_PADDLE_PRICE_ID` | same `pri_…` as the backend |
+| `VITE_PADDLE_ENV` | `sandbox` \| `production` |
+
+## Paddle dashboard setup (one time)
+
+1. **Catalog:** create a product "Thread Pro" with a recurring **$15/month** price. Copy the
+   `pri_…` id.
+2. **Notifications → new destination (webhook):** URL `https://<api>/v1/paddle/webhook`, events
+   `subscription.activated`, `subscription.updated`, `subscription.past_due`,
+   `subscription.canceled`, `subscription.resumed`, `transaction.completed`. Copy the signing
+   secret → `PADDLE_WEBHOOK_SECRET`.
+3. **Checkout settings → default payment link:** point at the website domain and approve it.
+4. Sandbox first: `PADDLE_ENV=sandbox` / `VITE_PADDLE_ENV=sandbox` with a sandbox token.
 
 ## API
 
 | Route | Auth | Does |
 |---|---|---|
-| `GET /v1/account` | bearer | `{ status, entitled, trialDaysLeft, currentPeriodEnd, billingEnabled }` |
-| `POST /v1/billing/checkout` | bearer | `{ url }` — a Stripe Checkout Session for this account |
-| `GET /v1/billing/portal` | bearer | `{ url }` — a Customer Portal session (409 if never subscribed) |
-| `POST /v1/stripe/webhook` | Stripe signature | applies subscription events to the account row |
-
-`status`: `trialing` | `active` | `past_due` (grace) | `canceled` (usable through
-`currentPeriodEnd`) | `incomplete`.
+| `POST /v1/auth/start` | — | email a 6-digit sign-in code |
+| `POST /v1/auth/verify` | — | `{ userId, token }` — finds-or-creates the account; rotates the token |
+| `POST /v1/account/email` + `/verify` | bearer | attach a verified email to this account (claim); 409 `email_in_use` |
+| `GET /v1/account` | bearer | `{ plan, status, isPro, canCapture, ideaCount, ideaCap, email, billingEnabled }` |
+| `GET /v1/billing/portal` | bearer | `{ url }` — a Paddle customer-portal link (409 if never subscribed) |
+| `POST /v1/paddle/webhook` | Paddle signature | applies subscription events to the account row |
 
 ## Clients
 
-- **Mac app:** fetches `/v1/account` on launch + every refresh. Footer shows
-  `Trial · Nd` / `Pro` / `Trial ended`. When locked, a soft paywall banner sits above the list
-  with **Upgrade to Pro** (→ Checkout) and **Manage billing** (→ Portal). Reads stay open.
-- **Extension:** on a 402 during capture it keeps the credentials (they're valid), shows
-  "Trial ended — subscribe in Thread for Mac" in the popup, and sets the toolbar badge.
-
-## Website (mind-stream-continuity) — still to build
-
-- `/pricing` → button hits `POST /v1/billing/checkout` (needs the visitor's account) **or** runs
-  Checkout first and creates the Thread account in the webhook, then shows the pairing string +
-  download link on `/billing/success`.
-- `/account` → link to `GET /v1/billing/portal`.
+- **Website:** `/login` (email + code), `/account` (plan status, Upgrade → Paddle.js overlay
+  checkout, Manage billing → portal, Download), `/billing/success` polls `/v1/account` until Pro.
+  The bearer credential lives in an httpOnly cookie set by a server function.
+- **Mac app:** `GET /v1/account` on launch + refresh. Footer shows `Free · N/25` or `Pro`. At
+  the cap, a banner offers **Upgrade at thread.com** + **Manage billing** (if the account has
+  an email). Settings → **Add email** claims an anonymous account.
+- **Extension:** on 402 during capture it keeps the (valid) credentials, badges the toolbar,
+  and shows "Free plan limit reached — upgrade to Pro at thread.com".

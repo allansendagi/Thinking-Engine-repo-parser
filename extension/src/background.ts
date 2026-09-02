@@ -132,13 +132,13 @@ async function handleCapture(
       return { ok: false, error: "Credentials expired -- reconnect Thread for Mac." };
     }
     if (isPaymentRequired(err)) {
-      // Account is fine, just out of trial -- keep credentials, surface it, stop hammering.
+      // Account is fine, just at the Free plan's idea cap -- keep credentials, surface it, stop hammering.
       await setPairingState({
         status: "paired",
-        detail: "Trial ended. Subscribe in Thread for Mac to keep capturing.",
+        detail: "Free plan limit reached. Upgrade to Pro at thread.com to keep capturing.",
       });
       await setBadge(true);
-      return { ok: false, error: "Thread trial ended -- subscribe to keep capturing." };
+      return { ok: false, error: "Free plan limit reached -- upgrade to Pro at thread.com." };
     }
     const detail = err instanceof ApiError ? `${err.status} ${err.message}` : String(err);
     console.error(`[Thread] ingest failed for ${message.conversationId}:`, detail);

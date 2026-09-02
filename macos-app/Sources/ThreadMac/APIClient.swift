@@ -69,6 +69,33 @@ final class APIClient {
         return try await client.request("/v1/users", method: "POST")
     }
 
+    // MARK: - Passwordless sign-in (email + 6-digit code)
+
+    struct OKResponse: Decodable { let ok: Bool? }
+
+    static func authStart(baseURL: String, email: String, session: URLSession = .shared) async throws {
+        let client = APIClient(baseURL: baseURL, credentials: nil, session: session)
+        let body = try JSONEncoder().encode(["email": email])
+        let _: OKResponse = try await client.request("/v1/auth/start", method: "POST", body: body)
+    }
+
+    static func authVerify(baseURL: String, email: String, code: String, session: URLSession = .shared) async throws -> CreatedUser {
+        let client = APIClient(baseURL: baseURL, credentials: nil, session: session)
+        let body = try JSONEncoder().encode(["email": email, "code": code])
+        return try await client.request("/v1/auth/verify", method: "POST", body: body)
+    }
+
+    /// Claim the current (bearer-authed) account by attaching a verified email.
+    func accountEmailStart(email: String) async throws {
+        let body = try JSONEncoder().encode(["email": email])
+        let _: OKResponse = try await request("/v1/account/email", method: "POST", body: body)
+    }
+
+    func accountEmailVerify(email: String, code: String) async throws -> AccountStatus {
+        let body = try JSONEncoder().encode(["email": email, "code": code])
+        return try await request("/v1/account/email/verify", method: "POST", body: body)
+    }
+
     func getThinkingState(topic: String? = nil) async throws -> ThinkingStateResponse {
         var path = "/v1/thinking-state"
         if let topic, !topic.isEmpty {
@@ -119,12 +146,6 @@ final class APIClient {
 
     func getAccount() async throws -> AccountStatus {
         try await request("/v1/account")
-    }
-
-    func billingCheckoutURL() async throws -> URL {
-        let r: BillingURL = try await request("/v1/billing/checkout", method: "POST", body: Data("{}".utf8))
-        guard let u = URL(string: r.url) else { throw APIError.http(status: 0, message: "Bad checkout URL") }
-        return u
     }
 
     func billingPortalURL() async throws -> URL {
