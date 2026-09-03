@@ -29,6 +29,9 @@ jobs:
       # webhook -> Pro -> cancel. Imports extension/src/lib/resume.ts, so needs those deps too.
       - run: (cd extension && bun install --frozen-lockfile)
       - run: bun run e2e
+      # Payment path: webhook-signature security, the full subscription lifecycle, the gates, the
+      # portal endpoint, webhook idempotency, and the 402 contract. No card, no Paddle account.
+      - run: bun run e2e:payments
       # The eval harness runs the real extraction/reasoning models, so it only runs when the key
       # is available as a repo secret. Without it, skip cleanly -- `bun run eval` is a local step.
       - name: eval (golden set)

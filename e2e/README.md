@@ -1,12 +1,12 @@
-# End-to-end user-journey simulation
+# End-to-end simulations
 
 ```sh
-bun run e2e        # = bun run e2e/journey.ts
+bun run e2e            # journey.ts  — the whole user journey, 46 checks
+bun run e2e:payments   # payments.ts — the Paddle billing surface, 30 checks
 ```
 
-Deterministic, no API key, ~1s. Drives the real HTTP handler (`src/api/handler.ts`) through the
-entire path a person takes, asserting at every step. Exits non-zero on the first failure. Runs in
-CI (backend job).
+Both are deterministic, no API key, ~1s, exit non-zero on the first failure, and run in CI
+(backend job). They drive the real HTTP handler (`src/api/handler.ts`) and assert at every step.
 
 The extraction and identity-resolution models are **faked deterministically** (`journey/fixtures.ts`)
 because this checks the **plumbing** — routing, auth, tenancy, gates, the billing state machine,
@@ -43,9 +43,59 @@ A green run means the code is ready for these. It does not stand in for them.
   hand-labelled golden set).
 - **The Mac app's SwiftUI flows** — logic is covered by `swift test`; the UI itself is manual.
 
-## Known gap surfaced by phase 5
+## Known gap surfaced by journey.ts phase 5
 
 `GET /v1/thinking-state` returns `recentChanges` from a **30-day** window, but the resume rule's
 age window is **3–45 days** — an idea last touched 31–45 days ago never becomes a nudge candidate
 on either client. Minor (the 3–30 day band is the bulk of "returning to a thought"); fix by
 widening the window or exposing `updatedAt` on `currentIdeas`.
+
+---
+
+# payments.ts — the Paddle billing surface
+
+30 checks across 7 phases, all through `POST /v1/paddle/webhook` and `GET /v1/account`:
+
+1. **Soft launch** — with no `PADDLE_*` env, the 25-idea cap and the `/v1/continue` Pro gate are
+   both no-ops (safe to ship before billing is wired).
+2. **Webhook signature** — valid → 200; wrong secret, tampered body, stale timestamp (>5 min),
+   missing header, malformed header → all 400. This signature is the *only* thing between a
+   stranger and a free Pro account.
+3. **Full lifecycle** — `activated → updated → past_due → recovered → canceled → (period elapses)
+   → resumed → paused`, with the capture gate and `/v1/continue` gate asserted to track each
+   transition (past_due keeps access; canceled keeps it until `current_billing_period.ends_at`,
+   then drops).
+4. **User resolution** — `custom_data.thread_user_id` (checkout), `paddle_customer_id` lookup
+   (portal-initiated events with no metadata), `transaction.completed` seeding that id, and an
+   event for an unknown user → 200 no-op, account byte-for-byte unchanged.
+5. **Customer portal** — `GET /v1/billing/portal`: 409 before subscribing, the Paddle portal URL
+   after (Paddle API `fetch` mocked), 502 on a Paddle API error.
+6. **Idempotency** — the same activation delivered 3× (Paddle retries on timeout) → Pro exactly
+   once.
+7. **The 402 contract** — the exact `{ error, code }` bodies the Mac app / extension / website
+   render for `upgrade_required` and `pro_required`.
+
+## The one payment test this can't do — real Paddle sandbox checkout
+
+A signed webhook here is byte-for-byte what Paddle emits, but it doesn't exercise Paddle's hosted
+checkout, tax calculation, or `Paddle.js`. Once per environment, do this by hand:
+
+1. **Paddle dashboard (sandbox)** → create a Product, then a recurring Price (e.g. $15/mo). Note
+   the **price id** (`pri_…`).
+2. Developer Tools → Authentication → create an **API key** (`PADDLE_API_KEY`) and a
+   **client-side token** (`PADDLE_CLIENT_TOKEN` / `VITE_PADDLE_CLIENT_TOKEN`).
+3. Developer Tools → **Notifications** → add a destination pointing at
+   `https://<your-api-host>/v1/paddle/webhook`, subscribe to `subscription.*` +
+   `transaction.completed`, copy the **signing secret** (`PADDLE_WEBHOOK_SECRET`).
+4. Set on the API host: `PADDLE_API_KEY`, `PADDLE_PRICE_ID`, `PADDLE_WEBHOOK_SECRET`,
+   `PADDLE_ENV=sandbox`. Set on the website: `VITE_PADDLE_CLIENT_TOKEN`, `VITE_PADDLE_PRICE_ID`,
+   `VITE_PADDLE_ENV=sandbox`.
+5. From the website's account page, start checkout and pay with Paddle's test card
+   **`4242 4242 4242 4242`**, any future expiry, any CVC.
+6. Assert: the webhook hits `/v1/paddle/webhook` (Paddle dashboard shows a 200), `GET /v1/account`
+   flips to `plan: "pro"`, the capture + continue gates open, and **Manage billing** opens the
+   real Paddle portal.
+7. Cancel from the portal → `GET /v1/account` shows `status: "canceled"` but stays Pro until the
+   period end.
+
+Everything downstream of step 6's webhook is what `payments.ts` already proves.
