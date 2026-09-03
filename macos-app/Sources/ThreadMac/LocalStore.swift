@@ -12,9 +12,83 @@ struct LocalSnapshot: Codable {
     var thinkingState: ThinkingStateResponse?
     /// ideaId → full trace, filled lazily as ideas are opened so detail is instant next time.
     var traces: [String: IdeaTrace]
+    /// Captures made on this Mac that haven't been confirmed by the backend yet — kept so an
+    /// offline capture survives a relaunch and still syncs later. See `PendingCapture`.
+    var pendingCaptures: [PendingCapture]
     var savedAt: Date
 
-    static let empty = LocalSnapshot(thinkingState: nil, traces: [:], savedAt: .distantPast)
+    static let empty = LocalSnapshot(
+        thinkingState: nil, traces: [:], pendingCaptures: [], savedAt: .distantPast
+    )
+
+    // Hand-rolled so a snapshot written before `pendingCaptures` existed still decodes.
+    init(
+        thinkingState: ThinkingStateResponse?,
+        traces: [String: IdeaTrace],
+        pendingCaptures: [PendingCapture],
+        savedAt: Date
+    ) {
+        self.thinkingState = thinkingState
+        self.traces = traces
+        self.pendingCaptures = pendingCaptures
+        self.savedAt = savedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case thinkingState, traces, pendingCaptures, savedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        thinkingState = try c.decodeIfPresent(ThinkingStateResponse.self, forKey: .thinkingState)
+        traces = try c.decodeIfPresent([String: IdeaTrace].self, forKey: .traces) ?? [:]
+        pendingCaptures = try c.decodeIfPresent([PendingCapture].self, forKey: .pendingCaptures) ?? []
+        savedAt = try c.decodeIfPresent(Date.self, forKey: .savedAt) ?? .distantPast
+    }
+}
+
+/// The on-device model's first read of a capture: enough to show a real card immediately.
+struct LocalIdeaDraft: Codable, Equatable {
+    var title: String
+    var formulation: String
+    var state: String
+    var openQuestion: String?
+
+    static let allowedStates: Set<String> = ["developing", "established", "contested", "rejected", "dormant"]
+
+    /// Parse the small JSON object `OnDeviceModel.extractIdea` asks the model for. Tolerant of
+    /// prose around the object; returns nil when there's no usable idea.
+    static func parse(_ raw: String) -> LocalIdeaDraft? {
+        guard let start = raw.firstIndex(of: "{"), let end = raw.lastIndex(of: "}"), start < end else { return nil }
+        let json = String(raw[start...end])
+        struct Wire: Decodable { var title: String?; var formulation: String?; var state: String?; var openQuestion: String? }
+        guard
+            let data = json.data(using: .utf8),
+            let w = try? JSONDecoder().decode(Wire.self, from: data),
+            let title = w.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty
+        else { return nil }
+        let state = (w.state ?? "developing").lowercased()
+        let q = w.openQuestion?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return LocalIdeaDraft(
+            title: title,
+            formulation: (w.formulation?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? title,
+            state: allowedStates.contains(state) ? state : "developing",
+            openQuestion: (q?.isEmpty ?? true) || q?.lowercased() == "null" ? nil : q
+        )
+    }
+}
+
+/// A capture that has been written locally but not yet round-tripped to the backend. It shows in
+/// the panel right away (with the on-device draft) and is retried on every successful refresh
+/// until the backend confirms it — then it's dropped and the authoritative graph takes over.
+struct PendingCapture: Codable, Identifiable, Equatable {
+    let id: String
+    let text: String
+    var draft: LocalIdeaDraft?
+    let createdAt: Date
+    var status: Status
+
+    enum Status: String, Codable { case extracting, queued, syncing, failed }
 }
 
 enum LocalStore {

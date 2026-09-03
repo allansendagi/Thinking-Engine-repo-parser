@@ -85,6 +85,20 @@ struct MenuBarListView: View {
         case .recent, .all:
             let loopIdeaIDs = Set(openLoops.map(\.ideaId))
 
+            // Captures made on this Mac the backend hasn't confirmed yet — shown first, with the
+            // on-device draft, so a capture appears the instant it's made.
+            let pendingGroup: [IdeaRowGroup] = appState.pendingCaptures.isEmpty ? [] : [
+                IdeaRowGroup(id: "pending", label: "Just captured", rows: appState.pendingCaptures.map { pc in
+                    IdeaRow(
+                        id: "pending:" + pc.id,
+                        title: pc.draft?.title ?? "Reading this…",
+                        snippet: pc.draft?.formulation,
+                        meta: pc.status == .failed ? "Waiting for connection" : "Syncing…",
+                        isLoop: false, ideaId: pc.id, when: ""
+                    )
+                })
+            ]
+
             // All tab leads with a "Pinned" group (mock parity); those ideas are then held out
             // of the date buckets so they don't show twice.
             var pinnedGroup: [IdeaRowGroup] = []
@@ -100,7 +114,7 @@ struct MenuBarListView: View {
             let items: [IdeaRow] = tab == .recent
                 ? ideas.filter { !loopIdeaIDs.contains($0.id) }.map(ideaRow) + openLoops.map(loopRow)
                 : ideas.filter { !pinnedIDs.contains($0.id) }.map(ideaRow)
-            return pinnedGroup + dateBucketedGroups(items)
+            return pendingGroup + pinnedGroup + dateBucketedGroups(items)
         }
     }
 
@@ -226,6 +240,8 @@ struct MenuBarListView: View {
 
     private func open(_ id: String?) {
         guard let id else { return }
+        // A "Just captured" row has no idea to open yet — it becomes a real row on sync.
+        if id.hasPrefix("pending:") { return }
         if id.hasPrefix("loop:") {
             let lid = String(id.dropFirst(5))
             if let l = openLoops.first(where: { $0.loopId == lid }) { Task { await appState.openIdea(l.ideaId) } }

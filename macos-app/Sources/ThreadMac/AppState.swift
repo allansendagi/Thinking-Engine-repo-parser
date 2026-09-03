@@ -20,6 +20,7 @@ final class AppState: ObservableObject {
         if let snap = LocalStore.load(userId: CredentialStore.userId) {
             snapshot = snap
             thinkingState = snap.thinkingState
+            pendingCaptures = snap.pendingCaptures
             lastSyncedAt = snap.savedAt == .distantPast ? nil : snap.savedAt
         }
     }
@@ -38,8 +39,74 @@ final class AppState: ObservableObject {
 
     private func persistSnapshot() {
         snapshot.thinkingState = thinkingState
+        snapshot.pendingCaptures = pendingCaptures
         snapshot.savedAt = Date()
         LocalStore.save(snapshot, userId: CredentialStore.userId)
+    }
+
+    // MARK: - Local-first capture
+
+    /// Captures made on this Mac that the backend hasn't confirmed yet. Shown at the top of the
+    /// panel with the on-device draft; cleared once the authoritative graph absorbs them.
+    @Published var pendingCaptures: [PendingCapture] = []
+    private var isFlushingCaptures = false
+
+    /// The local-first capture entry point. Writes the raw text locally and returns immediately;
+    /// the on-device model drafts what it is, then it syncs in the background (and keeps retrying
+    /// if the backend is down). Returns false only if there's no account or nothing to capture.
+    @discardableResult
+    func capture(_ rawText: String) -> Bool {
+        guard isPaired else { return false }
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+
+        let pc = PendingCapture(
+            id: UUID().uuidString, text: text, draft: nil, createdAt: Date(), status: .extracting
+        )
+        pendingCaptures.insert(pc, at: 0)
+        persistSnapshot()
+        Task { await processCapture(pc.id) }
+        return true
+    }
+
+    private func processCapture(_ id: String) async {
+        if let draft = await OnDeviceModel.extractIdea(from: pendingCaptures.first(where: { $0.id == id })?.text ?? "") {
+            updatePending(id) { $0.draft = draft }
+        }
+        updatePending(id) { $0.status = .queued }
+        await syncPending(id, thenRefresh: true)
+    }
+
+    @discardableResult
+    private func syncPending(_ id: String, thenRefresh: Bool) async -> Bool {
+        guard let pc = pendingCaptures.first(where: { $0.id == id }) else { return false }
+        updatePending(id) { $0.status = .syncing }
+        do {
+            _ = try await client.pasteConversation(text: pc.text)
+            pendingCaptures.removeAll { $0.id == id }
+            persistSnapshot()
+            if thenRefresh { await refresh() }   // pull the authoritative graph
+            return true
+        } catch {
+            updatePending(id) { $0.status = .failed }   // stays visible; flushPending() retries
+            return false
+        }
+    }
+
+    /// Retry every capture the backend hasn't taken yet. Called after a successful refresh.
+    private func flushPending() async {
+        guard !isFlushingCaptures else { return }
+        isFlushingCaptures = true
+        defer { isFlushingCaptures = false }
+        for pc in pendingCaptures where pc.status == .failed || pc.status == .queued {
+            _ = await syncPending(pc.id, thenRefresh: false)
+        }
+    }
+
+    private func updatePending(_ id: String, _ mutate: (inout PendingCapture) -> Void) {
+        guard let i = pendingCaptures.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&pendingCaptures[i])
+        persistSnapshot()
     }
 
     // MARK: - Appearance preferences (Settings ▸ Appearance)
@@ -141,8 +208,6 @@ final class AppState: ObservableObject {
     @Published var continueResult: String?
     @Published var errorMessage: String?
     @Published var isLoading = false
-    @Published var pasteStatus: String?
-    @Published var isPasting = false
 
     /// Last time a client (the browser extension / desktop agent) pulled credentials from the
     /// loopback pairing server. Drives the footer's "capturing" indicator.
@@ -421,6 +486,7 @@ final class AppState: ObservableObject {
             lastSyncedAt = Date()
             errorMessage = nil
             persistSnapshot()
+            await flushPending()
         } catch {
             // Local-first: a failed sync is not an error the user has to see. Keep the cached
             // graph on screen; just note we're offline so the UI can show a quiet hint.
@@ -586,23 +652,9 @@ final class AppState: ObservableObject {
     /// (copied from ChatGPT, Claude, anywhere) rather than relying on a browser extension to
     /// scrape a live page's DOM -- no selector fragility, no site-redesign breakage.
     func submitPaste(_ text: String) async -> Bool {
-        guard isPaired else { return false }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        isPasting = true
-        errorMessage = nil
-        pasteStatus = nil
-        do {
-            let result = try await client.pasteConversation(text: trimmed)
-            pasteStatus = "Captured \(result.newCognitiveEvents) idea\(result.newCognitiveEvents == 1 ? "" : "s")."
-            await refresh()
-            isPasting = false
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            isPasting = false
-            return false
-        }
+        // Local-first: the capture lands instantly and syncs in the background. No spinner, no
+        // failure toast — an offline capture just queues.
+        capture(text)
     }
 
     @Published var continueCopied = false

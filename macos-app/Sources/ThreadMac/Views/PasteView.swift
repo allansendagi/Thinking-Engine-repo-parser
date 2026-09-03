@@ -19,28 +19,21 @@ struct PasteView: View {
                 .frame(minHeight: 220)
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.gray.opacity(0.3)))
 
-            if let status = appState.pasteStatus {
-                Text(status).font(.caption).foregroundColor(.green)
-            }
-            if let error = appState.errorMessage {
-                Text(error).font(.caption).foregroundColor(.red)
-            }
-
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
-                Button(appState.isPasting ? "Adding…" : "Add to Thread") {
-                    Task {
-                        let ok = await appState.submitPaste(text)
-                        if ok { text = "" }
-                    }
+                Button("Add to Thread") {
+                    // Optimistic: captured the moment you click. The panel shows it right away
+                    // with an on-device draft, then it syncs in the background.
+                    appState.capture(text)
+                    text = ""
+                    dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(appState.isPasting || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(16)
         .frame(width: 420, height: 380)
-        .onDisappear { appState.pasteStatus = nil }
     }
 }

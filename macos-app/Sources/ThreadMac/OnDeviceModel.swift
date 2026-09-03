@@ -67,6 +67,36 @@ enum OnDeviceModel {
         return nil
     }
 
+    /// A fast, local read of what a freshly captured transcript is *about* — enough to show a
+    /// real card the instant it's captured, before the backend's full extraction pipeline runs.
+    /// The backend stays the authority on the durable idea graph (identity, evolution); this is
+    /// the optimistic preview. Returns `nil` when the on-device model isn't available.
+    static func extractIdea(from transcript: String) async -> LocalIdeaDraft? {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *), case .available = SystemLanguageModel.default.availability {
+            let clipped = String(transcript.prefix(6000))
+            do {
+                let session = LanguageModelSession(instructions: Self.extractInstructions)
+                let raw = try await session.respond(to: clipped).content
+                return LocalIdeaDraft.parse(raw)
+            } catch {
+                return nil
+            }
+        }
+        #endif
+        return nil
+    }
+
+    private static let extractInstructions = """
+    From this transcript of someone thinking with an AI, identify the SINGLE main idea the \
+    PERSON (not the AI) is developing. Reply with ONLY a JSON object, no other text:
+    {"title": "at most 8 words, the thought itself in their own voice — never \\"the user…\\"", \
+    "formulation": "one declarative sentence stating where the idea now stands", \
+    "state": "developing | established | contested | rejected", \
+    "openQuestion": "the one unresolved question if there is a clear one, otherwise null"}
+    If the transcript holds no real idea of the person's own, reply {"title": null}.
+    """
+
     /// Mirrors the server's `NEXT_STEP_PROMPT` (src/mcp/tools.ts) so Free and Pro produce the
     /// same shape of line — one paste-ready instruction in the user's own voice.
     private static let instructions = """

@@ -58,6 +58,13 @@ final class LocalStoreTests: XCTestCase {
         let snap = LocalSnapshot(
             thinkingState: nil,
             traces: [:],
+            pendingCaptures: [
+                PendingCapture(
+                    id: "p1", text: "some thinking",
+                    draft: LocalIdeaDraft(title: "T", formulation: "F", state: "developing", openQuestion: "Q?"),
+                    createdAt: Date(timeIntervalSince1970: 1_700_000_100), status: .queued
+                )
+            ],
             savedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
         let data = try JSONEncoder().encode(snap)
@@ -65,5 +72,45 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertEqual(back.savedAt, snap.savedAt)
         XCTAssertTrue(back.traces.isEmpty)
         XCTAssertNil(back.thinkingState)
+        XCTAssertEqual(back.pendingCaptures, snap.pendingCaptures)
+    }
+
+    /// A snapshot written before `pendingCaptures` existed must still decode.
+    func testSnapshotBackCompatWithoutPendingCaptures() throws {
+        let legacy = #"{"traces":{},"savedAt":751000000}"#.data(using: .utf8)!
+        let back = try JSONDecoder().decode(LocalSnapshot.self, from: legacy)
+        XCTAssertTrue(back.pendingCaptures.isEmpty)
+        XCTAssertTrue(back.traces.isEmpty)
+    }
+
+    // MARK: LocalIdeaDraft.parse
+
+    func testParsesCleanJSON() {
+        let d = LocalIdeaDraft.parse(#"{"title":"Computable authority","formulation":"Authority must be independently verifiable.","state":"contested","openQuestion":"Who verifies?"}"#)
+        XCTAssertEqual(d?.title, "Computable authority")
+        XCTAssertEqual(d?.state, "contested")
+        XCTAssertEqual(d?.openQuestion, "Who verifies?")
+    }
+
+    func testParsesJSONWrappedInProse() {
+        let d = LocalIdeaDraft.parse("Here you go:\n{\"title\": \"Local first\", \"formulation\": \"Reads work offline.\", \"state\": \"developing\", \"openQuestion\": null}\nHope that helps.")
+        XCTAssertEqual(d?.title, "Local first")
+        XCTAssertNil(d?.openQuestion)
+    }
+
+    func testUnknownStateFallsBackToDeveloping() {
+        let d = LocalIdeaDraft.parse(#"{"title":"X","formulation":"Y","state":"brainstorming"}"#)
+        XCTAssertEqual(d?.state, "developing")
+    }
+
+    func testNoIdeaReturnsNil() {
+        XCTAssertNil(LocalIdeaDraft.parse(#"{"title": null}"#))
+        XCTAssertNil(LocalIdeaDraft.parse("no json here at all"))
+        XCTAssertNil(LocalIdeaDraft.parse(#"{"title": "   "}"#))
+    }
+
+    func testFormulationDefaultsToTitleWhenMissing() {
+        let d = LocalIdeaDraft.parse(#"{"title":"Just a title","state":"developing"}"#)
+        XCTAssertEqual(d?.formulation, "Just a title")
     }
 }
