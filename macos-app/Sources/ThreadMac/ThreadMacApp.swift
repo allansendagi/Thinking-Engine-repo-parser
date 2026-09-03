@@ -164,12 +164,16 @@ struct ThreadMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // The optional Full Window (spec §4). Opened with "Open in Window" from the panel, or
-        // Cmd+Shift+W. Single instance.
+        // The optional Full Window (spec §4). Thread is menu-bar-first: this window is opened
+        // deliberately -- "Open in Window", Cmd+Shift+W, or a thread:// URL -- never at launch.
+        // `.defaultLaunchBehavior(.suppressed)` is what stops a SwiftUI `Window` scene from
+        // presenting itself on every cold start (LSUIElement hides the Dock icon but does NOT
+        // suppress the scene). Programmatic `openWindow(id: "main")` still works. Single instance.
         Window("Thread", id: "main") {
             MainWindowView()
                 .environmentObject(appDelegate.appState)
         }
+        .defaultLaunchBehavior(.suppressed)
         .keyboardShortcut("w", modifiers: [.command, .shift])
         .defaultSize(width: 1180, height: 760)
         // Respect the view's minWidth/minHeight but let the window grow to any size, zoom (green

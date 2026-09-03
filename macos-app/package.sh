@@ -51,7 +51,7 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>15.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>
@@ -109,7 +109,7 @@ if [ -x "${APMP}" ] && [ -d "${MACOS_SDK}" ]; then
        -emit-const-values-path "${AI_WORK}/${APP_NAME}.swiftconstvalues" \
        -const-gather-protocols-file "${PWD}/appintents-protocols.json" \
        @"${AI_WORK}/sources.list" \
-       -sdk "${MACOS_SDK}" -target arm64-apple-macos14.0 -module-name "${APP_NAME}" \
+       -sdk "${MACOS_SDK}" -target arm64-apple-macos15.0 -module-name "${APP_NAME}" \
        >"${AI_WORK}/frontend.log" 2>&1
   then
     printf '%s\n' "${AI_WORK}/${APP_NAME}.swiftconstvalues" > "${AI_WORK}/constvals.list"
@@ -120,8 +120,8 @@ if [ -x "${APMP}" ] && [ -d "${MACOS_SDK}" ]; then
       --sdk-root "${MACOS_SDK}" \
       --xcode-version "${XCV}" \
       --platform-family macOS \
-      --deployment-target 14.0 \
-      --target-triple arm64-apple-macos14.0 \
+      --deployment-target 15.0 \
+      --target-triple arm64-apple-macos15.0 \
       --source-file-list "${AI_WORK}/sources.list" \
       --swift-const-vals-list "${AI_WORK}/constvals.list" \
     && echo "  -> ${APP_DIR}/Contents/Resources/Metadata.appintents" \
