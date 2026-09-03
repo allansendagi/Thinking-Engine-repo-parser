@@ -21,9 +21,14 @@ final class AppState: ObservableObject {
             snapshot = snap
             pendingCaptures = snap.pendingCaptures
             pendingEdits = snap.pendingEdits
-            // Show the cached graph with any unsynced edits already folded in.
-            thinkingState = snap.thinkingState.map { applyAll(pendingEdits, to: $0) }
+            localGraph = snap.localGraph
             lastSyncedAt = snap.savedAt == .distantPast ? nil : snap.savedAt
+            if let server = snap.thinkingState {
+                thinkingState = applyAll(pendingEdits, to: server)   // last synced graph + unsynced edits
+            } else if !localGraph.ideas.isEmpty {
+                thinkingState = applyAll(pendingEdits, to: localGraph.asThinkingState())
+                thinkingStateIsLocal = true                          // never synced — show the on-device graph
+            }
         }
     }
 
@@ -40,11 +45,32 @@ final class AppState: ObservableObject {
     @Published var isOffline = false
 
     private func persistSnapshot() {
-        snapshot.thinkingState = thinkingState
+        // When we're showing the on-device graph, don't persist it as the "last synced" state —
+        // it's kept separately in `localGraph` and rehydrated as the fallback.
+        snapshot.thinkingState = thinkingStateIsLocal ? nil : thinkingState
         snapshot.pendingCaptures = pendingCaptures
         snapshot.pendingEdits = pendingEdits
+        snapshot.localGraph = localGraph
         snapshot.savedAt = Date()
         LocalStore.save(snapshot, userId: CredentialStore.userId)
+    }
+
+    // MARK: - On-device idea graph (the fallback when the backend hasn't provided state)
+
+    /// The graph the on-device model builds from captures. Rendered only when `thinkingState`
+    /// isn't coming from the server (offline, or never synced).
+    @Published var localGraph = LocalGraph.empty
+    /// True while `thinkingState` is a projection of `localGraph` rather than the server's graph.
+    @Published private(set) var thinkingStateIsLocal = false
+
+    /// Re-project the on-device graph into `thinkingState` (with unsynced edits overlaid). Called
+    /// after a capture is absorbed while we're in local mode.
+    private func showLocalGraph() {
+        thinkingStateIsLocal = true
+        thinkingState = applyAll(pendingEdits, to: localGraph.asThinkingState())
+        if let id = selectedIdeaId, let t = localGraph.trace(id) {
+            selectedTrace = applyAll(pendingEdits, to: t)
+        }
     }
 
     // MARK: - Local-first capture
@@ -77,9 +103,29 @@ final class AppState: ObservableObject {
     }
 
     private func processCapture(_ id: String) async {
-        if let draft = await OnDeviceModel.extractIdea(from: pendingCaptures.first(where: { $0.id == id })?.text ?? "") {
+        let text = pendingCaptures.first(where: { $0.id == id })?.text ?? ""
+
+        // One on-device pass does both jobs: draft the "Just captured" row, and — while the
+        // backend isn't the source of truth (never synced, or offline) — fold the capture into
+        // the local idea graph (extraction + identity) so the graph stays whole without it.
+        let buildGraph = thinkingStateIsLocal || lastSyncedAt == nil
+        let existing = localGraph.ideas.map { (id: $0.id, title: $0.title) }
+        if let delta = await OnDeviceModel.absorbCapture(text: text, existing: buildGraph ? existing : []) {
+            updatePending(id) { $0.draft = delta.draft }
+            if buildGraph { localGraph = OnDeviceGraph.fold(delta, captureId: id, into: localGraph) }
+        } else if let draft = await OnDeviceModel.extractIdea(from: text) {
             updatePending(id) { $0.draft = draft }
+            if buildGraph {
+                localGraph = OnDeviceGraph.fold(
+                    OnDeviceModel.GraphDelta(target: "new", title: draft.title, formulation: draft.formulation,
+                                             state: draft.state, openQuestion: draft.openQuestion),
+                    captureId: id, into: localGraph
+                )
+            }
         }
+        if buildGraph, thinkingStateIsLocal || thinkingState == nil { showLocalGraph() }
+        persistSnapshot()
+
         updatePending(id) { $0.status = .queued }
         await syncPending(id, thenRefresh: true)
     }
@@ -454,6 +500,8 @@ final class AppState: ObservableObject {
         snapshot = .empty
         pendingCaptures = []
         pendingEdits = []
+        localGraph = .empty
+        thinkingStateIsLocal = false
         lastSyncedAt = nil
         isOffline = false
         CredentialStore.clear()
@@ -491,8 +539,10 @@ final class AppState: ObservableObject {
         isLoading = true
         do {
             let server = try await client.getThinkingState()
-            // Overlay edits made here that the backend hasn't taken yet, so the user's intent
-            // isn't visually reverted by a sync that predates their offline change.
+            // The server's graph is authoritative — it has the sharper extraction + real
+            // identity resolution. Overlay edits made here that it hasn't taken yet so an
+            // offline change isn't visually reverted.
+            thinkingStateIsLocal = false
             thinkingState = pendingEdits.isEmpty ? server : applyAll(pendingEdits, to: server)
             isOffline = false
             lastSyncedAt = Date()
@@ -501,9 +551,10 @@ final class AppState: ObservableObject {
             await flushPending()
             await flushEdits()
         } catch {
-            // Local-first: a failed sync is not an error the user has to see. Keep the cached
-            // graph on screen; just note we're offline so the UI can show a quiet hint.
+            // Local-first: a failed sync is not an error the user has to see. Keep whatever's on
+            // screen; fall back to the on-device graph if we have nothing else.
             isOffline = true
+            if thinkingState == nil && !localGraph.ideas.isEmpty { showLocalGraph() }
         }
         isLoading = false
         await refreshAccount()
@@ -594,6 +645,12 @@ final class AppState: ObservableObject {
         selectedIdeaId = id
         errorMessage = nil
 
+        // On-device graph: the trace comes straight from `localGraph`, no network.
+        if thinkingStateIsLocal || id.hasPrefix("local_") {
+            selectedTrace = localGraph.trace(id).map { applyAll(pendingEdits, to: $0) }
+            return
+        }
+
         // Cache-first: show the last-synced trace immediately (with unsynced edits overlaid),
         // then revalidate.
         let cached = snapshot.traces[id]
@@ -633,6 +690,15 @@ final class AppState: ObservableObject {
 
     /// Fold an edit into the local snapshot + the live @Published state, enqueue it, sync.
     private func enqueueEdit(_ edit: PendingEdit) {
+        // A local-only idea (never synced) — edit the on-device graph directly; there's nothing
+        // to queue for the backend.
+        if edit.ideaId.hasPrefix("local_") {
+            editLocalGraph(edit)
+            if let s = thinkingState { thinkingState = apply(edit.kind, to: s, ideaId: edit.ideaId) }
+            if let t = selectedTrace, t.idea.id == edit.ideaId { selectedTrace = applyAll([edit], to: t) }
+            persistSnapshot()
+            return
+        }
         pendingEdits = coalesced(pendingEdits, adding: edit)
         if let s = thinkingState { thinkingState = apply(edit.kind, to: s, ideaId: edit.ideaId) }
         if let t = selectedTrace, t.idea.id == edit.ideaId {
@@ -640,6 +706,22 @@ final class AppState: ObservableObject {
         }
         persistSnapshot()
         Task { await flushEdits() }
+    }
+
+    private func editLocalGraph(_ edit: PendingEdit) {
+        guard let i = localGraph.ideas.firstIndex(where: { $0.id == edit.ideaId }) else { return }
+        switch edit.kind {
+        case .rename(let title):
+            localGraph.ideas[i].title = title
+        case .setState(let s):
+            localGraph.ideas[i].state = s
+        case .resolveLoop(let loopId, let resolved):
+            if let j = localGraph.ideas[i].openQuestions.firstIndex(where: { $0.id == loopId }) {
+                localGraph.ideas[i].openQuestions[j].resolved = resolved
+            }
+        case .delete:
+            localGraph.ideas.remove(at: i)
+        }
     }
 
     func renameSelected(to title: String) async {

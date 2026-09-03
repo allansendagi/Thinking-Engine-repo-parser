@@ -87,6 +87,72 @@ enum OnDeviceModel {
         return nil
     }
 
+    /// One capture folded into the local graph: whether it continues an existing idea or starts
+    /// a new one, plus the idea's fields. `target` is `"new"` or an existing idea id.
+    struct GraphDelta: Codable, Equatable {
+        var target: String
+        var title: String
+        var formulation: String
+        var state: String
+        var openQuestion: String?
+
+        var draft: LocalIdeaDraft {
+            LocalIdeaDraft(
+                title: title,
+                formulation: formulation.isEmpty ? title : formulation,
+                state: LocalIdeaDraft.allowedStates.contains(state) ? state : "developing",
+                openQuestion: (openQuestion?.isEmpty ?? true) ? nil : openQuestion
+            )
+        }
+    }
+
+    /// Extraction + identity in one on-device pass: given a capture and the ideas already in the
+    /// local graph, decide which (if any) it extends and return the merged fields. Returns nil
+    /// when the model isn't available; the caller then treats the capture as a new idea from
+    /// `extractIdea`.
+    static func absorbCapture(text: String, existing: [(id: String, title: String)]) async -> GraphDelta? {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *), case .available = SystemLanguageModel.default.availability {
+            let clipped = String(text.prefix(6000))
+            let list = existing.isEmpty
+                ? "(none yet)"
+                : existing.map { "[\($0.id)] \($0.title)" }.joined(separator: "\n")
+            let prompt = """
+            EXISTING IDEAS:
+            \(list)
+
+            NEW CAPTURE:
+            \(clipped)
+            """
+            do {
+                let session = LanguageModelSession(instructions: Self.absorbInstructions)
+                let raw = try await session.respond(to: prompt).content
+                guard let delta = GraphDelta.parse(raw) else { return nil }
+                let validTargets = Set(existing.map(\.id))
+                return validTargets.contains(delta.target) ? delta : GraphDelta(
+                    target: "new", title: delta.title, formulation: delta.formulation,
+                    state: delta.state, openQuestion: delta.openQuestion
+                )
+            } catch {
+                return nil
+            }
+        }
+        #endif
+        return nil
+    }
+
+    private static let absorbInstructions = """
+    You maintain someone's idea graph. Given a new capture of them thinking with an AI, and the \
+    ideas already in the graph, decide whether the capture CONTINUES one existing idea or starts \
+    a NEW one, and give that idea's current fields. Reply with ONLY a JSON object:
+    {"target": "the existing idea's id if this continues it, otherwise \\"new\\"", \
+    "title": "at most 8 words, the thought in their own voice — never \\"the user…\\"", \
+    "formulation": "one declarative sentence for where the idea now stands", \
+    "state": "developing | established | contested | rejected", \
+    "openQuestion": "the one unresolved question if there is a clear one, otherwise null"}
+    Only pick an existing id when it is genuinely the same line of thinking. When unsure, "new".
+    """
+
     private static let extractInstructions = """
     From this transcript of someone thinking with an AI, identify the SINGLE main idea the \
     PERSON (not the AI) is developing. Reply with ONLY a JSON object, no other text:

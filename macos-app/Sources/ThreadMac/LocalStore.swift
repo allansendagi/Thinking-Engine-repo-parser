@@ -17,29 +17,35 @@ struct LocalSnapshot: Codable {
     var pendingCaptures: [PendingCapture]
     /// Field edits (rename / state / resolve-loop / delete) made here and not yet synced.
     var pendingEdits: [PendingEdit]
+    /// The idea graph built on this Mac by the on-device model — the fallback rendered whenever
+    /// the backend hasn't provided state. See `LocalGraph`.
+    var localGraph: LocalGraph
     var savedAt: Date
 
     static let empty = LocalSnapshot(
-        thinkingState: nil, traces: [:], pendingCaptures: [], pendingEdits: [], savedAt: .distantPast
+        thinkingState: nil, traces: [:], pendingCaptures: [], pendingEdits: [],
+        localGraph: .empty, savedAt: .distantPast
     )
 
-    // Hand-rolled so a snapshot written before `pendingCaptures` / `pendingEdits` existed still decodes.
+    // Hand-rolled so a snapshot written before these fields existed still decodes.
     init(
         thinkingState: ThinkingStateResponse?,
         traces: [String: IdeaTrace],
         pendingCaptures: [PendingCapture],
         pendingEdits: [PendingEdit],
+        localGraph: LocalGraph,
         savedAt: Date
     ) {
         self.thinkingState = thinkingState
         self.traces = traces
         self.pendingCaptures = pendingCaptures
         self.pendingEdits = pendingEdits
+        self.localGraph = localGraph
         self.savedAt = savedAt
     }
 
     enum CodingKeys: String, CodingKey {
-        case thinkingState, traces, pendingCaptures, pendingEdits, savedAt
+        case thinkingState, traces, pendingCaptures, pendingEdits, localGraph, savedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -48,6 +54,7 @@ struct LocalSnapshot: Codable {
         traces = try c.decodeIfPresent([String: IdeaTrace].self, forKey: .traces) ?? [:]
         pendingCaptures = try c.decodeIfPresent([PendingCapture].self, forKey: .pendingCaptures) ?? []
         pendingEdits = try c.decodeIfPresent([PendingEdit].self, forKey: .pendingEdits) ?? []
+        localGraph = try c.decodeIfPresent(LocalGraph.self, forKey: .localGraph) ?? .empty
         savedAt = try c.decodeIfPresent(Date.self, forKey: .savedAt) ?? .distantPast
     }
 }
