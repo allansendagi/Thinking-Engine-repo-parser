@@ -488,7 +488,8 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       const cp = (await packetRes.json()) as { text: string; packet: { idea: { id: string }; whereYouLeftOff: string; suggestedNext: string } };
       expect(cp.packet.idea.id).toBe("idea_0");
       expect(cp.packet.whereYouLeftOff).toBe("f0");
-      expect(cp.text).toContain("Resume: ");
+      expect(cp.text).toContain("CURRENT IDEA");
+      expect(cp.text).toContain("TASK");
       expect(cp.packet.suggestedNext.length).toBeGreaterThan(0);
       // The endpoint hands back the render with the token still in place; the client fills it.
       expect(cp.text).toContain("{{CONTINUE_FROM_HERE}}");

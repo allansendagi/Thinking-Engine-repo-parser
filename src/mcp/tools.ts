@@ -139,23 +139,32 @@ function firstSentence(s: string): string {
  * app substitutes locally so the field stays editable offline).
  */
 export const CONTINUE_TOKEN = "{{CONTINUE_FROM_HERE}}";
-/** Marks where the one-sentence "how your thinking changed" line goes — same deal as
- *  CONTINUE_TOKEN, so the Mac can drop in an on-device version without re-rendering the packet. */
+/** Marks where the one-sentence "how your thinking changed" line goes (human card path only). */
 export const THINKING_SHIFT_TOKEN = "{{THINKING_SHIFT}}";
+/** Marks where the distilled trajectory chain goes in the machine handoff — the Mac fills it
+ *  from `packet.trajectory` (on-device-upgraded for Free) without re-rendering. */
+export const THINKING_EVOLUTION_TOKEN = "{{THINKING_EVOLUTION}}";
 
 export function resolveContinueToken(text: string, line: string): string {
   return text.replace(CONTINUE_TOKEN, line);
 }
 
-/** Fill both model-written lines. The MCP prose path bakes them in; the Mac substitutes locally
- *  so each field stays editable / upgradable offline. */
+/** The distilled steps as a top-down chain: `phrase\n  ↓\n  phrase\n  ↓\n  phrase`. */
+export function trajectoryChain(phrases: string[]): string {
+  return phrases.filter(Boolean).join("\n  ↓\n  ");
+}
+
+/** Fill every model-written slot. The MCP prose path bakes them in; the Mac substitutes locally
+ *  so each field stays editable / upgradable offline. Replacing a token that isn't present is a
+ *  no-op, so this is safe against both the machine format and the older human render. */
 export function resolvePacketText(
   text: string,
-  opts: { nextStep: string; thinkingShift?: string | null },
+  opts: { nextStep: string; thinkingShift?: string | null; trajectory?: string[] | null },
 ): string {
   return text
     .replace(CONTINUE_TOKEN, opts.nextStep)
-    .replace(THINKING_SHIFT_TOKEN, (opts.thinkingShift ?? "").trim());
+    .replace(THINKING_SHIFT_TOKEN, (opts.thinkingShift ?? "").trim())
+    .replace(THINKING_EVOLUTION_TOKEN, trajectoryChain(opts.trajectory ?? []));
 }
 
 /** Relative phrasing for the "Last explored" line — "today" / "9 days ago" / "3 weeks ago". */
@@ -169,10 +178,6 @@ export function relativeWhen(iso: string, now: Date = new Date()): string {
   if (days < 60) return `${Math.round(days / 7)} weeks ago`;
   return `${Math.round(days / 30)} months ago`;
 }
-
-/** Beyond this many evolution steps, the paste text shows first + latest two and points at
- *  Thread for the rest. `packet.evolution` still carries the full list for the in-app preview. */
-const MAX_INLINE_EVOLUTION_STEPS = 4;
 
 export interface ContinuationEvolutionStep {
   when: string; // ISO
@@ -197,10 +202,16 @@ export interface ContinuationPacket {
    *  The packet then says so plainly instead of presenting unattributable steps as the user's. */
   evolutionUnverified: boolean;
   decisions: { statement: string; decidedAt: string }[];
-  /** The most relevant unresolved loop (contradiction preferred when contested), or null. */
+  /** The most relevant unresolved loop (contradiction preferred when contested), or null.
+   *  Kept for the human card + `suggestedNext`; the machine handoff uses `unresolvedQuestions`. */
   unresolvedQuestion: string | null;
+  /** Every unresolved loop, newest first, capped — for the machine handoff's UNRESOLVED block. */
+  unresolvedQuestions: string[];
   /** One line to paste into a fresh chat. Model-generated, template fallback. Editable client-side. */
   suggestedNext: string;
+  /** The trajectory distilled to one <=6-word phrase per verified step, in order. Empty below 2
+   *  verified steps. Model-written, first-words template fallback. Fills THINKING_EVOLUTION_TOKEN. */
+  trajectory: string[];
   /** One synthesized sentence — "You moved from X toward Y" — naming how the thinking shifted.
    *  Null unless there are >= 2 verified steps. Model-written, literal template fallback. */
   thinkingShift: string | null;
@@ -212,6 +223,15 @@ export interface ContinuationPacket {
 const NEXT_STEP_PROMPT = `You are given a line of thinking a user developed with AI. Write ONE sentence they can paste into a new AI chat to pick it back up: an instruction in their own voice, grounded only in what's given, pointing at the unresolved question if there is one. No preamble, no "you should", one sentence.`;
 
 const THINKING_SHIFT_PROMPT = `You're given the first and current version of one line of a person's thinking. In ONE sentence beginning "You moved from", name the conceptual shift between them — the change in position, not a reword. No preamble, no hedging, one sentence.`;
+
+const THINKING_EVOLUTION_PROMPT = `Distil each formulation to a headline of AT MOST 5 words — the core move, not a summary, never the sentence itself. Output ONLY the headlines, one per line, same count and order, nothing else. Example: "AI governance needs better oversight policies." becomes "governance by written policy".`;
+
+/** Template fallback for a trajectory phrase: the formulation's leading clause, first ~6 words. */
+function shortPhrase(s: string): string {
+  const clause = s.split(/[—–:;.]/)[0]!.trim() || s.trim();
+  const words = clause.split(/\s+/).slice(0, 6).join(" ");
+  return words.replace(/[.,;:]+$/, "");
+}
 
 function pickIdeaForTopic(db: Database, topic: string): IdeaNode | null {
   const matches = getThreadState(db, topic).currentIdeas;
@@ -308,6 +328,41 @@ export async function buildContinuationPacket(
     }
   }
 
+  // The trajectory, one <=6-word phrase per verified step.
+  let trajectory: string[] = [];
+  if (evolution.length >= 2) {
+    trajectory = evolution.map((e) => shortPhrase(e.formulation));
+    if (provider) {
+      try {
+        const raw = (
+          await provider.complete(
+            THINKING_EVOLUTION_PROMPT,
+            JSON.stringify(evolution.map((e) => e.formulation), null, 2),
+            240,
+          )
+        ).trim();
+        const lines = raw
+          .split("\n")
+          .map((l) => l.replace(/^[\s\-•*\d.)]+/, "").trim().replace(/[.,;:]+$/, ""))
+          .filter(Boolean);
+        // Take it only if it actually distilled — a weaker model sometimes echoes the input.
+        const distilled =
+          lines.length === evolution.length &&
+          lines.every((l) => l.split(/\s+/).length <= 7 && l.length <= 60);
+        if (distilled) trajectory = lines;
+      } catch {
+        // keep the first-words template
+      }
+    }
+  }
+
+  // Every unresolved loop, newest first, capped — for the machine handoff's UNRESOLVED block.
+  const unresolvedQuestions = [...idea.openLoops]
+    .filter((l) => !l.resolved)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 3)
+    .map((l) => stripLoopPrefix(l.statement));
+
   // Last explored: newest verified step, else newest provenance of any kind.
   const newestVerified = evolution.length ? evolution[evolution.length - 1]! : null;
   const newestAny = trace.provenance.length
@@ -324,7 +379,9 @@ export async function buildContinuationPacket(
     evolutionUnverified,
     decisions,
     unresolvedQuestion,
+    unresolvedQuestions,
     suggestedNext,
+    trajectory,
     thinkingShift,
     lastExploredSource,
     lastExploredAt,
@@ -333,63 +390,50 @@ export async function buildContinuationPacket(
 }
 
 /**
- * The one place the paste-ready text is produced. The "Continue from here" line is emitted as
- * `CONTINUE_TOKEN`, not the suggested sentence -- resolve it with `resolveContinueToken` (the
- * MCP prose path) or substitute locally (the Mac app). A long history is abridged to first +
- * latest two here; the full list stays in `p.evolution` for the in-app preview.
+ * The paste-ready handoff — a structured brief an AI picks up from, not prose it summarizes.
+ * ALL-CAPS field labels, terse. Model-written slots (the trajectory chain, the next step) are
+ * emitted as tokens, not baked in; `resolvePacketText` fills them (the MCP prose path, and the
+ * Mac after any on-device upgrade). Every section is omitted when it has nothing to say.
  */
 export function renderPacket(p: ContinuationPacket, now: Date = new Date()): string {
-  const out: string[] = [`Resume: ${p.idea.title}`];
-  if (p.lastExploredAt) {
-    const src = p.lastExploredSource ? `${p.lastExploredSource} · ` : "";
-    out.push(`Last explored: ${src}${relativeWhen(p.lastExploredAt, now)}`);
-  }
-  out.push("", "Where you left off", p.whereYouLeftOff);
-  if (p.contested) out.push("(This idea is contested — a later point conflicts with the above.)");
-  out.push("");
+  const out: string[] = ["CURRENT IDEA", p.idea.title, "", "CURRENT FORMULATION", p.whereYouLeftOff];
+  if (p.contested) out.push("(contested — a later point conflicts with the above)");
 
   if (p.decisions.length > 0) {
-    out.push("You'd established");
-    for (const d of p.decisions) out.push(`• ${d.statement}`);
-    out.push("");
+    out.push("", "ESTABLISHED");
+    for (const d of p.decisions) out.push(d.statement);
   }
 
-  if (p.thinkingShift) {
-    out.push("How your thinking changed", THINKING_SHIFT_TOKEN, "");
+  if (p.trajectory.length > 0) {
+    out.push("", "THINKING EVOLUTION", `  ${THINKING_EVOLUTION_TOKEN}`);
+  } else if (p.evolutionUnverified) {
+    out.push("", "THINKING EVOLUTION", "(captured before source-role verification — earlier wording unavailable)");
   }
 
-  // A question/open_loop event also appends an evolution step, so the unresolved question can
-  // show up twice -- once here, once in its own block. Keep the paste clean: drop the echo.
-  const q = p.unresolvedQuestion ? stripLoopPrefix(p.unresolvedQuestion).toLowerCase() : null;
-  const steps = p.evolution.filter((e) => e.formulation.toLowerCase() !== q);
-  const line = (e: ContinuationEvolutionStep) => {
-    const tag = e.source ? `${shortDate(e.when)}, ${e.source}` : shortDate(e.when);
-    return `• ${tag}: ${e.formulation}`;
-  };
-  if (p.evolutionUnverified) {
-    out.push(
-      "How this evolved",
-      "This thought was captured before source-role verification — its earlier wording isn't shown.",
-      "",
-    );
-  } else if (steps.length > 0) {
-    out.push("How this evolved");
-    if (steps.length <= MAX_INLINE_EVOLUTION_STEPS) {
-      for (const e of steps) out.push(line(e));
-    } else {
-      const hidden = steps.length - 3;
-      out.push(line(steps[0]!));
-      out.push(`• … ${hidden} earlier step${hidden === 1 ? "" : "s"} — full history in Thread …`);
-      out.push(line(steps[steps.length - 2]!), line(steps[steps.length - 1]!));
+  if (p.unresolvedQuestions.length > 0) {
+    out.push("", "UNRESOLVED");
+    for (const q of p.unresolvedQuestions) out.push(q);
+  }
+
+  if (p.evolution.length > 0) {
+    out.push("", "RECENT EVIDENCE");
+    const seen = new Set<string>();
+    for (const e of [...p.evolution].reverse()) {
+      const row = `${e.source ?? "Unknown"} — ${shortDate(e.when)}`;
+      if (seen.has(row)) continue;
+      seen.add(row);
+      out.push(row);
+      if (seen.size >= 2) break;
     }
-    out.push("");
   }
 
-  if (p.unresolvedQuestion) {
-    out.push("You hadn't resolved", stripLoopPrefix(p.unresolvedQuestion), "");
-  }
-
-  out.push("Continue from here", CONTINUE_TOKEN);
+  out.push(
+    "",
+    "TASK",
+    "Continue the reasoning from this exact state. Do not restart the exploration.",
+    "",
+    CONTINUE_TOKEN,
+  );
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
 
@@ -404,9 +448,10 @@ export async function continueThinking(
 ): Promise<string> {
   const result = await buildContinuationPacket(db, { topic }, provider);
   if (!result) throw new Error(`No ideas found matching topic "${topic}"`);
-  // Prose consumer: bake the suggested line in where the token sits.
+  // Prose consumer: bake every model-written slot in where its token sits.
   return resolvePacketText(result.text, {
     nextStep: result.packet.suggestedNext,
     thinkingShift: result.packet.thinkingShift,
+    trajectory: result.packet.trajectory,
   });
 }

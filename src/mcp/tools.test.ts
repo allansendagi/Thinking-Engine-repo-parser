@@ -127,6 +127,7 @@ describe("buildContinuationPacket", () => {
     const nextLine = new FakeProvider([
       "Help me compare two or three concrete verification models, keeping the line between executable enforcement and independent verification.",
       "You moved from wanting institutional authority to be machine-executable toward needing that execution independently verified.",
+      "authority as policy\nauthority as executable\nexecution can diverge\nindependent verification needed",
     ]);
 
     const r = await buildContinuationPacket(db, { ideaId: "idea_cog_u1_0" }, nextLine);
@@ -137,35 +138,42 @@ describe("buildContinuationPacket", () => {
     expect(packet.whereYouLeftOff).toBe("Independent verification needs a trusted third party or a portable proof.");
     expect(packet.evolution.map((e) => e.source)).toEqual(["ChatGPT", "Cursor", "Claude", "Claude"]);
     expect(packet.unresolvedQuestion).toContain("Who performs the independent verification");
+    expect(packet.unresolvedQuestions.length).toBeGreaterThan(0);
     expect(packet.contested).toBe(false);
     expect(packet.suggestedNext).toContain("verification models");
+    expect(packet.trajectory).toEqual([
+      "authority as policy",
+      "authority as executable",
+      "execution can diverge",
+      "independent verification needed",
+    ]);
 
-    expect(text).toContain("Resume: ");
-    expect(text).toContain("Last explored: Claude · ");
-    expect(text).toContain("Where you left off");
-    expect(text).toContain("How your thinking changed");
-    expect(text).toContain("How this evolved");
-    expect(text).toContain("Aug 17, ChatGPT:");
-    expect(text).toContain("You hadn't resolved");
-    expect(text).toContain("Continue from here");
-    // The model-written lines are NOT baked into the render -- tokens sit in their place.
+    // The machine handoff: ALL-CAPS field labels, a TASK directive, model slots as tokens.
+    expect(text).toContain("CURRENT IDEA");
+    expect(text).toContain("CURRENT FORMULATION");
+    expect(text).toContain("THINKING EVOLUTION");
+    expect(text).toContain("UNRESOLVED");
+    expect(text).toContain("RECENT EVIDENCE");
+    expect(text).toContain("Claude — Aug 23");
+    expect(text).toContain("TASK");
+    expect(text).toContain("Do not restart the exploration.");
     expect(text).toContain(CONTINUE_TOKEN);
+    expect(text).toContain("{{THINKING_EVOLUTION}}");
     expect(text).not.toContain(packet.suggestedNext);
+    expect(text).not.toContain("authority as policy"); // trajectory is a token, not baked in
     expect(packet.evolutionUnverified).toBe(false);
-
-    // >= 2 verified steps -> a synthesized shift line, token-substituted like the next step.
-    expect(packet.thinkingShift).toMatch(/^You moved from/);
-    expect(text).toContain("{{THINKING_SHIFT}}");
-    expect(text).not.toContain(packet.thinkingShift!);
+    expect(packet.thinkingShift).toMatch(/^You moved from/); // still on the packet for the human card
     expect(packet.lastExploredSource).toBe("Claude");
+
     const filled = resolvePacketText(text, {
       nextStep: packet.suggestedNext,
       thinkingShift: packet.thinkingShift,
+      trajectory: packet.trajectory,
     });
     expect(filled).toContain(packet.suggestedNext);
-    expect(filled).toContain(packet.thinkingShift!);
+    expect(filled).toContain("authority as policy\n  ↓\n  authority as executable");
     expect(filled).not.toContain(CONTINUE_TOKEN);
-    expect(filled).not.toContain("{{THINKING_SHIFT}}");
+    expect(filled).not.toContain("{{THINKING_EVOLUTION}}");
 
     // Eyeball the actual handoff -- fails nothing, but prints it so a human reads it once.
     console.log("\n----- continuation packet text -----\n" + text + "------------------------------------");
@@ -192,8 +200,9 @@ describe("buildContinuationPacket", () => {
     db.query("UPDATE open_loops SET resolved = 1").run();
     const r = await buildContinuationPacket(db, { ideaId: "idea_cog_u1_0" });
     expect(r!.packet.unresolvedQuestion).toBeNull();
-    expect(r!.text).not.toContain("You hadn't resolved");
-    expect(r!.text).toContain("Continue from here");
+    expect(r!.packet.unresolvedQuestions).toHaveLength(0);
+    expect(r!.text).not.toContain("UNRESOLVED");
+    expect(r!.text).toContain("TASK");
   });
 
   test("drops steps that aren't a verified user message; says so honestly", async () => {
@@ -256,57 +265,61 @@ describe("renderPacket", () => {
     evolutionUnverified: false,
     decisions: [],
     unresolvedQuestion: null,
+    unresolvedQuestions: [],
     suggestedNext: "do the next thing",
+    trajectory: [],
     thinkingShift: null,
     lastExploredSource: null,
     lastExploredAt: null,
   });
 
-  test("abridges a long history to first + latest two, keeps the full list on the packet", () => {
-    const packet = basePacket([1, 2, 3, 4, 5, 6].map(baseStep));
-    const text = renderPacket(packet);
-    expect(text).toContain("Position 1");
-    expect(text).toContain("Position 5");
-    expect(text).toContain("Position 6");
-    expect(text).not.toContain("Position 2");
-    expect(text).not.toContain("Position 3");
-    expect(text).toContain("3 earlier steps — full history in Thread");
-    expect(text).toContain(CONTINUE_TOKEN);
-    expect(packet.evolution).toHaveLength(6); // structured data untouched
-  });
-
-  test("shows every step when there are four or fewer", () => {
-    const text = renderPacket(basePacket([1, 2, 3, 4].map(baseStep)));
-    for (const n of [1, 2, 3, 4]) expect(text).toContain(`Position ${n}`);
-    expect(text).not.toContain("earlier step");
-  });
-
-  test("renders the new second-person sections + a relative Last-explored line", () => {
-    const now = new Date("2026-08-24T00:00:00.000Z");
+  test("the full machine handoff: labelled sections, trajectory as a token, a TASK directive", () => {
     const p: ContinuationPacket = {
       ...basePacket([1, 2].map(baseStep)),
-      decisions: [{ statement: "Frame NOMOS as a protocol, not an infrastructure layer.", decidedAt: "2026-08-20T00:00:00.000Z" }],
-      unresolvedQuestion: "Should the verifier be a third party or a portable proof?",
-      thinkingShift: "You moved from A toward B.",
-      lastExploredSource: "Claude",
-      lastExploredAt: "2026-08-15T00:00:00.000Z",
+      idea: { id: "i", title: "Computable Authority", state: "contested" },
+      whereYouLeftOff: "Institutional authority should be machine-executable and independently verified.",
+      contested: true,
+      decisions: [{ statement: "Frame NOMOS as a protocol, not infrastructure.", decidedAt: "x" }],
+      unresolvedQuestions: ["Who performs verification?", "Why trust that verifier?"],
+      trajectory: ["AI governance", "policy/execution gap", "authority must be executable"],
     };
-    const text = renderPacket(p, now);
-    expect(text).toContain("Last explored: Claude · 9 days ago");
-    expect(text).toContain("You'd established");
-    expect(text).toContain("Frame NOMOS as a protocol");
-    expect(text).toContain("How your thinking changed");
-    expect(text).toContain("{{THINKING_SHIFT}}");
-    expect(text).not.toContain("You moved from A toward B."); // token, not baked in
-    expect(text).toContain("You hadn't resolved");
-    expect(resolvePacketText(text, { nextStep: p.suggestedNext, thinkingShift: p.thinkingShift }))
-      .toContain("You moved from A toward B.");
+    const text = renderPacket(p);
+    expect(text).toStartWith("CURRENT IDEA\nComputable Authority");
+    expect(text).toContain("CURRENT FORMULATION\nInstitutional authority should be machine-executable");
+    expect(text).toContain("(contested — a later point conflicts with the above)");
+    expect(text).toContain("ESTABLISHED\nFrame NOMOS as a protocol, not infrastructure.");
+    expect(text).toContain(`THINKING EVOLUTION\n  ${"{{THINKING_EVOLUTION}}"}`);
+    expect(text).toContain("UNRESOLVED\nWho performs verification?\nWhy trust that verifier?");
+    expect(text).toContain("RECENT EVIDENCE\nChatGPT — Aug 12"); // newest first, capped at 2
+    expect(text).toContain("TASK\nContinue the reasoning from this exact state. Do not restart the exploration.");
+    expect(text.trimEnd()).toEndWith(CONTINUE_TOKEN);
+
+    const filled = resolvePacketText(text, { nextStep: p.suggestedNext, trajectory: p.trajectory });
+    expect(filled).toContain("  AI governance\n  ↓\n  policy/execution gap\n  ↓\n  authority must be executable");
+    expect(filled).toContain("do the next thing");
+    expect(filled).not.toContain("{{");
   });
 
-  test("omits the shift + Last-explored lines when there's nothing to say", () => {
-    const text = renderPacket(basePacket([1].map(baseStep)));
-    expect(text).not.toContain("How your thinking changed");
-    expect(text).not.toContain("Last explored:");
-    expect(text).not.toContain("{{THINKING_SHIFT}}");
+  test("RECENT EVIDENCE keeps only the two newest, deduped", () => {
+    const text = renderPacket(basePacket([1, 2, 3, 4].map(baseStep)));
+    expect(text).toContain("ChatGPT — Aug 14"); // step 4
+    expect(text).toContain("ChatGPT — Aug 13"); // step 3
+    expect(text).not.toContain("Aug 12");
+    expect(text).not.toContain("Aug 11");
+  });
+
+  test("every optional section is dropped when empty", () => {
+    const text = renderPacket(basePacket([]));
+    for (const label of ["ESTABLISHED", "THINKING EVOLUTION", "UNRESOLVED", "RECENT EVIDENCE"]) {
+      expect(text).not.toContain(label);
+    }
+    expect(text).toContain("CURRENT IDEA");
+    expect(text).toContain("TASK");
+  });
+
+  test("an unverified history is stated, not shown", () => {
+    const text = renderPacket({ ...basePacket([]), evolutionUnverified: true });
+    expect(text).toContain("THINKING EVOLUTION");
+    expect(text).toContain("captured before source-role verification");
   });
 });

@@ -90,7 +90,11 @@ tool(
       content: [
         {
           type: "text" as const,
-          text: resolvePacketText(text, { nextStep: packet.suggestedNext, thinkingShift: packet.thinkingShift }),
+          text: resolvePacketText(text, {
+            nextStep: packet.suggestedNext,
+            thinkingShift: packet.thinkingShift,
+            trajectory: packet.trajectory,
+          }),
         },
       ],
     };
