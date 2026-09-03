@@ -355,26 +355,27 @@ private struct EvolutionRail: View {
 
 // MARK: - Continuation preview
 
-/// What "Continue this idea" produced: a compact, source-backed handoff. The paste string is the
-/// server's `text`, copied verbatim; the only editable part is the last line.
+/// What "Continue this idea" produced. Lean by default — the one thing you left off on, plus the
+/// line you'll paste. The rest of what the AI receives (established points, how the thinking
+/// shifted, the open question) sits behind one disclosure; the full step-by-step evolution is the
+/// Evolution card right below this one, so it isn't repeated here.
 private struct ContinuationPreview: View {
     let packet: ContinuationPacket
     @EnvironmentObject var appState: AppState
-    @State private var showAllEvolution = false
-
-    /// Match the paste text: show everything up to 4 steps, else first + latest two.
-    private var shownEvolution: [ContinuationPacket.EvolutionStep] {
-        let all = packet.evolution
-        if showAllEvolution || all.count <= 4 { return all }
-        return [all.first!] + all.suffix(2)
-    }
-    private var hiddenEvolutionCount: Int {
-        max(0, packet.evolution.count - shownEvolution.count)
-    }
+    @State private var showContext = false
 
     private func eyebrow(_ s: String) -> some View {
         Text(s).font(.system(size: 10, weight: .semibold)).textCase(.uppercase).kerning(0.5)
             .foregroundStyle(Theme.ink(0.4))
+    }
+
+    private var contested: String? {
+        packet.unresolvedQuestion?.replacingOccurrences(of: "Unresolved contradiction: ", with: "")
+    }
+    private var hasContext: Bool {
+        !packet.decisions.isEmpty
+            || !(packet.thinkingShift ?? "").isEmpty
+            || packet.unresolvedQuestion != nil
     }
 
     var body: some View {
@@ -402,85 +403,12 @@ private struct ContinuationPreview: View {
                 Text(packet.whereYouLeftOff).font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
                     .fixedSize(horizontal: false, vertical: true)
                 if packet.contested {
-                    Text("This idea is contested — a later point conflicts with the above.")
+                    Text("Contested — a later point conflicts with the above.")
                         .font(.system(size: 11)).foregroundStyle(Theme.stateColor("contested"))
                 }
             }
 
-            if !packet.decisions.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    eyebrow("You'd established")
-                    ForEach(packet.decisions) { d in
-                        HStack(alignment: .top, spacing: 6) {
-                            Text("•").foregroundStyle(Theme.ink(0.3))
-                            Text(d.statement).font(.system(size: 12)).foregroundStyle(Theme.ink(0.78))
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-            }
-
-            if let shift = packet.thinkingShift, !shift.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    eyebrow("How your thinking changed")
-                    Text(shift).font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            if packet.evolutionUnverified {
-                VStack(alignment: .leading, spacing: 4) {
-                    eyebrow("How this evolved")
-                    Text("Captured before source-role verification — its earlier wording isn't shown.")
-                        .font(.system(size: 11)).foregroundStyle(Theme.ink(0.5))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } else if !packet.evolution.isEmpty {
-                VStack(alignment: .leading, spacing: 5) {
-                    eyebrow("How this evolved")
-                    ForEach(shownEvolution) { step in
-                        HStack(alignment: .top, spacing: 6) {
-                            Text("•").foregroundStyle(Theme.ink(0.3))
-                            VStack(alignment: .leading, spacing: 1) {
-                                HStack(spacing: 5) {
-                                    Text("\(Theme.ago(step.when))\(step.source.map { " · \($0)" } ?? "")")
-                                        .font(.system(size: 10)).foregroundStyle(Theme.ink(0.36))
-                                    if let raw = step.sourceUrl, let url = URL(string: raw) {
-                                        Button {
-                                            NSWorkspace.shared.open(url)
-                                        } label: {
-                                            Text("View source").font(.system(size: 10, weight: .medium))
-                                        }
-                                        .buttonStyle(.plain).foregroundStyle(Theme.accent)
-                                        .help(raw)
-                                    }
-                                }
-                                Text(step.formulation).font(.system(size: 12)).foregroundStyle(Theme.ink(0.72))
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                    if hiddenEvolutionCount > 0 {
-                        Button("Show all \(packet.evolution.count) steps") { showAllEvolution = true }
-                            .buttonStyle(.plain).font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Theme.accent)
-                    } else if showAllEvolution && packet.evolution.count > 4 {
-                        Button("Show less") { showAllEvolution = false }
-                            .buttonStyle(.plain).font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Theme.ink(0.4))
-                    }
-                }
-            }
-
-            if let q = packet.unresolvedQuestion {
-                VStack(alignment: .leading, spacing: 4) {
-                    eyebrow("You hadn't resolved")
-                    Text(q.replacingOccurrences(of: "Unresolved contradiction: ", with: ""))
-                        .font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
+            // Continue-from-here: the primary surface.
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     eyebrow("Continue from here")
@@ -496,16 +424,68 @@ private struct ContinuationPreview: View {
                     .padding(8)
                     .background(Color.white, in: RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.ink(0.12), lineWidth: 0.5))
-                HStack {
-                    Spacer()
-                    Button("Copy again") { appState.recopyContinuation() }
-                        .buttonStyle(.plain).font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.accent)
+            }
+
+            // Everything else the AI receives — one disclosure, collapsed by default.
+            if hasContext {
+                VStack(alignment: .leading, spacing: 10) {
+                    if showContext {
+                        if !packet.decisions.isEmpty {
+                            block("You'd established") {
+                                ForEach(packet.decisions) { d in
+                                    HStack(alignment: .top, spacing: 6) {
+                                        Text("•").foregroundStyle(Theme.ink(0.3))
+                                        Text(d.statement).font(.system(size: 12)).foregroundStyle(Theme.ink(0.78))
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                        }
+                        if let shift = packet.thinkingShift, !shift.isEmpty {
+                            block("How your thinking changed") {
+                                Text(shift).font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        if let q = contested {
+                            block("You hadn't resolved") {
+                                Text(q).font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    Button {
+                        withAnimation(.easeOut(duration: 0.16)) { showContext.toggle() }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text(showContext ? "Hide context" : "Show the full handoff")
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8, weight: .semibold))
+                                .rotationEffect(.degrees(showContext ? 180 : 0))
+                        }
+                        .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
                 }
+            }
+
+            HStack {
+                Spacer()
+                Button("Copy") { appState.recopyContinuation() }
+                    .buttonStyle(.plain).font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.accent)
             }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: Theme.cardCorner))
         .overlay(RoundedRectangle(cornerRadius: Theme.cardCorner).stroke(Theme.cardStroke, lineWidth: 0.5))
+    }
+
+    @ViewBuilder
+    private func block<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            eyebrow(label)
+            content()
+        }
     }
 }

@@ -968,10 +968,18 @@ final class AppState: ObservableObject {
     }
 
     /// A clean, paste-ready Markdown context block: current idea, evolution, open question,
-    private func copyContext(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        continueCopied = true
+    @discardableResult
+    private func copyContext(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        var ok = pb.setString(text, forType: .string)
+        if !ok {
+            pb.declareTypes([.string], owner: nil)
+            ok = pb.setString(text, forType: .string)
+        }
+        if ok { continueCopied = true }
+        return ok
     }
 
     /// Free, local, no server call: a Markdown snapshot of the selected idea — its current
@@ -1034,10 +1042,14 @@ final class AppState: ObservableObject {
     /// The paste string. The backend leaves a token where the "Continue from here" line goes;
     /// we fill it with the user's edit or the suggested default in one literal replace. No
     /// client-side re-render, no fuzzy anchor matching -- the token can't collide or drift.
+    /// A safe next-step line no matter what the model returned. Never a refusal / meta-comment.
+    static let safeNextStep = "Continue developing this from exactly where it stands — don't restart."
+
     var continuationCopyText: String? {
         guard let text = continuationText, let packet = continuationPacket else { return nil }
         let edited = nextStepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let line = edited.isEmpty ? packet.suggestedNext : edited
+        var line = edited.isEmpty ? packet.suggestedNext : edited
+        if OnDeviceModel.looksUnusable(line) { line = Self.safeNextStep }
         return text
             .replacingOccurrences(of: ContinuationPacket.continueToken, with: line)
             .replacingOccurrences(of: ContinuationPacket.thinkingShiftToken,
@@ -1061,7 +1073,7 @@ final class AppState: ObservableObject {
             let r = try await client.continueIdea(ideaId: trace.idea.id)
             continuationPacket = r.packet
             continuationText = r.text
-            nextStepDraft = r.packet.suggestedNext
+            nextStepDraft = OnDeviceModel.looksUnusable(r.packet.suggestedNext) ? Self.safeNextStep : r.packet.suggestedNext
             continueResult = r.text
 
             if r.tier == "pro" {
@@ -1081,7 +1093,10 @@ final class AppState: ObservableObject {
                    ),
                    !sharper.isEmpty {
                     // Only overwrite if the user hasn't already edited the field.
-                    if nextStepDraft == p.suggestedNext { nextStepDraft = sharper }
+                    // Swap in the on-device line only if the user hasn't edited the field.
+                    if nextStepDraft == p.suggestedNext || nextStepDraft == Self.safeNextStep {
+                        nextStepDraft = sharper
+                    }
                     continuationEngine = .onDevice
                 } else {
                     continuationEngine = .template
@@ -1118,6 +1133,9 @@ final class AppState: ObservableObject {
 
     /// Re-copy after the user tweaks "Continue from here" in the preview.
     func recopyContinuation() {
-        if let copy = continuationCopyText { copyContext(copy) }
+        // Prefer the rendered handoff; if it's somehow unavailable, fall back to the local
+        // idea snapshot so ⌘V always pastes something useful.
+        if let copy = continuationCopyText, copyContext(copy) { return }
+        copyIdeaContext()
     }
 }

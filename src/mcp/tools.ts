@@ -220,7 +220,18 @@ export interface ContinuationPacket {
   lastExploredAt: string | null;
 }
 
-const NEXT_STEP_PROMPT = `You are given a line of thinking a user developed with AI. Write ONE sentence they can paste into a new AI chat to pick it back up: an instruction in their own voice, grounded only in what's given, pointing at the unresolved question if there is one. No preamble, no "you should", one sentence.`;
+const NEXT_STEP_PROMPT = `You are given a line of thinking a person developed with AI. Write ONE sentence they can paste into a new AI chat to pick it back up — an instruction in their own voice, grounded only in what's given. If there is an unresolved question, point at it; if not, push the current formulation forward, or resolve the conflict if it's contested. Always produce a usable sentence — never refuse, never mention being an AI or a model. No preamble, no "you should", one sentence.`;
+
+/** A model that deflected instead of answering — a canned refusal or meta-commentary. The
+ *  caller keeps the deterministic template rather than show this. */
+function looksLikeRefusal(s: string): boolean {
+  const t = s.toLowerCase().trim();
+  if (!t) return true;
+  return (
+    /^(i'm sorry|i am sorry|i cannot|i can't|i can not|i'm unable|i am unable|i'm not able|i apologize|as an ai|as a chatbot|as a language model|unfortunately, i|sorry, )/.test(t) ||
+    /as a chatbot|as an ai language model|created by (apple|openai|anthropic)|i cannot provide|i'?m unable to provide|cannot fulfil|against my guidelines|when none exists/.test(t)
+  );
+}
 
 const THINKING_SHIFT_PROMPT = `You're given the first and current version of one line of a person's thinking. In ONE sentence beginning "You moved from", name the conceptual shift between them — the change in position, not a reword. No preamble, no hedging, one sentence.`;
 
@@ -304,7 +315,7 @@ export async function buildContinuationPacket(
         2,
       );
       const s = (await provider.complete(NEXT_STEP_PROMPT, facts, 200)).trim();
-      if (s) suggestedNext = firstSentence(s);
+      if (s && !looksLikeRefusal(s)) suggestedNext = firstSentence(s);
     } catch {
       // keep the template
     }
@@ -321,7 +332,7 @@ export async function buildContinuationPacket(
         const s = (
           await provider.complete(THINKING_SHIFT_PROMPT, JSON.stringify({ from: first, to: last }, null, 2), 160)
         ).trim();
-        if (/^you moved from\b/i.test(s)) thinkingShift = firstSentence(s);
+        if (/^you moved from\b/i.test(s) && !looksLikeRefusal(s)) thinkingShift = firstSentence(s);
       } catch {
         // keep the literal template
       }
@@ -348,7 +359,7 @@ export async function buildContinuationPacket(
         // Take it only if it actually distilled — a weaker model sometimes echoes the input.
         const distilled =
           lines.length === evolution.length &&
-          lines.every((l) => l.split(/\s+/).length <= 7 && l.length <= 60);
+          lines.every((l) => l.split(/\s+/).length <= 7 && l.length <= 60 && !looksLikeRefusal(l));
         if (distilled) trajectory = lines;
       } catch {
         // keep the first-words template
