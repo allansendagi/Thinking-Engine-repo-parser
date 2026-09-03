@@ -211,10 +211,17 @@ struct ContinuationPacket: Codable {
     let decisions: [PacketDecision]
     let unresolvedQuestion: String?
     let suggestedNext: String
+    /// One synthesized sentence — "You moved from X toward Y". Nil unless there are ≥2 verified
+    /// steps. `var` so the free tier can swap in an on-device version. Absent on older servers.
+    var thinkingShift: String?
+    /// Where + when this was last worked on, for the "Last explored" line. Absent on older servers.
+    var lastExploredSource: String?
+    var lastExploredAt: String?
 
-    /// The backend's rendered `text` carries this where the "Continue from here" line goes.
-    /// Fill it with one literal replace — no client-side re-rendering of the packet.
+    /// The backend's rendered `text` carries these where the model-written lines go. Fill each
+    /// with one literal replace — no client-side re-rendering of the packet.
     static let continueToken = "{{CONTINUE_FROM_HERE}}"
+    static let thinkingShiftToken = "{{THINKING_SHIFT}}"
 }
 
 struct APIErrorBody: Codable {

@@ -1038,7 +1038,10 @@ final class AppState: ObservableObject {
         guard let text = continuationText, let packet = continuationPacket else { return nil }
         let edited = nextStepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         let line = edited.isEmpty ? packet.suggestedNext : edited
-        return text.replacingOccurrences(of: ContinuationPacket.continueToken, with: line)
+        return text
+            .replacingOccurrences(of: ContinuationPacket.continueToken, with: line)
+            .replacingOccurrences(of: ContinuationPacket.thinkingShiftToken,
+                                  with: (packet.thinkingShift ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// The payoff. Builds the continuation packet for the selected idea, copies the paste-ready
@@ -1081,6 +1084,15 @@ final class AppState: ObservableObject {
                     continuationEngine = .onDevice
                 } else {
                     continuationEngine = .template
+                }
+
+                // Same treatment for the "how your thinking changed" line: the server sent the
+                // literal template; sharpen it on-device when there's a real shift to name.
+                if OnDeviceModel.status.isReady, p.evolution.count >= 2,
+                   let first = p.evolution.first?.formulation,
+                   let latest = p.evolution.last?.formulation,
+                   let shift = await OnDeviceModel.thinkingShift(from: first, to: latest) {
+                    continuationPacket?.thinkingShift = shift
                 }
             }
         } catch {

@@ -392,6 +392,11 @@ private struct ContinuationPreview: View {
                 }
             }
 
+            if let at = packet.lastExploredAt, !Theme.ago(at).isEmpty {
+                Text("Last explored: \(packet.lastExploredSource.map { "\($0) · " } ?? "")\(Theme.ago(at))")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.ink(0.36))
+            }
+
             VStack(alignment: .leading, spacing: 4) {
                 eyebrow("Where you left off")
                 Text(packet.whereYouLeftOff).font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
@@ -399,6 +404,27 @@ private struct ContinuationPreview: View {
                 if packet.contested {
                     Text("This idea is contested — a later point conflicts with the above.")
                         .font(.system(size: 11)).foregroundStyle(Theme.stateColor("contested"))
+                }
+            }
+
+            if !packet.decisions.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    eyebrow("You'd established")
+                    ForEach(packet.decisions) { d in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("•").foregroundStyle(Theme.ink(0.3))
+                            Text(d.statement).font(.system(size: 12)).foregroundStyle(Theme.ink(0.78))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
+            if let shift = packet.thinkingShift, !shift.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    eyebrow("How your thinking changed")
+                    Text(shift).font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -448,7 +474,7 @@ private struct ContinuationPreview: View {
 
             if let q = packet.unresolvedQuestion {
                 VStack(alignment: .leading, spacing: 4) {
-                    eyebrow("Unresolved question")
+                    eyebrow("You hadn't resolved")
                     Text(q.replacingOccurrences(of: "Unresolved contradiction: ", with: ""))
                         .font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
                         .fixedSize(horizontal: false, vertical: true)

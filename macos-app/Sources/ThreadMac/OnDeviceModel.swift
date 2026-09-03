@@ -67,6 +67,31 @@ enum OnDeviceModel {
         return nil
     }
 
+    /// One sentence naming how a line of thinking shifted between its first and current form —
+    /// "You moved from … toward …". Returns nil if the model isn't ready, the call fails, or the
+    /// output doesn't land in that shape; the caller then keeps the server's literal template.
+    static func thinkingShift(from first: String, to latest: String) async -> String? {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *), case .available = SystemLanguageModel.default.availability {
+            do {
+                let session = LanguageModelSession(instructions: Self.shiftInstructions)
+                let raw = try await session.respond(to: "First: \(first)\nCurrent: \(latest)").content
+                let one = firstSentence(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+                return one.lowercased().hasPrefix("you moved from") ? one : nil
+            } catch {
+                return nil
+            }
+        }
+        #endif
+        return nil
+    }
+
+    private static let shiftInstructions = """
+    You're given the first and current version of one line of a person's thinking. In ONE \
+    sentence beginning "You moved from", name the conceptual shift between them — the change in \
+    position, not a reword. No preamble, no hedging, one sentence.
+    """
+
     /// A fast, local read of what a freshly captured transcript is *about* — enough to show a
     /// real card the instant it's captured, before the backend's full extraction pipeline runs.
     /// The backend stays the authority on the durable idea graph (identity, evolution); this is
