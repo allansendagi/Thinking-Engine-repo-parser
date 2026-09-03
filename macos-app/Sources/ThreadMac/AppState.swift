@@ -22,6 +22,7 @@ final class AppState: ObservableObject {
             pendingCaptures = snap.pendingCaptures
             pendingEdits = snap.pendingEdits
             localGraph = snap.localGraph
+            embeddings = snap.embeddings
             lastSyncedAt = snap.savedAt == .distantPast ? nil : snap.savedAt
             if let server = snap.thinkingState {
                 thinkingState = applyAll(pendingEdits, to: server)   // last synced graph + unsynced edits
@@ -51,8 +52,78 @@ final class AppState: ObservableObject {
         snapshot.pendingCaptures = pendingCaptures
         snapshot.pendingEdits = pendingEdits
         snapshot.localGraph = localGraph
+        snapshot.embeddings = embeddings
         snapshot.savedAt = Date()
         LocalStore.save(snapshot, userId: CredentialStore.userId)
+    }
+
+    // MARK: - On-device semantic index (meaning-based recall + "Related")
+
+    /// ideaId → cached vector for its current text. Kept fresh by `reconcileEmbeddings()`.
+    @Published var embeddings: [String: EmbeddingEntry] = [:]
+    private var isEmbedding = false
+
+    /// Bring `embeddings` in line with the ideas currently on screen: embed anything new or
+    /// changed, drop vectors for ideas that are gone. Cheap (a few hundred sync calls) but run
+    /// off the main actor so a large first pass never janks the panel.
+    func reconcileEmbeddings() {
+        guard Embeddings.isAvailable, !isEmbedding else { return }
+        let ideas: [(id: String, text: String)] = (thinkingState?.currentIdeas ?? []).map {
+            ($0.id, Embeddings.text(title: $0.title, formulation: $0.currentFormulation))
+        }
+        guard !ideas.isEmpty else {
+            if !embeddings.isEmpty { embeddings = [:]; persistSnapshot() }
+            return
+        }
+        let current = embeddings
+        let liveIds = Set(ideas.map(\.id))
+        let stale = ideas.filter { current[$0.id]?.contentHash != stableHash($0.text) }
+        let hasOrphans = current.keys.contains { !liveIds.contains($0) }
+        guard !stale.isEmpty || hasOrphans else { return }
+
+        isEmbedding = true
+        Task.detached { [weak self] in
+            var next = current.filter { liveIds.contains($0.key) }   // prune orphans
+            for idea in stale {
+                let h = stableHash(idea.text)
+                if let v = Embeddings.vector(for: idea.text) {
+                    next[idea.id] = EmbeddingEntry(contentHash: h, vector: v)
+                }
+            }
+            await MainActor.run {
+                guard let self else { return }
+                self.embeddings = next
+                self.isEmbedding = false
+                self.persistSnapshot()
+            }
+        }
+    }
+
+    /// Idea ids most similar in meaning to `query`, best first. Empty when the model or index
+    /// isn't ready.
+    func semanticMatches(_ query: String, limit: Int = 8) -> [String] {
+        guard Embeddings.isAvailable, !embeddings.isEmpty,
+              let qv = Embeddings.vector(for: query) else { return [] }
+        return topSimilar(
+            to: qv,
+            among: embeddings.map { (id: $0.key, vector: $0.value.vector) },
+            floor: semanticSearchFloor, limit: limit
+        ).map(\.id)
+    }
+
+    /// Up to `relatedIdeaLimit` ideas whose meaning is genuinely close to `ideaId` — for the
+    /// "Related" list on an idea. Excludes itself and any already-linked ideas.
+    func relatedIdeas(to ideaId: String) -> [IdeaSummary] {
+        guard let selfVec = embeddings[ideaId]?.vector else { return [] }
+        let ideas = thinkingState?.currentIdeas ?? []
+        let alreadyLinked = Set(selectedTrace?.idea.id == ideaId ? selectedTrace?.idea.relatedIdeaIds ?? [] : [])
+        let byId = Dictionary(uniqueKeysWithValues: ideas.map { ($0.id, $0) })
+        return topSimilar(
+            to: selfVec,
+            among: embeddings.compactMap { byId[$0.key] != nil ? (id: $0.key, vector: $0.value.vector) : nil },
+            floor: relatedIdeaFloor, limit: relatedIdeaLimit,
+            exclude: alreadyLinked.union([ideaId])
+        ).compactMap { byId[$0.id] }
     }
 
     // MARK: - On-device idea graph (the fallback when the backend hasn't provided state)
@@ -125,6 +196,7 @@ final class AppState: ObservableObject {
         }
         if buildGraph, thinkingStateIsLocal || thinkingState == nil { showLocalGraph() }
         persistSnapshot()
+        reconcileEmbeddings()
 
         updatePending(id) { $0.status = .queued }
         await syncPending(id, thenRefresh: true)
@@ -287,6 +359,11 @@ final class AppState: ObservableObject {
         let snoozed = resumeSnoozed.mapValues { Date(timeIntervalSince1970: $0) }
         return pickResumeSuggestion(candidates, snoozed: snoozed, history: resumeShown)
     }
+
+    /// Set by a Focus filter (`ThreadFocusFilterIntent`) — silences the ambient return
+    /// *notification* while that Focus is on. The in-panel nudge is unaffected; opening the
+    /// panel is deliberate.
+    @Published var nudgesSilencedByFocus = false
 
     /// The last-activity timestamp for an idea, from Thinking State — for `noteResumeShown`.
     func lastActivity(of ideaId: String) -> Date {
@@ -538,6 +615,7 @@ final class AppState: ObservableObject {
         pendingCaptures = []
         pendingEdits = []
         localGraph = .empty
+        embeddings = [:]
         thinkingStateIsLocal = false
         lastSyncedAt = nil
         isOffline = false
@@ -594,6 +672,7 @@ final class AppState: ObservableObject {
             if thinkingState == nil && !localGraph.ideas.isEmpty { showLocalGraph() }
         }
         isLoading = false
+        reconcileEmbeddings()
         await refreshAccount()
     }
 
@@ -605,8 +684,18 @@ final class AppState: ObservableObject {
             return
         }
         // Instant, offline, never fails: scan the local snapshot first. The panel shows results
-        // on the same keystroke — no spinner, no round-trip.
-        searchResults = localSearch(q, in: thinkingState?.currentIdeas ?? [])
+        // on the same keystroke — no spinner, no round-trip. Keyword hits first (they're exact),
+        // then meaning-based matches the words alone would miss.
+        let ideas = thinkingState?.currentIdeas ?? []
+        let keyword = localSearch(q, in: ideas)
+        let seen = Set(keyword.map(\.id))
+        let byId = Dictionary(uniqueKeysWithValues: ideas.map { ($0.id, $0) })
+        let semantic: [SearchResult] = semanticMatches(q).compactMap { id in
+            guard !seen.contains(id), let i = byId[id] else { return nil }
+            return SearchResult(id: i.id, title: i.title, state: i.state,
+                                currentFormulation: i.currentFormulation, score: 0)
+        }
+        searchResults = keyword + semantic
 
         // Then reconcile with the server when it's reachable (better ranking, ideas not yet in
         // the snapshot). If it's down or the query moved on, the local results stand.
@@ -734,6 +823,7 @@ final class AppState: ObservableObject {
             if let s = thinkingState { thinkingState = apply(edit.kind, to: s, ideaId: edit.ideaId) }
             if let t = selectedTrace, t.idea.id == edit.ideaId { selectedTrace = applyAll([edit], to: t) }
             persistSnapshot()
+            reconcileEmbeddings()
             return
         }
         pendingEdits = coalesced(pendingEdits, adding: edit)
@@ -742,6 +832,7 @@ final class AppState: ObservableObject {
             selectedTrace = applyAll([edit], to: t)
         }
         persistSnapshot()
+        reconcileEmbeddings()   // a rename / delete changes the semantic index
         Task { await flushEdits() }
     }
 
@@ -947,7 +1038,10 @@ final class AppState: ObservableObject {
         guard let text = continuationText, let packet = continuationPacket else { return nil }
         let edited = nextStepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         let line = edited.isEmpty ? packet.suggestedNext : edited
-        return text.replacingOccurrences(of: ContinuationPacket.continueToken, with: line)
+        return text
+            .replacingOccurrences(of: ContinuationPacket.continueToken, with: line)
+            .replacingOccurrences(of: ContinuationPacket.thinkingShiftToken,
+                                  with: (packet.thinkingShift ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// The payoff. Builds the continuation packet for the selected idea, copies the paste-ready
@@ -990,6 +1084,15 @@ final class AppState: ObservableObject {
                     continuationEngine = .onDevice
                 } else {
                     continuationEngine = .template
+                }
+
+                // Same treatment for the "how your thinking changed" line: the server sent the
+                // literal template; sharpen it on-device when there's a real shift to name.
+                if OnDeviceModel.status.isReady, p.evolution.count >= 2,
+                   let first = p.evolution.first?.formulation,
+                   let latest = p.evolution.last?.formulation,
+                   let shift = await OnDeviceModel.thinkingShift(from: first, to: latest) {
+                    continuationPacket?.thinkingShift = shift
                 }
             }
         } catch {

@@ -74,7 +74,7 @@ export function makeClient(creds: ThreadCredentials) {
     getOpenLoops: (topic?: string) => call(`/v1/open-loops${qs({ topic })}`),
     getRecentChanges: (sinceDays?: number) => call(`/v1/recent-changes${qs({ sinceDays })}`),
     continueThinking: (topic: string) =>
-      call<{ text: string; packet: { suggestedNext: string } }>(`/v1/continue`, {
+      call<{ text: string; packet: { suggestedNext: string; thinkingShift: string | null } }>(`/v1/continue`, {
         method: "POST",
         body: JSON.stringify({ topic }),
       }),

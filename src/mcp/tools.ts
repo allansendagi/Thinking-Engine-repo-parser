@@ -139,9 +139,35 @@ function firstSentence(s: string): string {
  * app substitutes locally so the field stays editable offline).
  */
 export const CONTINUE_TOKEN = "{{CONTINUE_FROM_HERE}}";
+/** Marks where the one-sentence "how your thinking changed" line goes — same deal as
+ *  CONTINUE_TOKEN, so the Mac can drop in an on-device version without re-rendering the packet. */
+export const THINKING_SHIFT_TOKEN = "{{THINKING_SHIFT}}";
 
 export function resolveContinueToken(text: string, line: string): string {
   return text.replace(CONTINUE_TOKEN, line);
+}
+
+/** Fill both model-written lines. The MCP prose path bakes them in; the Mac substitutes locally
+ *  so each field stays editable / upgradable offline. */
+export function resolvePacketText(
+  text: string,
+  opts: { nextStep: string; thinkingShift?: string | null },
+): string {
+  return text
+    .replace(CONTINUE_TOKEN, opts.nextStep)
+    .replace(THINKING_SHIFT_TOKEN, (opts.thinkingShift ?? "").trim());
+}
+
+/** Relative phrasing for the "Last explored" line — "today" / "9 days ago" / "3 weeks ago". */
+export function relativeWhen(iso: string, now: Date = new Date()): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const days = Math.round((now.getTime() - then) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 14) return `${days} days ago`;
+  if (days < 60) return `${Math.round(days / 7)} weeks ago`;
+  return `${Math.round(days / 30)} months ago`;
 }
 
 /** Beyond this many evolution steps, the paste text shows first + latest two and points at
@@ -175,9 +201,17 @@ export interface ContinuationPacket {
   unresolvedQuestion: string | null;
   /** One line to paste into a fresh chat. Model-generated, template fallback. Editable client-side. */
   suggestedNext: string;
+  /** One synthesized sentence — "You moved from X toward Y" — naming how the thinking shifted.
+   *  Null unless there are >= 2 verified steps. Model-written, literal template fallback. */
+  thinkingShift: string | null;
+  /** Where + when the idea was last worked on, for the "Last explored" line. */
+  lastExploredSource: string | null;
+  lastExploredAt: string | null;
 }
 
 const NEXT_STEP_PROMPT = `You are given a line of thinking a user developed with AI. Write ONE sentence they can paste into a new AI chat to pick it back up: an instruction in their own voice, grounded only in what's given, pointing at the unresolved question if there is one. No preamble, no "you should", one sentence.`;
+
+const THINKING_SHIFT_PROMPT = `You're given the first and current version of one line of a person's thinking. In ONE sentence beginning "You moved from", name the conceptual shift between them — the change in position, not a reword. No preamble, no hedging, one sentence.`;
 
 function pickIdeaForTopic(db: Database, topic: string): IdeaNode | null {
   const matches = getThreadState(db, topic).currentIdeas;
@@ -256,6 +290,32 @@ export async function buildContinuationPacket(
     }
   }
 
+  // How the thinking shifted — only meaningful with at least a start and a current point.
+  let thinkingShift: string | null = null;
+  if (evolution.length >= 2) {
+    const first = evolution[0]!.formulation;
+    const last = evolution[evolution.length - 1]!.formulation;
+    thinkingShift = `You moved from "${first}" toward "${last}".`;
+    if (provider) {
+      try {
+        const s = (
+          await provider.complete(THINKING_SHIFT_PROMPT, JSON.stringify({ from: first, to: last }, null, 2), 160)
+        ).trim();
+        if (/^you moved from\b/i.test(s)) thinkingShift = firstSentence(s);
+      } catch {
+        // keep the literal template
+      }
+    }
+  }
+
+  // Last explored: newest verified step, else newest provenance of any kind.
+  const newestVerified = evolution.length ? evolution[evolution.length - 1]! : null;
+  const newestAny = trace.provenance.length
+    ? [...trace.provenance].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1)!
+    : null;
+  const lastExploredAt = newestVerified?.when ?? newestAny?.createdAt ?? null;
+  const lastExploredSource = newestVerified?.source ?? sourceLabel(newestAny?.source ?? null);
+
   const packet: ContinuationPacket = {
     idea: { id: idea.id, title: idea.title, state: idea.state },
     whereYouLeftOff: idea.currentFormulation,
@@ -265,6 +325,9 @@ export async function buildContinuationPacket(
     decisions,
     unresolvedQuestion,
     suggestedNext,
+    thinkingShift,
+    lastExploredSource,
+    lastExploredAt,
   };
   return { text: renderPacket(packet), packet };
 }
@@ -275,10 +338,25 @@ export async function buildContinuationPacket(
  * MCP prose path) or substitute locally (the Mac app). A long history is abridged to first +
  * latest two here; the full list stays in `p.evolution` for the in-app preview.
  */
-export function renderPacket(p: ContinuationPacket): string {
-  const out: string[] = [`Resume: ${p.idea.title}`, "", "Where you left off", p.whereYouLeftOff];
+export function renderPacket(p: ContinuationPacket, now: Date = new Date()): string {
+  const out: string[] = [`Resume: ${p.idea.title}`];
+  if (p.lastExploredAt) {
+    const src = p.lastExploredSource ? `${p.lastExploredSource} · ` : "";
+    out.push(`Last explored: ${src}${relativeWhen(p.lastExploredAt, now)}`);
+  }
+  out.push("", "Where you left off", p.whereYouLeftOff);
   if (p.contested) out.push("(This idea is contested — a later point conflicts with the above.)");
   out.push("");
+
+  if (p.decisions.length > 0) {
+    out.push("You'd established");
+    for (const d of p.decisions) out.push(`• ${d.statement}`);
+    out.push("");
+  }
+
+  if (p.thinkingShift) {
+    out.push("How your thinking changed", THINKING_SHIFT_TOKEN, "");
+  }
 
   // A question/open_loop event also appends an evolution step, so the unresolved question can
   // show up twice -- once here, once in its own block. Keep the paste clean: drop the echo.
@@ -307,14 +385,8 @@ export function renderPacket(p: ContinuationPacket): string {
     out.push("");
   }
 
-  if (p.decisions.length > 0) {
-    out.push("Decided");
-    for (const d of p.decisions) out.push(`• ${d.statement}`);
-    out.push("");
-  }
-
   if (p.unresolvedQuestion) {
-    out.push("Unresolved question", stripLoopPrefix(p.unresolvedQuestion), "");
+    out.push("You hadn't resolved", stripLoopPrefix(p.unresolvedQuestion), "");
   }
 
   out.push("Continue from here", CONTINUE_TOKEN);
@@ -333,5 +405,8 @@ export async function continueThinking(
   const result = await buildContinuationPacket(db, { topic }, provider);
   if (!result) throw new Error(`No ideas found matching topic "${topic}"`);
   // Prose consumer: bake the suggested line in where the token sits.
-  return resolveContinueToken(result.text, result.packet.suggestedNext);
+  return resolvePacketText(result.text, {
+    nextStep: result.packet.suggestedNext,
+    thinkingShift: result.packet.thinkingShift,
+  });
 }

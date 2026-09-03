@@ -17,6 +17,7 @@ struct IdeaDetailView: View {
                     headBlock(trace)
                     evolutionBlock(trace)
                     if !trace.idea.openLoops.isEmpty { loopsBlock(trace) }
+                    relatedBlock(trace)
                 }
                 .padding(.top, 2).padding(.bottom, 10)
             } else {
@@ -205,6 +206,38 @@ struct IdeaDetailView: View {
 
     // MARK: open loops
 
+    /// "Related" — other ideas whose *meaning* is close to this one, found on-device. Quiet:
+    /// nothing shows unless there's a genuinely near match.
+    @ViewBuilder
+    private func relatedBlock(_ trace: IdeaTrace) -> some View {
+        let related = appState.relatedIdeas(to: trace.idea.id)
+        if !related.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Related thinking").font(.system(size: 12, weight: .semibold)).kerning(-0.1)
+                    .foregroundStyle(Theme.ink(0.85))
+                ForEach(related) { idea in
+                    Button {
+                        Task { await appState.openIdea(idea.id) }
+                    } label: {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: IdeaStatus.symbol(idea.state))
+                                .font(.system(size: 8.5, weight: .regular))
+                                .foregroundStyle(idea.state == "contested" ? Theme.stateColor("contested") : Theme.ink(0.35))
+                                .padding(.top, 3)
+                            Text(cleanIdeaTitle(idea.title, fallback: idea.currentFormulation))
+                                .font(.system(size: 12)).foregroundStyle(Theme.ink(0.7))
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
+        }
+    }
+
     private func loopsBlock(_ trace: IdeaTrace) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Open loops").font(.system(size: 12, weight: .semibold)).kerning(-0.1)
@@ -359,6 +392,11 @@ private struct ContinuationPreview: View {
                 }
             }
 
+            if let at = packet.lastExploredAt, !Theme.ago(at).isEmpty {
+                Text("Last explored: \(packet.lastExploredSource.map { "\($0) · " } ?? "")\(Theme.ago(at))")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.ink(0.36))
+            }
+
             VStack(alignment: .leading, spacing: 4) {
                 eyebrow("Where you left off")
                 Text(packet.whereYouLeftOff).font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
@@ -366,6 +404,27 @@ private struct ContinuationPreview: View {
                 if packet.contested {
                     Text("This idea is contested — a later point conflicts with the above.")
                         .font(.system(size: 11)).foregroundStyle(Theme.stateColor("contested"))
+                }
+            }
+
+            if !packet.decisions.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    eyebrow("You'd established")
+                    ForEach(packet.decisions) { d in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("•").foregroundStyle(Theme.ink(0.3))
+                            Text(d.statement).font(.system(size: 12)).foregroundStyle(Theme.ink(0.78))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
+            if let shift = packet.thinkingShift, !shift.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    eyebrow("How your thinking changed")
+                    Text(shift).font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -415,7 +474,7 @@ private struct ContinuationPreview: View {
 
             if let q = packet.unresolvedQuestion {
                 VStack(alignment: .leading, spacing: 4) {
-                    eyebrow("Unresolved question")
+                    eyebrow("You hadn't resolved")
                     Text(q.replacingOccurrences(of: "Unresolved contradiction: ", with: ""))
                         .font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.85))
                         .fixedSize(horizontal: false, vertical: true)

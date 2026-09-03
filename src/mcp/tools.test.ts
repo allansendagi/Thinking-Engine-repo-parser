@@ -11,6 +11,7 @@ import {
   getThreadState,
   renderPacket,
   resolveContinueToken,
+  resolvePacketText,
   searchIdeas,
   traceIdea,
   type ContinuationPacket,
@@ -125,6 +126,7 @@ describe("buildContinuationPacket", () => {
     const db = await seedAuthorityThread();
     const nextLine = new FakeProvider([
       "Help me compare two or three concrete verification models, keeping the line between executable enforcement and independent verification.",
+      "You moved from wanting institutional authority to be machine-executable toward needing that execution independently verified.",
     ]);
 
     const r = await buildContinuationPacket(db, { ideaId: "idea_cog_u1_0" }, nextLine);
@@ -139,17 +141,31 @@ describe("buildContinuationPacket", () => {
     expect(packet.suggestedNext).toContain("verification models");
 
     expect(text).toContain("Resume: ");
+    expect(text).toContain("Last explored: Claude · ");
     expect(text).toContain("Where you left off");
+    expect(text).toContain("How your thinking changed");
     expect(text).toContain("How this evolved");
     expect(text).toContain("Aug 17, ChatGPT:");
-    expect(text).toContain("Unresolved question");
+    expect(text).toContain("You hadn't resolved");
     expect(text).toContain("Continue from here");
-    // The suggested line is NOT baked into the render -- a token sits in its place.
+    // The model-written lines are NOT baked into the render -- tokens sit in their place.
     expect(text).toContain(CONTINUE_TOKEN);
     expect(text).not.toContain(packet.suggestedNext);
     expect(packet.evolutionUnverified).toBe(false);
-    expect(resolveContinueToken(text, packet.suggestedNext)).toContain(packet.suggestedNext);
-    expect(resolveContinueToken(text, packet.suggestedNext)).not.toContain(CONTINUE_TOKEN);
+
+    // >= 2 verified steps -> a synthesized shift line, token-substituted like the next step.
+    expect(packet.thinkingShift).toMatch(/^You moved from/);
+    expect(text).toContain("{{THINKING_SHIFT}}");
+    expect(text).not.toContain(packet.thinkingShift!);
+    expect(packet.lastExploredSource).toBe("Claude");
+    const filled = resolvePacketText(text, {
+      nextStep: packet.suggestedNext,
+      thinkingShift: packet.thinkingShift,
+    });
+    expect(filled).toContain(packet.suggestedNext);
+    expect(filled).toContain(packet.thinkingShift!);
+    expect(filled).not.toContain(CONTINUE_TOKEN);
+    expect(filled).not.toContain("{{THINKING_SHIFT}}");
 
     // Eyeball the actual handoff -- fails nothing, but prints it so a human reads it once.
     console.log("\n----- continuation packet text -----\n" + text + "------------------------------------");
@@ -176,7 +192,7 @@ describe("buildContinuationPacket", () => {
     db.query("UPDATE open_loops SET resolved = 1").run();
     const r = await buildContinuationPacket(db, { ideaId: "idea_cog_u1_0" });
     expect(r!.packet.unresolvedQuestion).toBeNull();
-    expect(r!.text).not.toContain("Unresolved question");
+    expect(r!.text).not.toContain("You hadn't resolved");
     expect(r!.text).toContain("Continue from here");
   });
 
@@ -241,6 +257,9 @@ describe("renderPacket", () => {
     decisions: [],
     unresolvedQuestion: null,
     suggestedNext: "do the next thing",
+    thinkingShift: null,
+    lastExploredSource: null,
+    lastExploredAt: null,
   });
 
   test("abridges a long history to first + latest two, keeps the full list on the packet", () => {
@@ -260,5 +279,34 @@ describe("renderPacket", () => {
     const text = renderPacket(basePacket([1, 2, 3, 4].map(baseStep)));
     for (const n of [1, 2, 3, 4]) expect(text).toContain(`Position ${n}`);
     expect(text).not.toContain("earlier step");
+  });
+
+  test("renders the new second-person sections + a relative Last-explored line", () => {
+    const now = new Date("2026-08-24T00:00:00.000Z");
+    const p: ContinuationPacket = {
+      ...basePacket([1, 2].map(baseStep)),
+      decisions: [{ statement: "Frame NOMOS as a protocol, not an infrastructure layer.", decidedAt: "2026-08-20T00:00:00.000Z" }],
+      unresolvedQuestion: "Should the verifier be a third party or a portable proof?",
+      thinkingShift: "You moved from A toward B.",
+      lastExploredSource: "Claude",
+      lastExploredAt: "2026-08-15T00:00:00.000Z",
+    };
+    const text = renderPacket(p, now);
+    expect(text).toContain("Last explored: Claude · 9 days ago");
+    expect(text).toContain("You'd established");
+    expect(text).toContain("Frame NOMOS as a protocol");
+    expect(text).toContain("How your thinking changed");
+    expect(text).toContain("{{THINKING_SHIFT}}");
+    expect(text).not.toContain("You moved from A toward B."); // token, not baked in
+    expect(text).toContain("You hadn't resolved");
+    expect(resolvePacketText(text, { nextStep: p.suggestedNext, thinkingShift: p.thinkingShift }))
+      .toContain("You moved from A toward B.");
+  });
+
+  test("omits the shift + Last-explored lines when there's nothing to say", () => {
+    const text = renderPacket(basePacket([1].map(baseStep)));
+    expect(text).not.toContain("How your thinking changed");
+    expect(text).not.toContain("Last explored:");
+    expect(text).not.toContain("{{THINKING_SHIFT}}");
   });
 });

@@ -60,6 +60,28 @@ struct ContinueInThreadIntent: AppIntent {
     }
 }
 
+/// A Focus filter: turn on a Focus (Work, Personal, Do Not Disturb) and Thread stops sending
+/// the ambient "unfinished thread" notification while it's active. The in-panel nudge stays.
+struct ThreadFocusFilterIntent: SetFocusFilterIntent {
+    static let title: LocalizedStringResource = "Silence Thread's return nudges"
+    static let description = IntentDescription(
+        "While this Focus is on, Thread won't send the return-nudge notification. Recall and the in-app nudge are unchanged."
+    )
+
+    @Parameter(title: "Silence return nudges", default: true)
+    var silence: Bool
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: silence ? "Return nudges: silenced" : "Return nudges: on")
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        AppDelegate.shared?.appState.nudgesSilencedByFocus = silence
+        return .result()
+    }
+}
+
 struct ThreadShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(

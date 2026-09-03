@@ -67,6 +67,7 @@ final class LocalStoreTests: XCTestCase {
             ],
             pendingEdits: [PendingEdit.rename("i1", "renamed")],
             localGraph: .empty,
+            embeddings: [:],
             savedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
         let data = try JSONEncoder().encode(snap)
