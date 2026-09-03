@@ -90,7 +90,7 @@ struct LocalIdeaDraft: Codable, Equatable {
         guard
             let data = json.data(using: .utf8),
             let w = try? JSONDecoder().decode(Wire.self, from: data),
-            let title = w.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty
+            let title = w.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty, !OnDeviceModel.looksUnusable(title)
         else { return nil }
         let state = (w.state ?? "developing").lowercased()
         let q = w.openQuestion?.trimmingCharacters(in: .whitespacesAndNewlines)

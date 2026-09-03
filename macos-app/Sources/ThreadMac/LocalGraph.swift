@@ -120,7 +120,7 @@ extension OnDeviceModel.GraphDelta {
         guard
             let data = String(raw[start...end]).data(using: .utf8),
             let w = try? JSONDecoder().decode(Wire.self, from: data),
-            let title = w.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty
+            let title = w.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty, !OnDeviceModel.looksUnusable(title)
         else { return nil }
         let q = w.openQuestion?.trimmingCharacters(in: .whitespacesAndNewlines)
         let target = w.target?.trimmingCharacters(in: .whitespacesAndNewlines)

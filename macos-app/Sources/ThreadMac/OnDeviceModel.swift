@@ -58,7 +58,7 @@ enum OnDeviceModel {
                 let session = LanguageModelSession(instructions: Self.instructions)
                 let raw = try await session.respond(to: facts).content
                 let one = firstSentence(raw.trimmingCharacters(in: .whitespacesAndNewlines))
-                return one.isEmpty ? nil : one
+                return looksUnusable(one) ? nil : one
             } catch {
                 return nil
             }
@@ -77,7 +77,7 @@ enum OnDeviceModel {
                 let session = LanguageModelSession(instructions: Self.shiftInstructions)
                 let raw = try await session.respond(to: "First: \(first)\nCurrent: \(latest)").content
                 let one = firstSentence(raw.trimmingCharacters(in: .whitespacesAndNewlines))
-                return one.lowercased().hasPrefix("you moved from") ? one : nil
+                return one.lowercased().hasPrefix("you moved from") && !looksUnusable(one) ? one : nil
             } catch {
                 return nil
             }
@@ -108,7 +108,7 @@ enum OnDeviceModel {
                 }.filter { !$0.isEmpty }
                 // Reject unless it actually distilled — a small model sometimes echoes the input.
                 let distilled = lines.count == formulations.count
-                    && lines.allSatisfy { $0.split(separator: " ").count <= 7 && $0.count <= 60 }
+                    && lines.allSatisfy { $0.split(separator: " ").count <= 7 && $0.count <= 60 && !looksUnusable($0) }
                 return distilled ? lines : nil
             } catch {
                 return nil
@@ -224,11 +224,32 @@ enum OnDeviceModel {
     /// Mirrors the server's `NEXT_STEP_PROMPT` (src/mcp/tools.ts) so Free and Pro produce the
     /// same shape of line — one paste-ready instruction in the user's own voice.
     private static let instructions = """
-    You are given a line of thinking a user developed with AI. Write ONE sentence they can \
-    paste into a new AI chat to pick it back up: an instruction in their own voice, grounded \
-    only in what's given, pointing at the unresolved question if there is one. No preamble, \
-    no "you should", one sentence.
+    You are given a line of thinking a person developed with AI. Write ONE sentence they can \
+    paste into a new AI chat to pick it back up — an instruction in their own voice, grounded \
+    only in what's given. If there is an unresolved question, point at it; if not, push the \
+    current formulation forward, or resolve the conflict if it's contested. Always produce a \
+    usable sentence — never refuse, never mention being an AI or a model. No preamble, no \
+    "you should", one sentence.
     """
+
+    /// A model that won't answer — a canned refusal or meta-commentary. Never show it to the
+    /// user; the caller falls back to the deterministic template.
+    static func looksUnusable(_ s: String) -> Bool {
+        let t = s.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return true }
+        let openers = [
+            "i'm sorry", "i am sorry", "i cannot", "i can't", "i can not", "i'm unable",
+            "i am unable", "i'm not able", "i am not able", "i apologize", "as an ai",
+            "as a chatbot", "as a language model", "unfortunately, i", "sorry, ",
+        ]
+        if openers.contains(where: { t.hasPrefix($0) }) { return true }
+        let anywhere = [
+            "as a chatbot", "as an ai language model", "created by apple", "i cannot provide",
+            "i'm unable to provide", "i am unable to provide", "cannot fulfill", "cannot fulfil",
+            "against my guidelines", "when none exists", "no unresolved question exists",
+        ]
+        return anywhere.contains(where: { t.contains($0) })
+    }
 
     #if canImport(FoundationModels)
     @available(macOS 26.0, *)

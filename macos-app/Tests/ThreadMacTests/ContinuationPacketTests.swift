@@ -54,6 +54,42 @@ final class ContinuationPacketTests: XCTestCase {
         XCTAssertEqual(p.trajectoryChain, "")
     }
 
+    func testRefusalAndMetaOutputAreCaught() {
+        for bad in [
+            "I'm sorry, but as a chatbot created by Apple, I cannot provide a sentence.",
+            "As an AI language model, I don't have opinions on this.",
+            "I cannot provide that when none exists.",
+            "  I apologize, but I'm unable to help with this request.",
+            "",
+        ] {
+            XCTAssertTrue(OnDeviceModel.looksUnusable(bad), "should reject: \(bad)")
+        }
+        for good in [
+            "Compare two or three verification models and keep the enforcement/verification line.",
+            "You moved from AI governance toward machine-executable authority.",
+            "Resolve whether NOMOS is a protocol or an infrastructure layer.",
+        ] {
+            XCTAssertFalse(OnDeviceModel.looksUnusable(good), "should keep: \(good)")
+        }
+    }
+
+    @MainActor
+    func testCopyTextSwapsInSafeLineForARefusal() {
+        let state = AppState()
+        state.continuationText = "TASK\n\(ContinuationPacket.continueToken)\n"
+        state.continuationPacket = ContinuationPacket(
+            idea: .init(id: "i", title: "T", state: "developing"),
+            whereYouLeftOff: "x", contested: false, evolution: [], evolutionUnverified: false,
+            decisions: [], unresolvedQuestion: nil, unresolvedQuestions: nil,
+            suggestedNext: "I'm sorry, but as a chatbot created by Apple, I cannot do that.",
+            trajectory: nil, thinkingShift: nil, lastExploredSource: nil, lastExploredAt: nil
+        )
+        state.nextStepDraft = "I'm sorry, but as a chatbot created by Apple, I cannot do that."
+        let out = state.continuationCopyText ?? ""
+        XCTAssertFalse(out.lowercased().contains("as a chatbot"))
+        XCTAssertTrue(out.contains(AppState.safeNextStep))
+    }
+
     @MainActor
     func testCopyTextFillsEveryToken() {
         let state = AppState()
