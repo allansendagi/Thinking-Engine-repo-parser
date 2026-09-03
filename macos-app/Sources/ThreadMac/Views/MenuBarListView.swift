@@ -135,6 +135,7 @@ struct MenuBarListView: View {
                     },
                     onDismiss: { withAnimation(.easeOut(duration: 0.16)) { appState.snoozeResume(s.ideaId) } }
                 )
+                .onAppear { appState.noteResumeShown(s.ideaId, lastActivity: appState.lastActivity(of: s.ideaId)) }
             }
             if groups.isEmpty {
                 EmptyState(onboard: !appState.onboardingDismissed && tab != .loops,

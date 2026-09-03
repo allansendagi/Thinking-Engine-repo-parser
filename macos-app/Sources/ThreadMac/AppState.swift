@@ -227,6 +227,29 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(resumeSnoozed, forKey: resumeSnoozeKey)
     }
 
+    /// How many times each idea's nudge has been shown, and the activity it was showing against.
+    /// A later edit to the idea resets its count. Local-only, persisted. Drives nudge fatigue —
+    /// shown three times without a resume and the idea stops being offered.
+    private let resumeShownKey = "thread.resumeShown"
+    @Published private var resumeShownRaw: [String: [String: Double]] =
+        (UserDefaults.standard.dictionary(forKey: "thread.resumeShown") as? [String: [String: Double]]) ?? [:]
+
+    private var resumeShown: [String: ResumeShown] {
+        resumeShownRaw.compactMapValues { d in
+            guard let c = d["count"], let s = d["since"] else { return nil }
+            return ResumeShown(count: Int(c), sinceActivity: Date(timeIntervalSince1970: s))
+        }
+    }
+
+    /// Called once each time the nudge actually appears for an idea. Resets the counter when the
+    /// idea has moved since it was last shown.
+    func noteResumeShown(_ ideaId: String, lastActivity: Date) {
+        let prev = resumeShown[ideaId]
+        let count = (prev != nil && lastActivity <= prev!.sinceActivity) ? prev!.count + 1 : 1
+        resumeShownRaw[ideaId] = ["count": Double(count), "since": lastActivity.timeIntervalSince1970]
+        UserDefaults.standard.set(resumeShownRaw, forKey: resumeShownKey)
+    }
+
     /// The single highest-confidence idea worth resuming, or nil. Deliberately conservative:
     ///   • has an unresolved open loop OR is contested (there is genuinely something unfinished)
     ///   • not dormant / rejected
@@ -237,7 +260,12 @@ final class AppState: ObservableObject {
     var resumeSuggestion: ResumeSuggestion? {
         guard isPaired, let state = thinkingState else { return nil }
 
-        let openLoopIdeas = Set(state.openLoops.filter { !$0.resolved }.map(\.ideaId))
+        let unresolved = state.openLoops.filter { !$0.resolved }
+        let openLoopIdeas = Set(unresolved.map(\.ideaId))
+        let contradictionIdeas = Set(
+            unresolved.filter { $0.statement.range(of: #"^\s*Unresolved contradiction:"#, options: .regularExpression) != nil }
+                .map(\.ideaId)
+        )
         var lastTouched: [String: Date] = [:]
         for c in state.recentChanges {
             guard let d = Theme.parse(c.createdAt) else { continue }
@@ -252,11 +280,20 @@ final class AppState: ObservableObject {
                 state: idea.state,
                 source: idea.sourceLabel,
                 hasOpenLoop: openLoopIdeas.contains(idea.id),
+                isContradiction: contradictionIdeas.contains(idea.id) || idea.state == "contested",
                 lastTouched: touched
             )
         }
         let snoozed = resumeSnoozed.mapValues { Date(timeIntervalSince1970: $0) }
-        return pickResumeSuggestion(candidates, snoozed: snoozed)
+        return pickResumeSuggestion(candidates, snoozed: snoozed, history: resumeShown)
+    }
+
+    /// The last-activity timestamp for an idea, from Thinking State — for `noteResumeShown`.
+    func lastActivity(of ideaId: String) -> Date {
+        (thinkingState?.recentChanges ?? [])
+            .filter { $0.ideaId == ideaId }
+            .compactMap { Theme.parse($0.createdAt) }
+            .max() ?? .distantPast
     }
     @Published var continueResult: String?
     @Published var errorMessage: String?

@@ -175,6 +175,7 @@ private struct IdeaListColumn: View {
                     onDismiss: { withAnimation(.easeOut(duration: 0.16)) { appState.snoozeResume(s.ideaId) } }
                 )
                 .padding(.top, 4)
+                .onAppear { appState.noteResumeShown(s.ideaId, lastActivity: appState.lastActivity(of: s.ideaId)) }
             }
             Group {
                 if groups.isEmpty {

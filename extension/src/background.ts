@@ -1,8 +1,10 @@
 import {
   clearCredentials,
   getPairingState,
+  getResumeShown,
   getResumeSnooze,
   getSettings,
+  noteResumeShown,
   setApiBaseUrl,
   setCredentials,
   setPairingState,
@@ -132,8 +134,22 @@ async function resumeSuggestion(): Promise<ResumeSuggestion | null> {
   const { credentials } = await getSettings();
   if (!credentials) return null;
   try {
-    const [state, snoozed] = await Promise.all([getThinkingState(), getResumeSnooze()]);
-    return suggestionFromState(state, snoozed);
+    const [state, snoozed, history] = await Promise.all([
+      getThinkingState(),
+      getResumeSnooze(),
+      getResumeShown(),
+    ]);
+    const suggestion = suggestionFromState(state, snoozed, history);
+    if (suggestion) {
+      // Record the show so nudge fatigue can decay it — mirrors the Mac app's noteResumeShown.
+      const lastActivity = state.recentChanges
+        .filter((c) => c.ideaId === suggestion.ideaId)
+        .map((c) => c.createdAt)
+        .sort()
+        .at(-1);
+      if (lastActivity) void noteResumeShown(suggestion.ideaId, lastActivity);
+    }
+    return suggestion;
   } catch {
     return null;
   }

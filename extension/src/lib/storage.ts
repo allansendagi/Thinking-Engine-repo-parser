@@ -77,3 +77,24 @@ export async function setResumeSnooze(ideaId: string, whenIso: string = new Date
   const next = { ...(await getResumeSnooze()), [ideaId]: whenIso };
   await chrome.storage.local.set({ resumeSnooze: next });
 }
+
+/**
+ * How many times each idea's nudge has been shown, and the activity timestamp it was showing
+ * against, as `{ ideaId: { count, sinceActivity } }`. Drives nudge fatigue in lib/resume.ts:
+ * offered a few times without a resume and the idea stops being suggested. Mirrors the Mac app's
+ * `thread.resumeShown`.
+ */
+export async function getResumeShown(): Promise<Record<string, { count: number; sinceActivity: string }>> {
+  const result = await chrome.storage.local.get("resumeShown");
+  return (result.resumeShown as Record<string, { count: number; sinceActivity: string }> | undefined) ?? {};
+}
+
+/** Record that the nudge was shown for `ideaId`. Resets the counter when the idea has moved
+ *  (its last activity is newer than what a prior show was recorded against). */
+export async function noteResumeShown(ideaId: string, lastActivityIso: string): Promise<void> {
+  const all = await getResumeShown();
+  const prev = all[ideaId];
+  const moved = !prev || Date.parse(lastActivityIso) > Date.parse(prev.sinceActivity);
+  const next = { ...all, [ideaId]: { count: moved ? 1 : prev.count + 1, sinceActivity: lastActivityIso } };
+  await chrome.storage.local.set({ resumeShown: next });
+}
