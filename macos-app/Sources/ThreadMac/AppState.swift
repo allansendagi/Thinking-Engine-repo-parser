@@ -14,6 +14,32 @@ enum ListTab: String, CaseIterable, Identifiable {
 final class AppState: ObservableObject {
     init() {
         Theme.accentOverride = accent.color   // seed from the persisted choice at launch
+
+        // Local-first: hydrate the panel from the last synced snapshot before any network call,
+        // so recall renders instantly and works offline. `refresh()` keeps the snapshot current.
+        if let snap = LocalStore.load(userId: CredentialStore.userId) {
+            snapshot = snap
+            thinkingState = snap.thinkingState
+            lastSyncedAt = snap.savedAt == .distantPast ? nil : snap.savedAt
+        }
+    }
+
+    // MARK: - Local-first snapshot
+
+    /// The on-disk read model. `thinkingState` + opened traces are mirrored here after every
+    /// successful sync; see LocalStore.
+    private var snapshot = LocalSnapshot.empty
+
+    /// When the backend was last reached. Nil until the first successful sync on this Mac.
+    @Published var lastSyncedAt: Date?
+    /// True when the last sync attempt failed. A quiet "showing last synced" hint — never a
+    /// blocking error; the cached graph stays fully usable.
+    @Published var isOffline = false
+
+    private func persistSnapshot() {
+        snapshot.thinkingState = thinkingState
+        snapshot.savedAt = Date()
+        LocalStore.save(snapshot, userId: CredentialStore.userId)
     }
 
     // MARK: - Appearance preferences (Settings ▸ Appearance)
@@ -321,9 +347,10 @@ final class AppState: ObservableObject {
             } catch let APIError.http(status, _) where status == 401 {
                 CredentialStore.clear() // stale account -- fall through and re-pair
             } catch {
-                // Backend unreachable: keep credentials, surface the problem, don't wipe.
+                // Backend unreachable: keep credentials, keep the cached graph on screen (init
+                // already hydrated it), just mark offline. The core loop still works.
                 userId = cred.userId
-                errorMessage = error.localizedDescription
+                isOffline = true
                 return
             }
         }
@@ -351,6 +378,10 @@ final class AppState: ObservableObject {
                 try? await APIClient(baseURL: base, credentials: cred).signOutThisDevice()
             }
         }
+        LocalStore.clear(userId: CredentialStore.userId)
+        snapshot = .empty
+        lastSyncedAt = nil
+        isOffline = false
         CredentialStore.clear()
         userId = nil
         thinkingState = nil
@@ -384,11 +415,16 @@ final class AppState: ObservableObject {
     func refresh() async {
         guard isPaired else { return }
         isLoading = true
-        errorMessage = nil
         do {
             thinkingState = try await client.getThinkingState()
+            isOffline = false
+            lastSyncedAt = Date()
+            errorMessage = nil
+            persistSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            // Local-first: a failed sync is not an error the user has to see. Keep the cached
+            // graph on screen; just note we're offline so the UI can show a quiet hint.
+            isOffline = true
         }
         isLoading = false
         await refreshAccount()
@@ -396,14 +432,22 @@ final class AppState: ObservableObject {
 
     func search() async {
         guard isPaired else { return }
-        guard !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty else {
+        let q = searchQuery.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else {
             searchResults = []
             return
         }
+        // Instant, offline, never fails: scan the local snapshot first. The panel shows results
+        // on the same keystroke — no spinner, no round-trip.
+        searchResults = localSearch(q, in: thinkingState?.currentIdeas ?? [])
+
+        // Then reconcile with the server when it's reachable (better ranking, ideas not yet in
+        // the snapshot). If it's down or the query moved on, the local results stand.
         do {
-            searchResults = try await client.searchIdeas(query: searchQuery)
+            let remote = try await client.searchIdeas(query: q)
+            if q == searchQuery.trimmingCharacters(in: .whitespaces) { searchResults = remote }
         } catch {
-            errorMessage = error.localizedDescription
+            // keep the local results; offline is surfaced by refresh(), not here
         }
     }
 
@@ -470,10 +514,20 @@ final class AppState: ObservableObject {
         }
         selectedIdeaId = id
         errorMessage = nil
+
+        // Cache-first: show the last-synced trace immediately, then revalidate.
+        let cached = snapshot.traces[id]
+        if let cached { selectedTrace = cached }
+
         do {
-            selectedTrace = try await client.traceIdea(id: id)
+            let fresh = try await client.traceIdea(id: id)
+            guard selectedIdeaId == id else { return }   // user moved on while it loaded
+            selectedTrace = fresh
+            snapshot.traces[id] = fresh
+            persistSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            // Only an error if we had nothing cached to show.
+            if cached == nil { errorMessage = error.localizedDescription }
         }
     }
 

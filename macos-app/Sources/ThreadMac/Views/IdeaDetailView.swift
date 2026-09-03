@@ -20,7 +20,14 @@ struct IdeaDetailView: View {
                 }
                 .padding(.top, 2).padding(.bottom, 10)
             } else {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(40)
+                // No cached trace yet (first open of this idea, offline). A quiet skeleton, not
+                // a spinner — the panel never blocks on the network.
+                VStack(alignment: .leading, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 4).fill(Theme.ink(0.08)).frame(width: 160, height: 11)
+                    RoundedRectangle(cornerRadius: 4).fill(Theme.ink(0.08)).frame(height: 13)
+                    RoundedRectangle(cornerRadius: 4).fill(Theme.ink(0.08)).frame(maxWidth: 240).frame(height: 13)
+                }
+                .padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
