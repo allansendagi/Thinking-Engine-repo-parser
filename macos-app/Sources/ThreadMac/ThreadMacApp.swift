@@ -73,6 +73,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let queued = pendingURLs
         pendingURLs.removeAll()
         queued.forEach(route)
+
+        // The menu-bar panel is the ONLY thing that should be up at launch. `.defaultLaunchBehavior
+        // (.suppressed)` on the Window scene should already stop the big window auto-presenting, but
+        // it's not reliable for a single-Window app across macOS versions -- so also close it by
+        // hand for the first moment after launch. Deliberate opens ("Open in Window", ⌘⇧W) happen
+        // seconds later, well after this guard lapses.
+        let deadline = Date().addingTimeInterval(1.5)
+        func sweep() {
+            guard Date() < deadline else { return }
+            for w in NSApp.windows where !(w is NSPanel) && w.styleMask.contains(.titled) && w.isVisible {
+                w.close()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: sweep)
+        }
+        DispatchQueue.main.async(execute: sweep)
     }
 
     /// `open thread://...` from Raycast / Alfred / Shortcuts / a script. Registered via
