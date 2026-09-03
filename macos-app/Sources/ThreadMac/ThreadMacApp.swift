@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pairingServer: PairingServer?
     private var statusItem: NSStatusItem?
     private var servicesProvider: ThreadServicesProvider?
+    private var ambientNudge: AmbientNudge?
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
     private var pendingURLs: [URL] = []
 
@@ -68,6 +69,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appState.openPairingWindow(seconds: 120)
 
         Task { await appState.bootstrap() }
+
+        // The "moment" half of the return nudge: a quiet notification when you come back to an
+        // AI tool after a real gap. Self-manages its NSWorkspace + notification observers.
+        let ambient = AmbientNudge(appState: appState)
+        ambient.start()
+        ambientNudge = ambient
 
         // Flush any thread:// URL that launched us before this point.
         let queued = pendingURLs

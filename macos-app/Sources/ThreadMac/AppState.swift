@@ -360,6 +360,11 @@ final class AppState: ObservableObject {
         return pickResumeSuggestion(candidates, snoozed: snoozed, history: resumeShown)
     }
 
+    /// Set by a Focus filter (`ThreadFocusFilterIntent`) — silences the ambient return
+    /// *notification* while that Focus is on. The in-panel nudge is unaffected; opening the
+    /// panel is deliberate.
+    @Published var nudgesSilencedByFocus = false
+
     /// The last-activity timestamp for an idea, from Thinking State — for `noteResumeShown`.
     func lastActivity(of ideaId: String) -> Date {
         (thinkingState?.recentChanges ?? [])
