@@ -28,9 +28,15 @@ struct IdeaDetailView: View {
 
     private func headBlock(_ trace: IdeaTrace) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("\(latestSource(trace)) · \(trace.idea.state.capitalized)")
-                .font(.system(size: 11, weight: .semibold)).textCase(.uppercase).kerning(0.55)
-                .foregroundStyle(Theme.ink(0.4))
+            HStack(spacing: 5) {
+                Text("\(latestSource(trace)) ·")
+                Image(systemName: IdeaStatus.symbol(trace.idea.state))
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(trace.idea.state == "contested" ? Theme.stateColor("contested") : Theme.ink(0.4))
+                Text(trace.idea.state.capitalized)
+            }
+            .font(.system(size: 11, weight: .semibold)).textCase(.uppercase).kerning(0.55)
+            .foregroundStyle(Theme.ink(0.4))
 
             if editingTitle {
                 HStack {
@@ -103,7 +109,11 @@ struct IdeaDetailView: View {
                     Picker("State", selection: Binding(
                         get: { trace.idea.state },
                         set: { s in Task { await appState.setSelectedState(s) } }
-                    )) { ForEach(states, id: \.self) { Text($0.capitalized) } }
+                    )) {
+                        ForEach(states, id: \.self) { s in
+                            Label(s.capitalized, systemImage: IdeaStatus.symbol(s))
+                        }
+                    }
                     Divider()
                     Button("Delete idea", role: .destructive) { Task { await appState.deleteSelected() } }
                 } label: {
