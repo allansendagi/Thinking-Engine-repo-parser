@@ -597,6 +597,54 @@ final class AppState: ObservableObject {
         continueCopied = true
     }
 
+    /// Free, local, no server call: a Markdown snapshot of the selected idea — its current
+    /// formulation, how it developed, and what's still open — on the clipboard to paste
+    /// anywhere. The Pro "Continue this idea" path (/v1/continue) is what adds the AI-written
+    /// next step and the one-click handoff into a fresh chat.
+    func copyIdeaContext() {
+        guard let trace = selectedTrace else { return }
+        let idea = trace.idea
+        var out = "# \(idea.title)\n\n"
+        out += "**Where this stands:** \(idea.currentFormulation)\n"
+        out += "_State: \(idea.state.capitalized)_\n"
+
+        if !trace.provenance.isEmpty {
+            out += "\n## How it developed\n"
+            for (i, s) in trace.provenance.enumerated() {
+                let src = s.sourceLabel.map { " · \($0)" } ?? ""
+                out += "\(i + 1). \(Self.shortDay(s.createdAt))\(src) — \(s.formulation)\n"
+            }
+        }
+
+        let open = idea.openLoops.filter { !$0.resolved }
+        if !open.isEmpty {
+            out += "\n## Open questions\n"
+            for l in open { out += "- \(l.statement)\n" }
+        }
+
+        if !idea.decisions.isEmpty {
+            out += "\n## Decisions\n"
+            for d in idea.decisions { out += "- \(d.statement)\n" }
+        }
+
+        out += "\n---\nCaptured with Thread · first seen \(Self.shortDay(idea.createdAt)), "
+        out += "last touched \(Self.shortDay(idea.updatedAt))\n"
+
+        copyContext(out)
+    }
+
+    private static func shortDay(_ iso: String) -> String {
+        let parsers: [ISO8601DateFormatter] = [
+            ISO8601DateFormatter(),
+            { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }(),
+        ]
+        for p in parsers where p.date(from: iso) != nil {
+            let out = DateFormatter(); out.dateFormat = "d MMM yyyy"
+            return out.string(from: p.date(from: iso)!)
+        }
+        return String(iso.prefix(10))
+    }
+
     /// The last continuation packet fetched, for the in-app preview (source affordances +
     /// editable next step). `continuationText` is the server's verbatim paste-ready render.
     @Published var continuationPacket: ContinuationPacket?

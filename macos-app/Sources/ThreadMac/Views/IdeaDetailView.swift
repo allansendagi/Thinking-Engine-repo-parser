@@ -6,6 +6,7 @@ struct IdeaDetailView: View {
     @EnvironmentObject var appState: AppState
     @State private var titleDraft = ""
     @State private var editingTitle = false
+    @State private var justCopied = false
 
     private let states = ["developing", "established", "contested", "rejected", "dormant"]
 
@@ -81,14 +82,19 @@ struct IdeaDetailView: View {
                 .buttonStyle(.plain)
 
                 Button {
-                    Task { await appState.continueThinking(sendTo: nil) }
+                    appState.copyIdeaContext()
+                    withAnimation(.easeOut(duration: 0.15)) { justCopied = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                        withAnimation(.easeOut(duration: 0.2)) { justCopied = false }
+                    }
                 } label: {
-                    Text("Copy")
-                        .font(.system(size: 12)).foregroundStyle(Theme.ink(0.7))
+                    Text(justCopied ? "Copied" : "Copy")
+                        .font(.system(size: 12)).foregroundStyle(Theme.ink(justCopied ? 0.45 : 0.7))
                         .padding(.horizontal, 9).frame(height: 26)
                 }
                 .buttonStyle(.plain)
                 .raisedControl()
+                .help("Copy this idea as text — formulation, how it developed, open questions")
 
                 Menu {
                     Section("Continue in") {
