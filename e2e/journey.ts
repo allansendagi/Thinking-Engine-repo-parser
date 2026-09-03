@@ -242,8 +242,14 @@ async function run(): Promise<void> {
   check("POST /v1/conversations → 402 upgrade_required", gated.status === 402 && ((await gated.json()) as { code: string }).code === "upgrade_required", gated.status);
   const readStillOk = await authed(macAuth, "/v1/thinking-state");
   check("reads are never gated → 200", readStillOk.status === 200, readStillOk.status);
-  const contGated = await authed(macAuth, "/v1/continue", jsonBody({ ideaId }));
-  check("POST /v1/continue → 402 pro_required (AI is a Pro feature)", contGated.status === 402 && ((await contGated.json()) as { code: string }).code === "pro_required", contGated.status);
+  // Continuation is NOT gated -- the packet is assembled deterministically from the idea's own
+  // provenance. A Free account gets it back with tier:"free" (the server used the template for
+  // the one model-written line; the Mac app sharpens that line on-device). Only Pro spends a
+  // frontier-model call on that line server-side -> tier:"pro".
+  const contFree = await authed(macAuth, "/v1/continue", jsonBody({ ideaId }));
+  const contFreeBody = (await contFree.json()) as { tier: string; packet: unknown };
+  check("POST /v1/continue (Free) → 200, tier 'free', packet present",
+    contFree.status === 200 && contFreeBody.tier === "free" && contFreeBody.packet != null, contFreeBody);
 
   // ============================================================================================
   phase("Phase 9 — Pay: the signed webhook a real Paddle checkout emits");
@@ -271,7 +277,9 @@ async function run(): Promise<void> {
   }));
   check("capture works again for a paying account (not 402)", captureAfterPay.status === 200, captureAfterPay.status);
   const contAfterPay = await authed(macAuth, "/v1/continue", jsonBody({ ideaId }));
-  check("POST /v1/continue works for a paying account (200)", contAfterPay.status === 200, contAfterPay.status);
+  const contAfterPayBody = (await contAfterPay.json()) as { tier: string };
+  check("POST /v1/continue for a paying account → 200, tier 'pro'",
+    contAfterPay.status === 200 && contAfterPayBody.tier === "pro", contAfterPay.status);
 
   // ============================================================================================
   phase("Phase 10 — Cancel: Pro through the period end, then Free");
@@ -318,7 +326,7 @@ Proven by this run (the plumbing):
   • continuation packet: evolution, unresolved question, {{CONTINUE_FROM_HERE}} token
   • return-nudge rule (shared with the Mac app) fires in-window, stays silent out of window
   • email claim, second-device sign-in (per-device tokens), email_in_use protection
-  • Free 25-idea cap: capture + /v1/continue gated, reads never gated
+  • Free 25-idea cap: capture gated, reads never gated; /v1/continue stays open (tier 'free')
   • payment: a correctly SIGNED Paddle webhook flips the account to Pro and re-opens the gates
   • cancellation: Pro through the paid period, then Free
 

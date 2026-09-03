@@ -6,6 +6,7 @@ struct IdeaDetailView: View {
     @EnvironmentObject var appState: AppState
     @State private var titleDraft = ""
     @State private var editingTitle = false
+    @State private var justCopied = false
 
     private let states = ["developing", "established", "contested", "rejected", "dormant"]
 
@@ -19,7 +20,14 @@ struct IdeaDetailView: View {
                 }
                 .padding(.top, 2).padding(.bottom, 10)
             } else {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(40)
+                // No cached trace yet (first open of this idea, offline). A quiet skeleton, not
+                // a spinner — the panel never blocks on the network.
+                VStack(alignment: .leading, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 4).fill(Theme.ink(0.08)).frame(width: 160, height: 11)
+                    RoundedRectangle(cornerRadius: 4).fill(Theme.ink(0.08)).frame(height: 13)
+                    RoundedRectangle(cornerRadius: 4).fill(Theme.ink(0.08)).frame(maxWidth: 240).frame(height: 13)
+                }
+                .padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -28,9 +36,15 @@ struct IdeaDetailView: View {
 
     private func headBlock(_ trace: IdeaTrace) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("\(latestSource(trace)) · \(trace.idea.state.capitalized)")
-                .font(.system(size: 11, weight: .semibold)).textCase(.uppercase).kerning(0.55)
-                .foregroundStyle(Theme.ink(0.4))
+            HStack(spacing: 5) {
+                Text("\(latestSource(trace)) ·")
+                Image(systemName: IdeaStatus.symbol(trace.idea.state))
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(trace.idea.state == "contested" ? Theme.stateColor("contested") : Theme.ink(0.4))
+                Text(trace.idea.state.capitalized)
+            }
+            .font(.system(size: 11, weight: .semibold)).textCase(.uppercase).kerning(0.55)
+            .foregroundStyle(Theme.ink(0.4))
 
             if editingTitle {
                 HStack {
@@ -75,14 +89,19 @@ struct IdeaDetailView: View {
                 .buttonStyle(.plain)
 
                 Button {
-                    Task { await appState.continueThinking(sendTo: nil) }
+                    appState.copyIdeaContext()
+                    withAnimation(.easeOut(duration: 0.15)) { justCopied = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                        withAnimation(.easeOut(duration: 0.2)) { justCopied = false }
+                    }
                 } label: {
-                    Text("Copy")
-                        .font(.system(size: 12)).foregroundStyle(Theme.ink(0.7))
+                    Text(justCopied ? "Copied" : "Copy")
+                        .font(.system(size: 12)).foregroundStyle(Theme.ink(justCopied ? 0.45 : 0.7))
                         .padding(.horizontal, 9).frame(height: 26)
                 }
                 .buttonStyle(.plain)
                 .raisedControl()
+                .help("Copy this idea as text — formulation, how it developed, open questions")
 
                 Menu {
                     Section("Continue in") {
@@ -103,7 +122,11 @@ struct IdeaDetailView: View {
                     Picker("State", selection: Binding(
                         get: { trace.idea.state },
                         set: { s in Task { await appState.setSelectedState(s) } }
-                    )) { ForEach(states, id: \.self) { Text($0.capitalized) } }
+                    )) {
+                        ForEach(states, id: \.self) { s in
+                            Label(s.capitalized, systemImage: IdeaStatus.symbol(s))
+                        }
+                    }
                     Divider()
                     Button("Delete idea", role: .destructive) { Task { await appState.deleteSelected() } }
                 } label: {
@@ -400,7 +423,14 @@ private struct ContinuationPreview: View {
             }
 
             VStack(alignment: .leading, spacing: 5) {
-                eyebrow("Continue from here")
+                HStack(spacing: 6) {
+                    eyebrow("Continue from here")
+                    Spacer(minLength: 0)
+                    if let hint = appState.continuationEngine.hint {
+                        Text(hint).font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(Theme.ink(0.32))
+                    }
+                }
                 TextField("What to ask next…", text: $appState.nextStepDraft, axis: .vertical)
                     .textFieldStyle(.plain).font(.system(size: 12.5))
                     .foregroundStyle(Theme.ink(0.85)).lineLimit(1 ... 4)

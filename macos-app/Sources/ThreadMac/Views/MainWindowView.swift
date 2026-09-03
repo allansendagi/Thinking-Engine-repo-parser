@@ -48,6 +48,31 @@ struct MainWindowView: View {
         .preferredColorScheme(.light)
         .tint(Theme.accent)          // sidebar selection + buttons follow the app accent, not the OS one
         .task { await appState.refresh() }
+        // The full window had no error surface, so a failed action (e.g. "Continue this idea"
+        // coming back 402 Pro-required) was a silent no-op. Mirror the panel's error line.
+        .safeAreaInset(edge: .bottom) {
+            if let err = appState.errorMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.circle.fill").font(.system(size: 11))
+                    Text(err).font(.system(size: 11.5)).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button {
+                        withAnimation(.easeOut(duration: 0.15)) { appState.errorMessage = nil }
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.ink(0.4))
+                }
+                .foregroundStyle(Theme.stateColor("contested"))
+                .padding(.horizontal, 16).padding(.vertical, 9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.regularMaterial)
+                .overlay(Rectangle().fill(Theme.ink(0.1)).frame(height: 0.5), alignment: .top)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: appState.errorMessage)
     }
 
     private var sidebar: some View {
@@ -150,6 +175,7 @@ private struct IdeaListColumn: View {
                     onDismiss: { withAnimation(.easeOut(duration: 0.16)) { appState.snoozeResume(s.ideaId) } }
                 )
                 .padding(.top, 4)
+                .onAppear { appState.noteResumeShown(s.ideaId, lastActivity: appState.lastActivity(of: s.ideaId)) }
             }
             Group {
                 if groups.isEmpty {

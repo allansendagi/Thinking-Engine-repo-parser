@@ -14,6 +14,152 @@ enum ListTab: String, CaseIterable, Identifiable {
 final class AppState: ObservableObject {
     init() {
         Theme.accentOverride = accent.color   // seed from the persisted choice at launch
+
+        // Local-first: hydrate the panel from the last synced snapshot before any network call,
+        // so recall renders instantly and works offline. `refresh()` keeps the snapshot current.
+        if let snap = LocalStore.load(userId: CredentialStore.userId) {
+            snapshot = snap
+            pendingCaptures = snap.pendingCaptures
+            pendingEdits = snap.pendingEdits
+            localGraph = snap.localGraph
+            lastSyncedAt = snap.savedAt == .distantPast ? nil : snap.savedAt
+            if let server = snap.thinkingState {
+                thinkingState = applyAll(pendingEdits, to: server)   // last synced graph + unsynced edits
+            } else if !localGraph.ideas.isEmpty {
+                thinkingState = applyAll(pendingEdits, to: localGraph.asThinkingState())
+                thinkingStateIsLocal = true                          // never synced — show the on-device graph
+            }
+        }
+    }
+
+    // MARK: - Local-first snapshot
+
+    /// The on-disk read model. `thinkingState` + opened traces are mirrored here after every
+    /// successful sync; see LocalStore.
+    private var snapshot = LocalSnapshot.empty
+
+    /// When the backend was last reached. Nil until the first successful sync on this Mac.
+    @Published var lastSyncedAt: Date?
+    /// True when the last sync attempt failed. A quiet "showing last synced" hint — never a
+    /// blocking error; the cached graph stays fully usable.
+    @Published var isOffline = false
+
+    private func persistSnapshot() {
+        // When we're showing the on-device graph, don't persist it as the "last synced" state —
+        // it's kept separately in `localGraph` and rehydrated as the fallback.
+        snapshot.thinkingState = thinkingStateIsLocal ? nil : thinkingState
+        snapshot.pendingCaptures = pendingCaptures
+        snapshot.pendingEdits = pendingEdits
+        snapshot.localGraph = localGraph
+        snapshot.savedAt = Date()
+        LocalStore.save(snapshot, userId: CredentialStore.userId)
+    }
+
+    // MARK: - On-device idea graph (the fallback when the backend hasn't provided state)
+
+    /// The graph the on-device model builds from captures. Rendered only when `thinkingState`
+    /// isn't coming from the server (offline, or never synced).
+    @Published var localGraph = LocalGraph.empty
+    /// True while `thinkingState` is a projection of `localGraph` rather than the server's graph.
+    @Published private(set) var thinkingStateIsLocal = false
+
+    /// Re-project the on-device graph into `thinkingState` (with unsynced edits overlaid). Called
+    /// after a capture is absorbed while we're in local mode.
+    private func showLocalGraph() {
+        thinkingStateIsLocal = true
+        thinkingState = applyAll(pendingEdits, to: localGraph.asThinkingState())
+        if let id = selectedIdeaId, let t = localGraph.trace(id) {
+            selectedTrace = applyAll(pendingEdits, to: t)
+        }
+    }
+
+    // MARK: - Local-first capture
+
+    /// Captures made on this Mac that the backend hasn't confirmed yet. Shown at the top of the
+    /// panel with the on-device draft; cleared once the authoritative graph absorbs them.
+    @Published var pendingCaptures: [PendingCapture] = []
+    private var isFlushingCaptures = false
+
+    /// Field edits made on this Mac that the backend hasn't confirmed yet. Overlaid on server
+    /// state until each one syncs; see the "Local-first edits" section.
+    @Published var pendingEdits: [PendingEdit] = []
+
+    /// The local-first capture entry point. Writes the raw text locally and returns immediately;
+    /// the on-device model drafts what it is, then it syncs in the background (and keeps retrying
+    /// if the backend is down). Returns false only if there's no account or nothing to capture.
+    @discardableResult
+    func capture(_ rawText: String) -> Bool {
+        guard isPaired else { return false }
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+
+        let pc = PendingCapture(
+            id: UUID().uuidString, text: text, draft: nil, createdAt: Date(), status: .extracting
+        )
+        pendingCaptures.insert(pc, at: 0)
+        persistSnapshot()
+        Task { await processCapture(pc.id) }
+        return true
+    }
+
+    private func processCapture(_ id: String) async {
+        let text = pendingCaptures.first(where: { $0.id == id })?.text ?? ""
+
+        // One on-device pass does both jobs: draft the "Just captured" row, and — while the
+        // backend isn't the source of truth (never synced, or offline) — fold the capture into
+        // the local idea graph (extraction + identity) so the graph stays whole without it.
+        let buildGraph = thinkingStateIsLocal || lastSyncedAt == nil
+        let existing = localGraph.ideas.map { (id: $0.id, title: $0.title) }
+        if let delta = await OnDeviceModel.absorbCapture(text: text, existing: buildGraph ? existing : []) {
+            updatePending(id) { $0.draft = delta.draft }
+            if buildGraph { localGraph = OnDeviceGraph.fold(delta, captureId: id, into: localGraph) }
+        } else if let draft = await OnDeviceModel.extractIdea(from: text) {
+            updatePending(id) { $0.draft = draft }
+            if buildGraph {
+                localGraph = OnDeviceGraph.fold(
+                    OnDeviceModel.GraphDelta(target: "new", title: draft.title, formulation: draft.formulation,
+                                             state: draft.state, openQuestion: draft.openQuestion),
+                    captureId: id, into: localGraph
+                )
+            }
+        }
+        if buildGraph, thinkingStateIsLocal || thinkingState == nil { showLocalGraph() }
+        persistSnapshot()
+
+        updatePending(id) { $0.status = .queued }
+        await syncPending(id, thenRefresh: true)
+    }
+
+    @discardableResult
+    private func syncPending(_ id: String, thenRefresh: Bool) async -> Bool {
+        guard let pc = pendingCaptures.first(where: { $0.id == id }) else { return false }
+        updatePending(id) { $0.status = .syncing }
+        do {
+            _ = try await client.pasteConversation(text: pc.text)
+            pendingCaptures.removeAll { $0.id == id }
+            persistSnapshot()
+            if thenRefresh { await refresh() }   // pull the authoritative graph
+            return true
+        } catch {
+            updatePending(id) { $0.status = .failed }   // stays visible; flushPending() retries
+            return false
+        }
+    }
+
+    /// Retry every capture the backend hasn't taken yet. Called after a successful refresh.
+    private func flushPending() async {
+        guard !isFlushingCaptures else { return }
+        isFlushingCaptures = true
+        defer { isFlushingCaptures = false }
+        for pc in pendingCaptures where pc.status == .failed || pc.status == .queued {
+            _ = await syncPending(pc.id, thenRefresh: false)
+        }
+    }
+
+    private func updatePending(_ id: String, _ mutate: (inout PendingCapture) -> Void) {
+        guard let i = pendingCaptures.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&pendingCaptures[i])
+        persistSnapshot()
     }
 
     // MARK: - Appearance preferences (Settings ▸ Appearance)
@@ -81,6 +227,29 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(resumeSnoozed, forKey: resumeSnoozeKey)
     }
 
+    /// How many times each idea's nudge has been shown, and the activity it was showing against.
+    /// A later edit to the idea resets its count. Local-only, persisted. Drives nudge fatigue —
+    /// shown three times without a resume and the idea stops being offered.
+    private let resumeShownKey = "thread.resumeShown"
+    @Published private var resumeShownRaw: [String: [String: Double]] =
+        (UserDefaults.standard.dictionary(forKey: "thread.resumeShown") as? [String: [String: Double]]) ?? [:]
+
+    private var resumeShown: [String: ResumeShown] {
+        resumeShownRaw.compactMapValues { d in
+            guard let c = d["count"], let s = d["since"] else { return nil }
+            return ResumeShown(count: Int(c), sinceActivity: Date(timeIntervalSince1970: s))
+        }
+    }
+
+    /// Called once each time the nudge actually appears for an idea. Resets the counter when the
+    /// idea has moved since it was last shown.
+    func noteResumeShown(_ ideaId: String, lastActivity: Date) {
+        let prev = resumeShown[ideaId]
+        let count = (prev != nil && lastActivity <= prev!.sinceActivity) ? prev!.count + 1 : 1
+        resumeShownRaw[ideaId] = ["count": Double(count), "since": lastActivity.timeIntervalSince1970]
+        UserDefaults.standard.set(resumeShownRaw, forKey: resumeShownKey)
+    }
+
     /// The single highest-confidence idea worth resuming, or nil. Deliberately conservative:
     ///   • has an unresolved open loop OR is contested (there is genuinely something unfinished)
     ///   • not dormant / rejected
@@ -91,7 +260,12 @@ final class AppState: ObservableObject {
     var resumeSuggestion: ResumeSuggestion? {
         guard isPaired, let state = thinkingState else { return nil }
 
-        let openLoopIdeas = Set(state.openLoops.filter { !$0.resolved }.map(\.ideaId))
+        let unresolved = state.openLoops.filter { !$0.resolved }
+        let openLoopIdeas = Set(unresolved.map(\.ideaId))
+        let contradictionIdeas = Set(
+            unresolved.filter { $0.statement.range(of: #"^\s*Unresolved contradiction:"#, options: .regularExpression) != nil }
+                .map(\.ideaId)
+        )
         var lastTouched: [String: Date] = [:]
         for c in state.recentChanges {
             guard let d = Theme.parse(c.createdAt) else { continue }
@@ -106,17 +280,24 @@ final class AppState: ObservableObject {
                 state: idea.state,
                 source: idea.sourceLabel,
                 hasOpenLoop: openLoopIdeas.contains(idea.id),
+                isContradiction: contradictionIdeas.contains(idea.id) || idea.state == "contested",
                 lastTouched: touched
             )
         }
         let snoozed = resumeSnoozed.mapValues { Date(timeIntervalSince1970: $0) }
-        return pickResumeSuggestion(candidates, snoozed: snoozed)
+        return pickResumeSuggestion(candidates, snoozed: snoozed, history: resumeShown)
+    }
+
+    /// The last-activity timestamp for an idea, from Thinking State — for `noteResumeShown`.
+    func lastActivity(of ideaId: String) -> Date {
+        (thinkingState?.recentChanges ?? [])
+            .filter { $0.ideaId == ideaId }
+            .compactMap { Theme.parse($0.createdAt) }
+            .max() ?? .distantPast
     }
     @Published var continueResult: String?
     @Published var errorMessage: String?
     @Published var isLoading = false
-    @Published var pasteStatus: String?
-    @Published var isPasting = false
 
     /// Last time a client (the browser extension / desktop agent) pulled credentials from the
     /// loopback pairing server. Drives the footer's "capturing" indicator.
@@ -321,9 +502,10 @@ final class AppState: ObservableObject {
             } catch let APIError.http(status, _) where status == 401 {
                 CredentialStore.clear() // stale account -- fall through and re-pair
             } catch {
-                // Backend unreachable: keep credentials, surface the problem, don't wipe.
+                // Backend unreachable: keep credentials, keep the cached graph on screen (init
+                // already hydrated it), just mark offline. The core loop still works.
                 userId = cred.userId
-                errorMessage = error.localizedDescription
+                isOffline = true
                 return
             }
         }
@@ -351,6 +533,14 @@ final class AppState: ObservableObject {
                 try? await APIClient(baseURL: base, credentials: cred).signOutThisDevice()
             }
         }
+        LocalStore.clear(userId: CredentialStore.userId)
+        snapshot = .empty
+        pendingCaptures = []
+        pendingEdits = []
+        localGraph = .empty
+        thinkingStateIsLocal = false
+        lastSyncedAt = nil
+        isOffline = false
         CredentialStore.clear()
         userId = nil
         thinkingState = nil
@@ -384,11 +574,24 @@ final class AppState: ObservableObject {
     func refresh() async {
         guard isPaired else { return }
         isLoading = true
-        errorMessage = nil
         do {
-            thinkingState = try await client.getThinkingState()
+            let server = try await client.getThinkingState()
+            // The server's graph is authoritative — it has the sharper extraction + real
+            // identity resolution. Overlay edits made here that it hasn't taken yet so an
+            // offline change isn't visually reverted.
+            thinkingStateIsLocal = false
+            thinkingState = pendingEdits.isEmpty ? server : applyAll(pendingEdits, to: server)
+            isOffline = false
+            lastSyncedAt = Date()
+            errorMessage = nil
+            persistSnapshot()
+            await flushPending()
+            await flushEdits()
         } catch {
-            errorMessage = error.localizedDescription
+            // Local-first: a failed sync is not an error the user has to see. Keep whatever's on
+            // screen; fall back to the on-device graph if we have nothing else.
+            isOffline = true
+            if thinkingState == nil && !localGraph.ideas.isEmpty { showLocalGraph() }
         }
         isLoading = false
         await refreshAccount()
@@ -396,14 +599,22 @@ final class AppState: ObservableObject {
 
     func search() async {
         guard isPaired else { return }
-        guard !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty else {
+        let q = searchQuery.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else {
             searchResults = []
             return
         }
+        // Instant, offline, never fails: scan the local snapshot first. The panel shows results
+        // on the same keystroke — no spinner, no round-trip.
+        searchResults = localSearch(q, in: thinkingState?.currentIdeas ?? [])
+
+        // Then reconcile with the server when it's reachable (better ranking, ideas not yet in
+        // the snapshot). If it's down or the query moved on, the local results stand.
         do {
-            searchResults = try await client.searchIdeas(query: searchQuery)
+            let remote = try await client.searchIdeas(query: q)
+            if q == searchQuery.trimmingCharacters(in: .whitespaces) { searchResults = remote }
         } catch {
-            errorMessage = error.localizedDescription
+            // keep the local results; offline is surfaced by refresh(), not here
         }
     }
 
@@ -470,10 +681,27 @@ final class AppState: ObservableObject {
         }
         selectedIdeaId = id
         errorMessage = nil
+
+        // On-device graph: the trace comes straight from `localGraph`, no network.
+        if thinkingStateIsLocal || id.hasPrefix("local_") {
+            selectedTrace = localGraph.trace(id).map { applyAll(pendingEdits, to: $0) }
+            return
+        }
+
+        // Cache-first: show the last-synced trace immediately (with unsynced edits overlaid),
+        // then revalidate.
+        let cached = snapshot.traces[id]
+        if let cached { selectedTrace = applyAll(pendingEdits, to: cached) }
+
         do {
-            selectedTrace = try await client.traceIdea(id: id)
+            let fresh = try await client.traceIdea(id: id)
+            guard selectedIdeaId == id else { return }   // user moved on while it loaded
+            snapshot.traces[id] = fresh
+            selectedTrace = applyAll(pendingEdits, to: fresh)
+            persistSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            // Only an error if we had nothing cached to show.
+            if cached == nil { errorMessage = error.localizedDescription }
         }
     }
 
@@ -488,43 +716,115 @@ final class AppState: ObservableObject {
         sentToTool = nil
     }
 
+    // MARK: - Local-first edits
+    //
+    // Every edit applies to the local read model at once and queues its call. Last-write-wins
+    // per field — no merge. `refresh()` overlays the queue on top of the server's state until
+    // each edit lands; a 4xx drops the edit (the idea's gone / the request was bad), a network
+    // error keeps it for the next retry.
+
+    private var isFlushingEdits = false
+
+    /// Fold an edit into the local snapshot + the live @Published state, enqueue it, sync.
+    private func enqueueEdit(_ edit: PendingEdit) {
+        // A local-only idea (never synced) — edit the on-device graph directly; there's nothing
+        // to queue for the backend.
+        if edit.ideaId.hasPrefix("local_") {
+            editLocalGraph(edit)
+            if let s = thinkingState { thinkingState = apply(edit.kind, to: s, ideaId: edit.ideaId) }
+            if let t = selectedTrace, t.idea.id == edit.ideaId { selectedTrace = applyAll([edit], to: t) }
+            persistSnapshot()
+            return
+        }
+        pendingEdits = coalesced(pendingEdits, adding: edit)
+        if let s = thinkingState { thinkingState = apply(edit.kind, to: s, ideaId: edit.ideaId) }
+        if let t = selectedTrace, t.idea.id == edit.ideaId {
+            selectedTrace = applyAll([edit], to: t)
+        }
+        persistSnapshot()
+        Task { await flushEdits() }
+    }
+
+    private func editLocalGraph(_ edit: PendingEdit) {
+        guard let i = localGraph.ideas.firstIndex(where: { $0.id == edit.ideaId }) else { return }
+        switch edit.kind {
+        case .rename(let title):
+            localGraph.ideas[i].title = title
+        case .setState(let s):
+            localGraph.ideas[i].state = s
+        case .resolveLoop(let loopId, let resolved):
+            if let j = localGraph.ideas[i].openQuestions.firstIndex(where: { $0.id == loopId }) {
+                localGraph.ideas[i].openQuestions[j].resolved = resolved
+            }
+        case .delete:
+            localGraph.ideas.remove(at: i)
+        }
+    }
+
     func renameSelected(to title: String) async {
         guard let id = selectedIdeaId else { return }
-        do {
-            _ = try await client.renameIdea(id: id, title: title)
-            await openIdea(id)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        enqueueEdit(.rename(id, t))
     }
 
     func setSelectedState(_ state: String) async {
         guard let id = selectedIdeaId else { return }
-        do {
-            _ = try await client.setIdeaState(id: id, state: state)
-            await openIdea(id)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        enqueueEdit(.setState(id, state))
     }
 
     func deleteSelected() async {
         guard let id = selectedIdeaId else { return }
-        do {
-            try await client.deleteIdea(id: id)
-            closeIdea()
-            await refresh()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        snapshot.traces[id] = nil
+        closeIdea()
+        enqueueEdit(.delete(id))
     }
 
     func toggleLoop(_ loopId: String, resolved: Bool) async {
-        do {
+        let ideaId = selectedIdeaId
+            ?? thinkingState?.openLoops.first { $0.loopId == loopId }?.ideaId
+            ?? ""
+        enqueueEdit(.resolveLoop(ideaId, loopId: loopId, resolved: resolved))
+    }
+
+    /// Send queued edits oldest-first. Stops on the first network error (retried next refresh);
+    /// drops any edit the backend rejects with a 4xx.
+    private func flushEdits() async {
+        guard isPaired, !isFlushingEdits else { return }
+        isFlushingEdits = true
+        defer { isFlushingEdits = false }
+
+        while let edit = pendingEdits.first {
+            do {
+                try await send(edit)
+                pendingEdits.removeAll { $0.id == edit.id }
+                persistSnapshot()
+            } catch let APIError.http(status, _) where (400..<500).contains(status) && status != 429 {
+                // Dead edit — idea deleted server-side, bad request. Drop it, keep going.
+                pendingEdits.removeAll { $0.id == edit.id }
+                persistSnapshot()
+            } catch {
+                // Network / 5xx — leave the queue intact and try again on the next refresh.
+                if let i = pendingEdits.firstIndex(where: { $0.id == edit.id }) {
+                    pendingEdits[i].attempts += 1
+                }
+                persistSnapshot()
+                break
+            }
+        }
+    }
+
+    private func send(_ edit: PendingEdit) async throws {
+        switch edit.kind {
+        case .rename(let title):
+            _ = try await client.renameIdea(id: edit.ideaId, title: title)
+        case .setState(let state):
+            _ = try await client.setIdeaState(id: edit.ideaId, state: state)
+        case .resolveLoop(let loopId, let resolved):
             try await client.setOpenLoopResolved(id: loopId, resolved: resolved)
-            if let id = selectedIdeaId { await openIdea(id) } else { await refresh() }
-        } catch {
-            errorMessage = error.localizedDescription
+        case .delete:
+            do { try await client.deleteIdea(id: edit.ideaId) }
+            catch APIError.http(404, _) { /* already gone — done */ }
         }
     }
 
@@ -532,23 +832,9 @@ final class AppState: ObservableObject {
     /// (copied from ChatGPT, Claude, anywhere) rather than relying on a browser extension to
     /// scrape a live page's DOM -- no selector fragility, no site-redesign breakage.
     func submitPaste(_ text: String) async -> Bool {
-        guard isPaired else { return false }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        isPasting = true
-        errorMessage = nil
-        pasteStatus = nil
-        do {
-            let result = try await client.pasteConversation(text: trimmed)
-            pasteStatus = "Captured \(result.newCognitiveEvents) idea\(result.newCognitiveEvents == 1 ? "" : "s")."
-            await refresh()
-            isPasting = false
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            isPasting = false
-            return false
-        }
+        // Local-first: the capture lands instantly and syncs in the background. No spinner, no
+        // failure toast — an offline capture just queues.
+        capture(text)
     }
 
     @Published var continueCopied = false
@@ -597,12 +883,62 @@ final class AppState: ObservableObject {
         continueCopied = true
     }
 
+    /// Free, local, no server call: a Markdown snapshot of the selected idea — its current
+    /// formulation, how it developed, and what's still open — on the clipboard to paste
+    /// anywhere. The Pro "Continue this idea" path (/v1/continue) is what adds the AI-written
+    /// next step and the one-click handoff into a fresh chat.
+    func copyIdeaContext() {
+        guard let trace = selectedTrace else { return }
+        let idea = trace.idea
+        var out = "# \(idea.title)\n\n"
+        out += "**Where this stands:** \(idea.currentFormulation)\n"
+        out += "_State: \(idea.state.capitalized)_\n"
+
+        if !trace.provenance.isEmpty {
+            out += "\n## How it developed\n"
+            for (i, s) in trace.provenance.enumerated() {
+                let src = s.sourceLabel.map { " · \($0)" } ?? ""
+                out += "\(i + 1). \(Self.shortDay(s.createdAt))\(src) — \(s.formulation)\n"
+            }
+        }
+
+        let open = idea.openLoops.filter { !$0.resolved }
+        if !open.isEmpty {
+            out += "\n## Open questions\n"
+            for l in open { out += "- \(l.statement)\n" }
+        }
+
+        if !idea.decisions.isEmpty {
+            out += "\n## Decisions\n"
+            for d in idea.decisions { out += "- \(d.statement)\n" }
+        }
+
+        out += "\n---\nCaptured with Thread · first seen \(Self.shortDay(idea.createdAt)), "
+        out += "last touched \(Self.shortDay(idea.updatedAt))\n"
+
+        copyContext(out)
+    }
+
+    private static func shortDay(_ iso: String) -> String {
+        let parsers: [ISO8601DateFormatter] = [
+            ISO8601DateFormatter(),
+            { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }(),
+        ]
+        for p in parsers where p.date(from: iso) != nil {
+            let out = DateFormatter(); out.dateFormat = "d MMM yyyy"
+            return out.string(from: p.date(from: iso)!)
+        }
+        return String(iso.prefix(10))
+    }
+
     /// The last continuation packet fetched, for the in-app preview (source affordances +
     /// editable next step). `continuationText` is the server's verbatim paste-ready render.
     @Published var continuationPacket: ContinuationPacket?
     @Published var continuationText: String?
     /// The user's edit of "Continue from here". Empty = use packet.suggestedNext untouched.
     @Published var nextStepDraft: String = ""
+    /// Which engine wrote the "Continue from here" line in the current handoff.
+    @Published var continuationEngine: ContinuationEngine = .none
 
     /// The paste string. The backend leaves a token where the "Continue from here" line goes;
     /// we fill it with the user's edit or the suggested default in one literal replace. No
@@ -624,6 +960,7 @@ final class AppState: ObservableObject {
         sentToTool = nil
         continuationPacket = nil
         continuationText = nil
+        continuationEngine = .none
 
         do {
             let r = try await client.continueIdea(ideaId: trace.idea.id)
@@ -631,6 +968,30 @@ final class AppState: ObservableObject {
             continuationText = r.text
             nextStepDraft = r.packet.suggestedNext
             continueResult = r.text
+
+            if r.tier == "pro" {
+                // The server wrote "Continue from here" with a frontier model.
+                continuationEngine = .frontier
+            } else if r.tier == "free" {
+                // Free tier: the server left the deterministic template on "Continue from here".
+                // Sharpen that one line on this Mac (Apple Foundation Models) — no server call,
+                // no cost. If the on-device model isn't available, the template stands.
+                let p = r.packet
+                if OnDeviceModel.status.isReady,
+                   let sharper = await OnDeviceModel.continueFromHere(
+                       whereYouLeftOff: p.whereYouLeftOff,
+                       evolution: p.evolution.map { $0.formulation },
+                       unresolvedQuestion: p.unresolvedQuestion,
+                       contested: p.contested
+                   ),
+                   !sharper.isEmpty {
+                    // Only overwrite if the user hasn't already edited the field.
+                    if nextStepDraft == p.suggestedNext { nextStepDraft = sharper }
+                    continuationEngine = .onDevice
+                } else {
+                    continuationEngine = .template
+                }
+            }
         } catch {
             continueResult = nil
             errorMessage = error.localizedDescription

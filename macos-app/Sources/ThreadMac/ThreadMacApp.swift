@@ -83,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         func sweep() {
             guard Date() < deadline else { return }
             for w in NSApp.windows where !(w is NSPanel) && w.styleMask.contains(.titled) && w.isVisible {
-                w.close()
+                w.orderOut(nil)   // hide, don't close -- keeps the scene alive for a later openWindow(id:)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: sweep)
         }
@@ -166,6 +166,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// reopen behavior and pop the big window open unbidden. The big window is only ever opened
     /// deliberately -- "Open in Window" or Cmd+Shift+W.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        false
+    }
+
+    /// Thread lives in the menu bar. Closing the full window -- whether by the user or by the
+    /// launch sweep below -- must NOT quit the app. Without this a SwiftUI app terminates when
+    /// its last scene window closes.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
 

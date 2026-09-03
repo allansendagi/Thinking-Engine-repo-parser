@@ -6,7 +6,7 @@
  * Exercises the full Paddle billing surface through the real HTTP handler: webhook-signature
  * security, the whole subscription lifecycle (activate → update → past_due → recover → cancel →
  * lapse → resume → pause), both user-resolution paths, the customer-portal endpoint, webhook
- * idempotency, and the exact 402 contract the Mac app / extension / website depend on.
+ * idempotency, and the exact 402 / free-tier contract the Mac app / extension / website depend on.
  *
  * Deterministic, no network, no API key, no real card. A signed webhook is byte-for-byte what
  * Paddle's checkout emits -- what this CANNOT stand in for is a real hosted checkout with a test
@@ -150,8 +150,8 @@ async function run(): Promise<void> {
 
   setPlan(user.userId, { currentPeriodEnd: inDays(-1) }); // simulate the paid period elapsing
   a = await acct();
-  check("once the paid period elapses → isPro false, capture 402, continue 402",
-    a.isPro === false && (await captureStatus()) === 402 && (await continueStatus()) === 402, a);
+  check("once the paid period elapses → isPro false, capture 402, continue still open (free tier)",
+    a.isPro === false && (await captureStatus()) === 402 && (await continueStatus()) === 200, a);
 
   await send("subscription.resumed", { id: "sub_9", customer_id: "ctm_9", status: "active", custom_data: cd, current_billing_period: { ends_at: inDays(30) } });
   check("resumed → Pro again, gates re-open", (await acct()).isPro === true && (await captureStatus()) !== 402);
@@ -222,9 +222,10 @@ async function run(): Promise<void> {
   const capBody = (await (await authed(A, "/v1/conversations", post({ conversationId: "c", source: "chatgpt", messages: [] }))).json()) as { error: string; code: string };
   check("capture-over-cap body: code 'upgrade_required' + a human message naming the 25-idea limit",
     capBody.code === "upgrade_required" && /25-idea limit/.test(capBody.error), capBody);
-  const contBody = (await (await authed(A, "/v1/continue", post({ ideaId: "idea_pay" }))).json()) as { error: string; code: string };
-  check("continue body: code 'pro_required' + a Pro-feature message",
-    contBody.code === "pro_required" && /Pro feature/.test(contBody.error), contBody);
+  const contRes = await authed(A, "/v1/continue", post({ ideaId: "idea_pay" }));
+  const contBody = (await contRes.json()) as { tier: string; packet: unknown };
+  check("continue for a Free account: 200, tier 'free', packet present (not gated — the Mac app sharpens the one line on-device)",
+    contRes.status === 200 && contBody.tier === "free" && contBody.packet != null, contBody);
 }
 
 try {
@@ -241,9 +242,10 @@ phase(`Result — ${passed} passed, ${failed} failed`);
 if (failed > 0) console.log("Failed:\n" + failures.map((f) => `  - ${f}`).join("\n"));
 console.log(`
 Proven: webhook signature security (6 rejection cases), the full subscription lifecycle
-(activate/update/past_due/recover/cancel/lapse/resume/pause) with the capture + /v1/continue
-gates tracking it, both user-resolution paths, unknown-user safety, the customer-portal endpoint
-(mocked Paddle API), 3x webhook idempotency, and the exact 402 bodies the clients show.
+(activate/update/past_due/recover/cancel/lapse/resume/pause) with the capture gate tracking it
+(/v1/continue stays open on every plan — Free gets tier:"free"), both user-resolution paths,
+unknown-user safety, the customer-portal endpoint (mocked Paddle API), 3x webhook idempotency,
+and the exact 402 / free-tier bodies the clients show.
 
 Still requires a live Paddle sandbox (dashboard product + price + client token + webhook URL):
 one real hosted checkout with test card 4242 4242 4242 4242 → confirm the real webhook lands here

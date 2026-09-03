@@ -57,6 +57,25 @@ enum RowStatus {
     case rejected      // set aside                              -> slashed circle, dimmed
 }
 
+/// The marker for a raw, user-settable idea state. Same circle family as the list rows, so the
+/// State picker, the detail eyebrow, and the Help legend all speak one visual language — the way
+/// a flag colour or a priority dot reads the same everywhere in an Apple app.
+enum IdeaStatus {
+    static func symbol(_ state: String) -> String {
+        switch state {
+        case "established": return "circle.fill"
+        case "contested":   return "circle.bottomhalf.filled"
+        case "rejected":    return "circle.slash"
+        case "dormant":     return "circle.dashed"
+        default:            return "circle"   // developing
+        }
+    }
+    /// Amber for contested (the one that means act now); everything else is quiet.
+    static func tint(_ state: String) -> Color {
+        state == "contested" ? Theme.stateColor("contested") : .secondary
+    }
+}
+
 /// Priority when several could apply: contested > openQuestion > rejected > established.
 /// Loops are always drawn as `.openQuestion` — a loop row *is* the question.
 func rowStatus(state: String?, hasOpenLoop: Bool) -> RowStatus {
