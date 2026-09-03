@@ -22,6 +22,12 @@ struct PairingView: View {
                     .font(.caption2).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            if let url = AppState.browserExtensionURL {
+                Divider()
+                Link("Add the Chrome extension", destination: url)
+                    .font(.caption)
+            }
         }
         .padding(16)
         .frame(width: 320)

@@ -170,6 +170,13 @@ final class AppState: ObservableObject {
     /// Where the founder buys Pro / manages the account -- payment lives on the website.
     static let marketingBaseURL = "https://www.threadnow.app"
 
+    /// The Chrome Web Store listing, once the extension is published. Until then the pairing
+    /// screen points at the get-started page instead -- no dead link either way.
+    static let chromeWebStoreURL: String? = nil
+    static var browserExtensionURL: URL? {
+        URL(string: chromeWebStoreURL ?? "\(marketingBaseURL)/get-started")
+    }
+
     @Published var authBusy = false
     @Published var authError: String?
 
