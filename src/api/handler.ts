@@ -28,6 +28,7 @@ import {
 } from "./billing";
 import { openUserDb } from "../db/tenancy";
 import { storageMode } from "../db/durability";
+import { downloadSummary, isAdmin, recordDownload } from "./metrics";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
@@ -215,11 +216,41 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       return json({ received: true });
     }
 
+    // Download counter -- public, no auth (anyone can download). The website's /download/mac
+    // endpoint pings this, then redirects to the DMG. Best-effort: a bad body still 204s.
+    if (req.method === "POST" && pathname === "/v1/events/download") {
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await req.json()) as Record<string, unknown>;
+      } catch {
+        /* empty / malformed body is fine */
+      }
+      try {
+        recordDownload({
+          platform: body.platform,
+          version: body.version,
+          referrer: body.referrer,
+          country: body.country ?? req.headers.get("x-vercel-ip-country"),
+          uaFamily: deviceLabel(null, (body.uaFamily as string) ?? req.headers.get("user-agent")),
+        });
+      } catch (e) {
+        console.error("[Thread] download event failed:", e);
+      }
+      return new Response(null, { status: 204 });
+    }
+
     // Every route below requires auth.
     const auth = await authenticate(req);
     if (auth instanceof Response) return auth;
     const { userId, tokenHash } = auth;
     touchToken(tokenHash); // throttled last-seen bump for the session list
+
+    // Admin-only product metrics (THREAD_ADMIN_EMAILS). Downloads for now.
+    if (req.method === "GET" && pathname === "/v1/events/downloads") {
+      if (!isAdmin(getAccount(userId)?.email)) return error(403, "Not authorized");
+      const days = Math.min(365, Math.max(1, Number(url.searchParams.get("days") ?? 30) || 30));
+      return json(downloadSummary(days));
+    }
 
     // --- Device sessions (list / revoke) --------------------------------------------------
     if (req.method === "GET" && pathname === "/v1/auth/sessions") {
