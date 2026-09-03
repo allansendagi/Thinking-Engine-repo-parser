@@ -61,6 +61,8 @@ struct RootView: View {
         .task { await appState.refresh() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
+        .onReceive(NotificationCenter.default.publisher(for: .threadOpenSettings)) { _ in showSettings = true }
+        .onReceive(NotificationCenter.default.publisher(for: .threadOpenMainWindow)) { _ in openWindow(id: "main") }
         .onExitCommand {
             if inDetail { appState.closeIdea() }
             else { NotificationCenter.default.post(name: .threadDismissPanel, object: nil) }
@@ -77,10 +79,19 @@ struct RootView: View {
                 }
                 .padding(.leading, -6)
             }
-            Text(inDetail ? "Recent" : "Thread")
-                .font(.system(size: inDetail ? 13 : 15, weight: inDetail ? .medium : .semibold))
-                .kerning(inDetail ? -0.104 : -0.225)
-                .foregroundStyle(Theme.ink(inDetail ? 0.6 : 0.85))
+            HStack(spacing: 7) {
+                if !inDetail {
+                    // The plain Thread glyph in dark ink -- no colour, matches the wordmark.
+                    Image(nsImage: BrandMark.inkImage)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 17, height: 17)
+                }
+                Text(inDetail ? "Recent" : "Thread")
+                    .font(.system(size: inDetail ? 13 : 15, weight: inDetail ? .medium : .semibold))
+                    .kerning(inDetail ? -0.104 : -0.225)
+                    .foregroundStyle(Theme.ink(inDetail ? 0.6 : 0.85))
+            }
 
             Spacer(minLength: 0)
 

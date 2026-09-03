@@ -87,6 +87,15 @@ export function openRegistry(): Database {
     );`,
   );
   db.exec("CREATE INDEX IF NOT EXISTS auth_tokens_user ON auth_tokens(user_id);");
+  // A human label ("Thread for Mac", "Website", "Chrome extension") + a throttled last-seen, so a
+  // Settings screen can list your devices and revoke one. Added idempotently for existing rows.
+  for (const col of ["label TEXT", "last_seen_at TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE auth_tokens ADD COLUMN ${col};`);
+    } catch {
+      // column already exists
+    }
+  }
   // Backfill from the original single-token column for accounts that predate this table.
   db.exec(
     `INSERT OR IGNORE INTO auth_tokens (token_hash, user_id, created_at)
@@ -104,15 +113,28 @@ export function openRegistry(): Database {
   return db;
 }
 
+/** A short, safe device label. Falls back to a rough parse of a User-Agent, then "Unknown device". */
+export function deviceLabel(raw: string | null | undefined, userAgent?: string | null): string {
+  const given = (raw ?? "").trim().replace(/[\x00-\x1f]/g, "").slice(0, 60);
+  if (given) return given;
+  const ua = userAgent ?? "";
+  const os = /Mac OS X|Macintosh/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
+  const app = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "";
+  return [app, os].filter(Boolean).join(" on ") || "Unknown device";
+}
+
 /** Adds a token for an account and returns it once. Existing tokens stay valid. */
-export async function issueToken(userId: string): Promise<string> {
+export async function issueToken(userId: string, label?: string): Promise<string> {
   const db = openRegistry();
   try {
     const token = randomBytes(32).toString("hex");
-    db.prepare("INSERT INTO auth_tokens (token_hash, user_id, created_at) VALUES (?, ?, ?)").run(
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO auth_tokens (token_hash, user_id, created_at, label, last_seen_at) VALUES (?, ?, ?, ?, ?)").run(
       await sha256Hex(token),
       userId,
-      new Date().toISOString(),
+      now,
+      deviceLabel(label),
+      now,
     );
     return token;
   } finally {
@@ -193,14 +215,31 @@ export class EmailInUseError extends Error {
   }
 }
 
+/** This account already carries a *different* verified email -- claiming would silently relabel
+ *  it and orphan the old address. The caller should sign out and sign in on the other account. */
+export class AccountHasEmailError extends Error {
+  constructor(public readonly currentEmail: string) {
+    super(`This account is already linked to ${currentEmail}`);
+    this.name = "AccountHasEmailError";
+  }
+}
+
 /**
  * Attaches a verified email to an existing account (the "claim" flow -- an anonymous account
- * created on first launch gets an identity, keeping all its ideas). Throws EmailInUseError if
- * the email already belongs to a *different* account. Idempotent for the same account.
+ * created on first launch gets an identity, keeping all its ideas). Throws:
+ *   - `AccountHasEmailError` if this account already has a different verified email (don't
+ *     silently overwrite it -- see class doc);
+ *   - `EmailInUseError` if the email already belongs to a *different* account.
+ * Idempotent when the account already has exactly this email.
  */
 export function attachEmail(userId: string, email: string): void {
   const db = openRegistry();
   try {
+    const self = db.query("SELECT email FROM users WHERE id = ?").get(userId) as { email: string | null } | null;
+    const current = self?.email ?? null;
+    if (current && current.toLowerCase() === email.toLowerCase()) return; // already attached, no-op
+    if (current) throw new AccountHasEmailError(current);
+
     const existing = db.query("SELECT id FROM users WHERE lower(email) = lower(?)").get(email) as
       | { id: string }
       | null;
@@ -286,7 +325,7 @@ export interface CreatedUser {
 }
 
 /** Mints a new anonymous account (Free plan). Pass `email` to attach a verified identity now. */
-export async function createUser(email?: string): Promise<CreatedUser> {
+export async function createUser(email?: string, label?: string): Promise<CreatedUser> {
   const db = openRegistry();
   try {
     const userId = `user_${randomBytes(12).toString("hex")}`;
@@ -297,9 +336,11 @@ export async function createUser(email?: string): Promise<CreatedUser> {
       `INSERT INTO users (id, token_hash, created_at, subscription_status, plan, email, email_verified_at)
        VALUES (?, ?, ?, 'free', 'free', ?, ?)`,
     ).run(userId, tokenHash, now, email ?? null, email ? now : null);
-    db.prepare("INSERT INTO auth_tokens (token_hash, user_id, created_at) VALUES (?, ?, ?)").run(
+    db.prepare("INSERT INTO auth_tokens (token_hash, user_id, created_at, label, last_seen_at) VALUES (?, ?, ?, ?, ?)").run(
       tokenHash,
       userId,
+      now,
+      deviceLabel(label),
       now,
     );
     return { userId, token };
@@ -309,18 +350,105 @@ export async function createUser(email?: string): Promise<CreatedUser> {
 }
 
 export async function verifyToken(userId: string, token: string): Promise<boolean> {
+  return (await verifyTokenHash(userId, token)) !== null;
+}
+
+/**
+ * Like `verifyToken`, but returns the matched token's hash (or null). The handler needs the hash
+ * to touch `last_seen_at`, to flag the caller's own row in the session list, and to know which
+ * token "sign out this device" should revoke.
+ */
+export async function verifyTokenHash(userId: string, token: string): Promise<string | null> {
   const db = openRegistry();
   try {
     const rows = db.query("SELECT token_hash FROM auth_tokens WHERE user_id = ?").all(userId) as {
       token_hash: string;
     }[];
-    if (rows.length === 0) return false;
+    if (rows.length === 0) return null;
     const presented = await sha256Hex(token);
     // Check every live token; the loop is constant per-row so it stays timing-safe against
     // which token matched (there are at most a handful per account).
-    let matched = false;
-    for (const row of rows) if (timingSafeEqual(presented, row.token_hash)) matched = true;
+    let matched: string | null = null;
+    for (const row of rows) if (timingSafeEqual(presented, row.token_hash)) matched = row.token_hash;
     return matched;
+  } finally {
+    db.close();
+  }
+}
+
+/** Bump last_seen_at, at most once an hour per token (a single-row PK write, throttled). */
+export function touchToken(tokenHash: string, now: Date = new Date()): void {
+  const db = openRegistry();
+  try {
+    const cutoff = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+    db.prepare(
+      "UPDATE auth_tokens SET last_seen_at = ? WHERE token_hash = ? AND (last_seen_at IS NULL OR last_seen_at < ?)",
+    ).run(now.toISOString(), tokenHash, cutoff);
+  } finally {
+    db.close();
+  }
+}
+
+export interface SessionInfo {
+  /** Stable opaque handle for revocation -- the first 16 hex of the token hash (64 bits, no
+   *  collision risk within one account). The full hash is never exposed. */
+  id: string;
+  label: string;
+  createdAt: string;
+  lastSeenAt: string | null;
+  /** True for the token that authenticated the request that's listing sessions. */
+  current: boolean;
+}
+
+/** Every live device token for an account, newest first, with the caller's own row flagged. */
+export function listSessions(userId: string, currentHash: string): SessionInfo[] {
+  const db = openRegistry();
+  try {
+    const rows = db
+      .query("SELECT token_hash, label, created_at, last_seen_at FROM auth_tokens WHERE user_id = ? ORDER BY created_at DESC")
+      .all(userId) as { token_hash: string; label: string | null; created_at: string; last_seen_at: string | null }[];
+    return rows.map((r) => ({
+      id: r.token_hash.slice(0, 16),
+      label: r.label ?? "Unknown device",
+      createdAt: r.created_at,
+      lastSeenAt: r.last_seen_at ?? null,
+      current: r.token_hash === currentHash,
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+/** Revoke one session of this account by its `id` (hash prefix). Returns rows deleted (0 or 1). */
+export function revokeSession(userId: string, id: string): number {
+  if (!/^[a-f0-9]{16}$/.test(id)) return 0;
+  const db = openRegistry();
+  try {
+    return db
+      .prepare("DELETE FROM auth_tokens WHERE user_id = ? AND substr(token_hash, 1, 16) = ?")
+      .run(userId, id).changes;
+  } finally {
+    db.close();
+  }
+}
+
+/** Revoke the exact token that made this request ("sign out this device"). */
+export function revokeTokenHash(tokenHash: string): number {
+  const db = openRegistry();
+  try {
+    return db.prepare("DELETE FROM auth_tokens WHERE token_hash = ?").run(tokenHash).changes;
+  } finally {
+    db.close();
+  }
+}
+
+/** Revoke every session of this account EXCEPT the caller's ("sign out everywhere else"). */
+export function revokeOtherSessions(userId: string, keepHash: string): number {
+  const db = openRegistry();
+  try {
+    return db
+      .prepare("DELETE FROM auth_tokens WHERE user_id = ? AND token_hash <> ?")
+      .run(userId, keepHash).changes;
   } finally {
     db.close();
   }

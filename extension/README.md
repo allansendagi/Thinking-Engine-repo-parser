@@ -92,6 +92,13 @@ bun run build.ts
 Then load `extension/` unpacked in Chrome (`chrome://extensions` → Developer mode → Load
 unpacked). Make sure the backend is running first (`cd .. && bun run src/api/server.ts`).
 
+### Icons
+
+`icons/icon{16,32,48,128}.png` are committed. Regenerate from the Thread mark with
+`swift icons/render.swift` (macOS only, AppKit — same brand family as `../macos-app/icon.swift`).
+`manifest.json` points at them for both the extension listing (`icons`) and the toolbar button
+(`action.default_icon`).
+
 ## What's deliberately not here
 
 - Real verification against live sites (see above)

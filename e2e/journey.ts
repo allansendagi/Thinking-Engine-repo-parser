@@ -71,6 +71,7 @@ function phase(title: string): void {
 const tmp = mkdtempSync(join(tmpdir(), "thread-journey-"));
 process.env.THREAD_REGISTRY_PATH = join(tmp, "registry.db");
 process.env.THREAD_DATA_DIR = join(tmp, "users");
+process.env.THREAD_RATE_LIMIT = "off"; // deterministic sim: many synthetic clients through one process
 // Start with billing OFF so the un-gated part of the journey is testing what it claims to.
 for (const k of ["PADDLE_API_KEY", "PADDLE_PRICE_ID", "PADDLE_WEBHOOK_SECRET", "PADDLE_ENV", "RESEND_API_KEY", "EMAIL_FROM"]) {
   delete process.env[k];

@@ -2,14 +2,22 @@ import { randomUUID } from "node:crypto";
 import {
   attachEmail,
   createUser,
+  deviceLabel,
+  AccountHasEmailError,
   EmailInUseError,
   findAccountByEmail,
   getAccount,
   issueToken,
+  listSessions,
   reassignEmail,
-  verifyToken,
+  revokeOtherSessions,
+  revokeSession,
+  revokeTokenHash,
+  touchToken,
+  verifyTokenHash,
 } from "./auth";
 import { consumeCode, issueCode, RateLimitedError } from "./authCodes";
+import { clientKey, rateLimit } from "./rateLimit";
 import { sendEmail, signInCodeEmail } from "./email";
 import {
   accountView,
@@ -21,6 +29,8 @@ import {
   verifyPaddleSignature,
 } from "./billing";
 import { openUserDb } from "../db/tenancy";
+import { storageMode } from "../db/durability";
+import { downloadSummary, isAdmin, recordDownload } from "./metrics";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
@@ -85,6 +95,12 @@ function sanitizeSourceUrl(raw: unknown): string | null {
   }
 }
 
+/** A device label from an explicit `deviceName` in the request body, else the User-Agent. */
+function deviceNameFrom(body: { deviceName?: unknown } | null, req: Request): string {
+  const given = typeof body?.deviceName === "string" ? body.deviceName : undefined;
+  return deviceLabel(given, req.headers.get("user-agent"));
+}
+
 /** This user's current idea-node count -- drives the Free plan's capture cap. */
 function ideaCountFor(userId: string): number {
   const db = openUserDb(userId);
@@ -105,15 +121,19 @@ function accountIsEmpty(userId: string): boolean {
   }
 }
 
-/** `Authorization: Bearer <userId>:<token>`. Returns the userId if valid, or a 401 Response. */
-async function authenticate(req: Request): Promise<string | Response> {
+/**
+ * `Authorization: Bearer <userId>:<token>`. On success returns `{ userId, tokenHash }` -- the
+ * hash identifies which device row made the request (for last-seen, the session list, and "sign
+ * out this device"). On failure returns a 401 Response.
+ */
+async function authenticate(req: Request): Promise<{ userId: string; tokenHash: string } | Response> {
   const header = req.headers.get("authorization") ?? "";
   const match = header.match(/^Bearer (user_[a-f0-9]{24}):([a-f0-9]{64})$/);
   if (!match) return error(401, "Missing or malformed Authorization header");
   const [, userId, token] = match as unknown as [string, string, string];
-  const ok = await verifyToken(userId, token);
-  if (!ok) return error(401, "Invalid credentials");
-  return userId;
+  const tokenHash = await verifyTokenHash(userId, token);
+  if (!tokenHash) return error(401, "Invalid credentials");
+  return { userId, tokenHash };
 }
 
 export function createRequestHandler(providers: PipelineProviders): (req: Request) => Promise<Response> {
@@ -122,11 +142,22 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     const { pathname } = url;
 
     if (req.method === "GET" && pathname === "/v1/health") {
-      return json({ status: "ok" });
+      return json({ status: "ok", storage: storageMode() });
     }
 
     if (req.method === "POST" && pathname === "/v1/users") {
-      const user = await createUser();
+      // Anon account creation is unauthenticated by design (zero-setup first launch). Cap it per
+      // IP so a loop can't fill the volume with `users` rows + a per-user SQLite file each.
+      if (!rateLimit(clientKey(req, "users"), { limit: 15, windowMs: 3_600_000 })) {
+        return error(429, "Too many accounts created from here. Try again later.");
+      }
+      let uBody: { deviceName?: string } = {};
+      try {
+        uBody = (await req.json()) as { deviceName?: string };
+      } catch {
+        /* body is optional here */
+      }
+      const user = await createUser(undefined, deviceNameFrom(uBody, req));
       return json(user, 201);
     }
 
@@ -140,6 +171,11 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       }
       const email = (body.email ?? "").trim();
       if (!EMAIL_RE.test(email)) return error(400, "A valid email is required");
+      // Per-IP ceiling on top of authCodes.ts's per-email limit -- one IP shouldn't be able to
+      // spray sign-in codes at many different addresses.
+      if (!rateLimit(clientKey(req, "auth-start"), { limit: 20, windowMs: 3_600_000 })) {
+        return error(429, "Too many sign-in attempts from here. Try again later.");
+      }
       try {
         const code = await issueCode(email);
         await sendEmail({ to: email, ...signInCodeEmail(code) });
@@ -152,9 +188,9 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     }
 
     if (req.method === "POST" && pathname === "/v1/auth/verify") {
-      let body: { email?: string; code?: string };
+      let body: { email?: string; code?: string; deviceName?: string };
       try {
-        body = (await req.json()) as { email?: string; code?: string };
+        body = (await req.json()) as { email?: string; code?: string; deviceName?: string };
       } catch {
         return error(400, "Invalid JSON body");
       }
@@ -163,14 +199,15 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return error(400, "Email and 6-digit code are required");
       if (!(await consumeCode(email, code))) return error(400, "That code is wrong or expired", "bad_code");
 
+      const label = deviceNameFrom(body, req);
       const existing = findAccountByEmail(email);
       if (existing) {
         // Sign-in issues a token for *this* device. Other devices (Mac app, extension,
         // desktop agent) keep their own tokens -- see auth.ts `auth_tokens`.
-        const token = await issueToken(existing.userId);
+        const token = await issueToken(existing.userId, label);
         return json({ userId: existing.userId, token });
       }
-      const created = await createUser(email);
+      const created = await createUser(email, label);
       return json(created, 201);
     }
 
@@ -191,10 +228,64 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       return json({ received: true });
     }
 
+    // Download counter -- public, no auth (anyone can download). The website's /download/mac
+    // endpoint pings this, then redirects to the DMG. Best-effort: a bad body still 204s.
+    if (req.method === "POST" && pathname === "/v1/events/download") {
+      // Public beacon: silently drop once an IP is over the ceiling so a loop can't inflate the
+      // /admin numbers or grow the table without bound. Still a 204 -- it's fire-and-forget.
+      if (!rateLimit(clientKey(req, "download"), { limit: 40, windowMs: 3_600_000 })) {
+        return new Response(null, { status: 204 });
+      }
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await req.json()) as Record<string, unknown>;
+      } catch {
+        /* empty / malformed body is fine */
+      }
+      try {
+        recordDownload({
+          platform: body.platform,
+          version: body.version,
+          referrer: body.referrer,
+          country: body.country ?? req.headers.get("x-vercel-ip-country"),
+          uaFamily: deviceLabel(null, (body.uaFamily as string) ?? req.headers.get("user-agent")),
+        });
+      } catch (e) {
+        console.error("[Thread] download event failed:", e);
+      }
+      return new Response(null, { status: 204 });
+    }
+
     // Every route below requires auth.
     const auth = await authenticate(req);
     if (auth instanceof Response) return auth;
-    const userId = auth;
+    const { userId, tokenHash } = auth;
+    touchToken(tokenHash); // throttled last-seen bump for the session list
+
+    // Admin-only product metrics (THREAD_ADMIN_EMAILS). Downloads for now.
+    if (req.method === "GET" && pathname === "/v1/events/downloads") {
+      if (!isAdmin(getAccount(userId)?.email)) return error(403, "Not authorized");
+      const days = Math.min(365, Math.max(1, Number(url.searchParams.get("days") ?? 30) || 30));
+      return json(downloadSummary(days));
+    }
+
+    // --- Device sessions (list / revoke) --------------------------------------------------
+    if (req.method === "GET" && pathname === "/v1/auth/sessions") {
+      return json({ sessions: listSessions(userId, tokenHash) });
+    }
+    if (req.method === "DELETE" && pathname === "/v1/auth/session") {
+      // Sign out THIS device -- revoke exactly the token that made this request.
+      return json({ revoked: revokeTokenHash(tokenHash) });
+    }
+    if (req.method === "POST" && pathname === "/v1/auth/sessions/revoke-others") {
+      // Sign out everywhere else -- keep only the caller's token.
+      return json({ revoked: revokeOtherSessions(userId, tokenHash) });
+    }
+    const sessionMatch = pathname.match(/^\/v1\/auth\/sessions\/([a-f0-9]{16})$/);
+    if (req.method === "DELETE" && sessionMatch) {
+      const n = revokeSession(userId, sessionMatch[1]!);
+      return n > 0 ? json({ revoked: n }) : error(404, "No such session");
+    }
 
     if (req.method === "GET" && pathname === "/v1/account") {
       const account = getAccount(userId);
@@ -236,6 +327,13 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       try {
         attachEmail(userId, email);
       } catch (e) {
+        if (e instanceof AccountHasEmailError) {
+          return error(
+            409,
+            `This device is already linked to ${e.currentEmail}. Sign out first, then sign in with a different email.`,
+            "account_has_email",
+          );
+        }
         if (e instanceof EmailInUseError) {
           // If the email is sitting on an account that was minted and never used (0 ideas, 0
           // captured messages -- e.g. a stray website sign-in), just move it here rather than

@@ -4,6 +4,11 @@ extension Notification.Name {
     /// Ask the floating quick-recall panel to present itself. `AppDelegate` owns the panel;
     /// SwiftUI, the `thread://` URL handler and the Services menu all post this to bring it up.
     static let threadPresentPanel = Notification.Name("thread.presentPanel")
+    /// Open the resizable main window. Posted by the status-item menu; RootView (which holds the
+    /// SwiftUI `openWindow` environment) actually opens it.
+    static let threadOpenMainWindow = Notification.Name("thread.openMainWindow")
+    /// Open the Settings sheet. Same routing rationale as above.
+    static let threadOpenSettings = Notification.Name("thread.openSettings")
 }
 
 /// One vocabulary for every "drive Thread from outside its own UI" surface: the `thread://` URL

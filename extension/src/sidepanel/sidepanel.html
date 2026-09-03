@@ -45,6 +45,22 @@
       #back {
         display: none;
       }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .brand svg {
+        width: 20px;
+        height: 20px;
+        color: var(--accent);
+        flex: none;
+      }
+      .brand h1 {
+        margin: 0;
+        font-size: 15px;
+        letter-spacing: -0.01em;
+      }
       details.paste summary {
         cursor: pointer;
         color: var(--muted);
@@ -60,7 +76,14 @@
   <body>
     <div class="row" style="margin-bottom: 10px">
       <button id="back">&larr;</button>
-      <h1 style="margin: 0">Thread</h1>
+      <div class="brand">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="12" cy="12" r="6.1" stroke="currentColor" stroke-width="2" />
+          <path d="M4.2 19.8C10 13 14 11 19.8 4.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          <circle cx="12" cy="12" r="2.15" fill="currentColor" />
+        </svg>
+        <h1>Thread</h1>
+      </div>
     </div>
 
     <div id="searchRow" class="row">
