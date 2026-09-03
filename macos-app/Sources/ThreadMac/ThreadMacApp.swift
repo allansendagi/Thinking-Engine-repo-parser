@@ -43,7 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.image = BrandMark.menuBarImage
         item.button?.action = #selector(statusItemClicked)
         item.button?.target = self
+        // Make the button fire its action for right-clicks too (default is left only). Set on
+        // both the button and its cell -- which one takes effect varies by macOS version.
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        _ = item.button?.cell?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
         panel.anchorButton = item.button
 
@@ -94,15 +97,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func statusItemClicked() {
         let e = NSApp.currentEvent
-        let isSecondary = e?.type == .rightMouseUp
-            || (e?.type == .leftMouseUp && e?.modifierFlags.contains(.control) == true)
-        if isSecondary, let button = statusItem?.button {
-            statusMenu.popUp(positioning: nil,
-                             at: NSPoint(x: 0, y: button.bounds.height + 5),
-                             in: button)
+        let wantsMenu: Bool = {
+            switch e?.type {
+            case .rightMouseUp, .rightMouseDown: return true
+            case .leftMouseUp, .leftMouseDown: return e?.modifierFlags.contains(.control) == true
+            default: return false
+            }
+        }()
+        if wantsMenu {
+            openStatusMenu()
         } else {
             quickRecallPanel?.toggle()
         }
+    }
+
+    /// Attach the menu just long enough for AppKit to drop it under the button, then detach so the
+    /// next plain click runs the action again. `popUp(positioning:at:in:)` is unreliable for a
+    /// status-bar button; this idiom is the one that consistently works.
+    private func openStatusMenu() {
+        guard let item = statusItem else { return }
+        item.menu = statusMenu
+        item.button?.performClick(nil)
+        item.menu = nil
     }
 
     private lazy var statusMenu: NSMenu = {
