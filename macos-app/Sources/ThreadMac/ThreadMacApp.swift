@@ -35,12 +35,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.servicesProvider = services
         servicesProvider = services
 
-        // Menu-bar item — a single NSStatusItem with a real menu attached, so ANY click on the
-        // icon drops a menu (Open Thread / Open in Window / Settings / Sign Out / Quit Thread ⌘Q)
-        // -- the standard, reliable menu-bar affordance. NSStatusBarButton doesn't deliver
-        // right-mouse events to its action and `sendAction(on:)` / event-monitor tricks proved
-        // flaky across machines, so we don't try to keep a separate left-click action. The panel
-        // still has fast paths: "Open Thread" is the first menu item, and ⌘⇧T opens it directly.
+        // Menu-bar item. `statusItem.menu` is attached -- that's the only reliable way to get a
+        // right-click menu on an NSStatusBarButton (its action never sees right-mouse events, and
+        // sendAction(on:) / event-monitor tricks proved flaky across machines). A plain LEFT click
+        // is intercepted in menuWillOpen: the menu is cancelled before it shows and the panel
+        // toggles instead. So: left-click -> panel, right-click / ctrl-click -> menu.
         // (A SwiftUI MenuBarExtra would create a second RootView window, which is what made it
         // "jump", so this stays hand-rolled.)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -132,6 +131,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Sign Out only makes sense while there's an account attached to this Mac.
     func menuNeedsUpdate(_ menu: NSMenu) {
         signOutMenuItem?.isEnabled = appState.isPaired
+    }
+
+    /// `statusItem.menu` is set so right-click reliably drops the menu. But a plain LEFT click
+    /// should just toggle the panel -- so catch it here, cancel the menu before it appears, and
+    /// toggle instead. Right-click / ctrl-click fall through and open the menu normally.
+    func menuWillOpen(_ menu: NSMenu) {
+        guard let event = NSApp.currentEvent else { return }
+        let plainLeftClick = (event.type == .leftMouseDown || event.type == .leftMouseUp)
+            && !event.modifierFlags.contains(.control)
+        if plainLeftClick {
+            menu.cancelTrackingWithoutAnimation()
+            DispatchQueue.main.async { [weak self] in self?.quickRecallPanel?.toggle() }
+        }
     }
 
     /// The quick-recall panel is an NSPanel, which AppKit doesn't count as a "visible window", so
