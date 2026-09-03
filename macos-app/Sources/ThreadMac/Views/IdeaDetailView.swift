@@ -416,7 +416,14 @@ private struct ContinuationPreview: View {
             }
 
             VStack(alignment: .leading, spacing: 5) {
-                eyebrow("Continue from here")
+                HStack(spacing: 6) {
+                    eyebrow("Continue from here")
+                    Spacer(minLength: 0)
+                    if let hint = appState.continuationEngine.hint {
+                        Text(hint).font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(Theme.ink(0.32))
+                    }
+                }
                 TextField("What to ask next…", text: $appState.nextStepDraft, axis: .vertical)
                     .textFieldStyle(.plain).font(.system(size: 12.5))
                     .foregroundStyle(Theme.ink(0.85)).lineLimit(1 ... 4)

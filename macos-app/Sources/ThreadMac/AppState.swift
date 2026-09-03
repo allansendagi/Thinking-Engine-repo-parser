@@ -651,6 +651,8 @@ final class AppState: ObservableObject {
     @Published var continuationText: String?
     /// The user's edit of "Continue from here". Empty = use packet.suggestedNext untouched.
     @Published var nextStepDraft: String = ""
+    /// Which engine wrote the "Continue from here" line in the current handoff.
+    @Published var continuationEngine: ContinuationEngine = .none
 
     /// The paste string. The backend leaves a token where the "Continue from here" line goes;
     /// we fill it with the user's edit or the suggested default in one literal replace. No
@@ -672,6 +674,7 @@ final class AppState: ObservableObject {
         sentToTool = nil
         continuationPacket = nil
         continuationText = nil
+        continuationEngine = .none
 
         do {
             let r = try await client.continueIdea(ideaId: trace.idea.id)
@@ -679,6 +682,30 @@ final class AppState: ObservableObject {
             continuationText = r.text
             nextStepDraft = r.packet.suggestedNext
             continueResult = r.text
+
+            if r.tier == "pro" {
+                // The server wrote "Continue from here" with a frontier model.
+                continuationEngine = .frontier
+            } else if r.tier == "free" {
+                // Free tier: the server left the deterministic template on "Continue from here".
+                // Sharpen that one line on this Mac (Apple Foundation Models) — no server call,
+                // no cost. If the on-device model isn't available, the template stands.
+                let p = r.packet
+                if OnDeviceModel.status.isReady,
+                   let sharper = await OnDeviceModel.continueFromHere(
+                       whereYouLeftOff: p.whereYouLeftOff,
+                       evolution: p.evolution.map { $0.formulation },
+                       unresolvedQuestion: p.unresolvedQuestion,
+                       contested: p.contested
+                   ),
+                   !sharper.isEmpty {
+                    // Only overwrite if the user hasn't already edited the field.
+                    if nextStepDraft == p.suggestedNext { nextStepDraft = sharper }
+                    continuationEngine = .onDevice
+                } else {
+                    continuationEngine = .template
+                }
+            }
         } catch {
             continueResult = nil
             errorMessage = error.localizedDescription

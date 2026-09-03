@@ -448,7 +448,10 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       const read = await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }));
       expect(read.status).toBe(200);
 
-      // /v1/continue is Pro-only
+      // /v1/continue is NOT gated -- the continuation packet is free (deterministic from the
+      // idea's own provenance). A Free account gets it back with tier:"free", meaning the
+      // server used the template for the one model-written line and the client sharpens it
+      // on-device. Only the frontier-model call for that line is Pro.
       const cont = await handler(
         new Request("http://x/v1/continue", {
           method: "POST",
@@ -456,12 +459,21 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
           body: JSON.stringify({ topic: "t0" }),
         }),
       );
-      expect(cont.status).toBe(402);
-      expect(((await cont.json()) as { code: string }).code).toBe("pro_required");
+      expect(cont.status).toBe(200);
+      expect(((await cont.json()) as { tier: string }).tier).toBe("free");
 
-      // ...but an active Pro account is not gated
+      // An active Pro account is not capture-gated, and its continuation is tier:"pro".
       setPlan(userId, { plan: "pro", status: "active" });
       expect((await capture()).status).not.toBe(402);
+      const proCont = await handler(
+        new Request("http://x/v1/continue", {
+          method: "POST",
+          headers: authHeader,
+          body: JSON.stringify({ ideaId: "idea_0" }),
+        }),
+      );
+      expect(proCont.status).toBe(200);
+      expect(((await proCont.json()) as { tier: string }).tier).toBe("pro");
 
       // /v1/continue by exact ideaId returns { text, packet }; the reasoning provider is empty
       // here, so suggestedNext falls back to a template rather than erroring.

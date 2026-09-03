@@ -175,6 +175,10 @@ struct BillingURL: Codable {
 struct ContinueResponse: Codable {
     let text: String
     let packet: ContinuationPacket
+    /// "pro" — the server wrote the "continue from here" line with a frontier model.
+    /// "free" — the server left the deterministic template there; this Mac sharpens that one
+    /// line on-device (Apple Foundation Models) before copying. Absent on older servers.
+    let tier: String?
 }
 
 struct ContinuationPacket: Codable {
