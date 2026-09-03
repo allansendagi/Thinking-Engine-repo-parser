@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var quickRecallPanel: QuickRecallPanel?
     private var pairingServer: PairingServer?
     private var statusItem: NSStatusItem?
+    private var statusMenuMonitor: Any?
     private var servicesProvider: ThreadServicesProvider?
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
     private var pendingURLs: [URL] = []
@@ -41,13 +42,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // what made it "jump", so this stays hand-rolled.)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = BrandMark.menuBarImage
-        item.button?.action = #selector(statusItemClicked)
+        item.button?.action = #selector(statusItemClicked)   // plain left-click -> toggle panel
         item.button?.target = self
-        // Make the button fire its action for right-clicks too (default is left only). Set on
-        // both the button and its cell -- which one takes effect varies by macOS version.
-        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        _ = item.button?.cell?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
+
+        // Right-click / ctrl-click -> context menu. A local event monitor is the reliable way:
+        // NSStatusBarButton doesn't deliver right-mouse events to its action, and `sendAction(on:)`
+        // is inconsistent across macOS versions. The monitor sees the click first; if it's on our
+        // status button's window it pops the menu and swallows the event.
+        statusMenuMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { [weak self] event in
+            guard let self, let button = self.statusItem?.button, event.window === button.window else { return event }
+            let secondary = event.type == .rightMouseDown
+                || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
+            guard secondary else { return event }   // plain left-click: let the button action run
+            self.statusMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
+            return nil   // consume
+        }
         panel.anchorButton = item.button
 
         // Cmd+Shift+T opens the same panel.
@@ -95,30 +105,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Status-item click + context menu
 
+    /// Plain left-click. Right-click / ctrl-click is handled by the event monitor set up in
+    /// applicationDidFinishLaunching.
     @objc private func statusItemClicked() {
-        let e = NSApp.currentEvent
-        let wantsMenu: Bool = {
-            switch e?.type {
-            case .rightMouseUp, .rightMouseDown: return true
-            case .leftMouseUp, .leftMouseDown: return e?.modifierFlags.contains(.control) == true
-            default: return false
-            }
-        }()
-        if wantsMenu {
-            openStatusMenu()
-        } else {
-            quickRecallPanel?.toggle()
-        }
-    }
-
-    /// Attach the menu just long enough for AppKit to drop it under the button, then detach so the
-    /// next plain click runs the action again. `popUp(positioning:at:in:)` is unreliable for a
-    /// status-bar button; this idiom is the one that consistently works.
-    private func openStatusMenu() {
-        guard let item = statusItem else { return }
-        item.menu = statusMenu
-        item.button?.performClick(nil)
-        item.menu = nil
+        quickRecallPanel?.toggle()
     }
 
     private lazy var statusMenu: NSMenu = {

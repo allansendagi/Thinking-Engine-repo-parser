@@ -69,6 +69,8 @@ export interface DownloadSummary {
   byVersion: { version: string; count: number }[];
   byCountry: { country: string; count: number }[];
   byPlatform: { platform: string; count: number }[];
+  /** Most recent hits, newest first (up to 40) -- for the admin "recent downloads" table. */
+  recent: { at: string; platform: string; version: string | null; country: string | null; uaFamily: string | null; referrer: string | null }[];
 }
 
 export function downloadSummary(windowDays = 30, now: Date = new Date()): DownloadSummary {
@@ -101,6 +103,15 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
         )
         .all(since) as { k: string; count: number }[];
 
+    const recent = (
+      db
+        .query(
+          `SELECT created_at AS at, platform, version, country, ua_family AS uaFamily, referrer
+           FROM download_events ORDER BY id DESC LIMIT 40`,
+        )
+        .all() as DownloadSummary["recent"]
+    );
+
     return {
       total,
       today,
@@ -111,6 +122,7 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
       byVersion: topGroup("version").map((r) => ({ version: r.k, count: r.count })),
       byCountry: topGroup("country").map((r) => ({ country: r.k, count: r.count })),
       byPlatform: topGroup("platform").map((r) => ({ platform: r.k, count: r.count })),
+      recent,
     };
   } finally {
     db.close();
