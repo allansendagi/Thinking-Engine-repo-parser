@@ -215,14 +215,31 @@ export class EmailInUseError extends Error {
   }
 }
 
+/** This account already carries a *different* verified email -- claiming would silently relabel
+ *  it and orphan the old address. The caller should sign out and sign in on the other account. */
+export class AccountHasEmailError extends Error {
+  constructor(public readonly currentEmail: string) {
+    super(`This account is already linked to ${currentEmail}`);
+    this.name = "AccountHasEmailError";
+  }
+}
+
 /**
  * Attaches a verified email to an existing account (the "claim" flow -- an anonymous account
- * created on first launch gets an identity, keeping all its ideas). Throws EmailInUseError if
- * the email already belongs to a *different* account. Idempotent for the same account.
+ * created on first launch gets an identity, keeping all its ideas). Throws:
+ *   - `AccountHasEmailError` if this account already has a different verified email (don't
+ *     silently overwrite it -- see class doc);
+ *   - `EmailInUseError` if the email already belongs to a *different* account.
+ * Idempotent when the account already has exactly this email.
  */
 export function attachEmail(userId: string, email: string): void {
   const db = openRegistry();
   try {
+    const self = db.query("SELECT email FROM users WHERE id = ?").get(userId) as { email: string | null } | null;
+    const current = self?.email ?? null;
+    if (current && current.toLowerCase() === email.toLowerCase()) return; // already attached, no-op
+    if (current) throw new AccountHasEmailError(current);
+
     const existing = db.query("SELECT id FROM users WHERE lower(email) = lower(?)").get(email) as
       | { id: string }
       | null;

@@ -3,6 +3,7 @@ import {
   attachEmail,
   createUser,
   deviceLabel,
+  AccountHasEmailError,
   EmailInUseError,
   findAccountByEmail,
   getAccount,
@@ -310,6 +311,13 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       try {
         attachEmail(userId, email);
       } catch (e) {
+        if (e instanceof AccountHasEmailError) {
+          return error(
+            409,
+            `This device is already linked to ${e.currentEmail}. Sign out first, then sign in with a different email.`,
+            "account_has_email",
+          );
+        }
         if (e instanceof EmailInUseError) {
           // If the email is sitting on an account that was minted and never used (0 ideas, 0
           // captured messages -- e.g. a stray website sign-in), just move it here rather than
