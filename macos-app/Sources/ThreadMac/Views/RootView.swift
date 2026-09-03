@@ -61,6 +61,8 @@ struct RootView: View {
         .task { await appState.refresh() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
+        .onReceive(NotificationCenter.default.publisher(for: .threadOpenSettings)) { _ in showSettings = true }
+        .onReceive(NotificationCenter.default.publisher(for: .threadOpenMainWindow)) { _ in openWindow(id: "main") }
         .onExitCommand {
             if inDetail { appState.closeIdea() }
             else { NotificationCenter.default.post(name: .threadDismissPanel, object: nil) }

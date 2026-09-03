@@ -2,7 +2,7 @@ import SwiftUI
 import Carbon.HIToolbox
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// So App Intents (which the system instantiates on their own) can reach the running
     /// app's single AppState. Set on init; the app is a lone menu-bar process, never > 1.
     static private(set) weak var shared: AppDelegate?
@@ -35,12 +35,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.servicesProvider = services
         servicesProvider = services
 
-        // Menu-bar item — a single NSStatusItem whose click toggles the ONE panel. (A SwiftUI
-        // MenuBarExtra would create a second RootView window, which is what made it "jump".)
+        // Menu-bar item — a single NSStatusItem. Left-click toggles the ONE panel; right-click
+        // (or ctrl-click) opens a context menu with Sign Out / Quit etc. -- the standard menu-bar
+        // app affordance. (A SwiftUI MenuBarExtra would create a second RootView window, which is
+        // what made it "jump", so this stays hand-rolled.)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = BrandMark.menuBarImage
-        item.button?.action = #selector(togglePanel)
+        item.button?.action = #selector(statusItemClicked)
         item.button?.target = self
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
         panel.anchorButton = item.button
 
@@ -87,8 +90,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.perform(action)
     }
 
-    @objc private func togglePanel() { quickRecallPanel?.toggle() }
+    // MARK: - Status-item click + context menu
+
+    @objc private func statusItemClicked() {
+        let e = NSApp.currentEvent
+        let isSecondary = e?.type == .rightMouseUp
+            || (e?.type == .leftMouseUp && e?.modifierFlags.contains(.control) == true)
+        if isSecondary, let button = statusItem?.button {
+            statusMenu.popUp(positioning: nil,
+                             at: NSPoint(x: 0, y: button.bounds.height + 5),
+                             in: button)
+        } else {
+            quickRecallPanel?.toggle()
+        }
+    }
+
+    private lazy var statusMenu: NSMenu = {
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.autoenablesItems = false
+        let add = { (title: String, sel: Selector, key: String, mods: NSEvent.ModifierFlags) -> NSMenuItem in
+            let mi = NSMenuItem(title: title, action: sel, keyEquivalent: key)
+            mi.keyEquivalentModifierMask = mods
+            mi.target = self
+            menu.addItem(mi)
+            return mi
+        }
+        _ = add("Open Thread", #selector(presentPanel), "", [])
+        _ = add("Open in Window", #selector(openMainWindowFromMenu), "w", [.command, .shift])
+        _ = add("Settings…", #selector(openSettingsFromMenu), ",", [.command])
+        menu.addItem(.separator())
+        signOutMenuItem = add("Sign Out", #selector(signOutFromMenu), "", [])
+        menu.addItem(.separator())
+        _ = add("Quit Thread", #selector(quitFromMenu), "q", [.command])
+        return menu
+    }()
+
+    private weak var signOutMenuItem: NSMenuItem?
+
     @objc private func presentPanel() { quickRecallPanel?.show() }
+    @objc private func openMainWindowFromMenu() {
+        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .threadOpenMainWindow, object: nil)
+    }
+    @objc private func openSettingsFromMenu() {
+        quickRecallPanel?.show()
+        NotificationCenter.default.post(name: .threadOpenSettings, object: nil)
+    }
+    @objc private func signOutFromMenu() { appState.unpair() }
+    @objc private func quitFromMenu() { NSApp.terminate(nil) }
+
+    /// Sign Out only makes sense while there's an account attached to this Mac.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        signOutMenuItem?.isEnabled = appState.isPaired
+    }
 
     /// The quick-recall panel is an NSPanel, which AppKit doesn't count as a "visible window", so
     /// activating the app (Dock click, status-item click) would otherwise trigger the default
