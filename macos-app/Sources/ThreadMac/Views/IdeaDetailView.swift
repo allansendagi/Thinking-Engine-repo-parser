@@ -133,34 +133,51 @@ struct IdeaDetailView: View {
 
     // MARK: evolution
 
+    /// Evolution card — an exact port of `Thread - macOS Panel v2.dc.html` (Claude Design
+    /// cf5ae711). Newest step at the top with the accent dot + bold text + the source quote;
+    /// one continuous rail; older steps trail below.
     private func evolutionBlock(_ trace: IdeaTrace) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let total = trace.provenance.count
+        let rows = Array(trace.provenance.enumerated().reversed())  // newest first
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text("Evolution").font(.system(size: 12, weight: .semibold)).kerning(-0.1)
+                Text("Evolution").font(.system(size: 12, weight: .semibold)).kerning(-0.12)
                     .foregroundStyle(Theme.ink(0.85))
-                Text("\(trace.provenance.count) step\(trace.provenance.count == 1 ? "" : "s")")
+                Text("\(total) step\(total == 1 ? "" : "s")")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.ink(0.36))
             }
             .padding(.horizontal, 16).padding(.top, 22).padding(.bottom, 7)
 
-            let steps = Array(trace.provenance.enumerated().reversed())  // newest first
-            VStack(spacing: 0) {
-                ForEach(steps, id: \.offset) { idx, step in
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { shown, pair in
+                    let step = pair.element
+                    let isTop = shown == 0
                     EvolutionRow(
                         step: step,
-                        isCurrent: idx == trace.provenance.count - 1,
-                        isFirstShown: idx == steps.first?.offset,
-                        isLastShown: idx == steps.last?.offset
+                        isTop: isTop,
+                        isBottom: shown == rows.count - 1,
+                        quote: isTop ? quotedSource(step.sourceText) : nil
                     )
-                    if idx != steps.last?.offset {
-                        Rectangle().fill(Theme.ink(0.07)).frame(height: 0.5)
-                    }
                 }
             }
-            .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 9))  // mock: rgba(255,255,255,.66)
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.ink(0.09), lineWidth: 0.5))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.cardFill)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.cardCorner))
+            .overlay(RoundedRectangle(cornerRadius: Theme.cardCorner).stroke(Theme.cardStroke, lineWidth: 0.5))
             .padding(.horizontal, 12).padding(.bottom, 14)
         }
+    }
+
+    /// The source message a step was grounded in, tidied for the one-line-ish quote under the
+    /// current step. `nil` when there's nothing worth showing.
+    private func quotedSource(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let clean = raw.replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return nil }
+        let cut = clean.count > 160 ? String(clean.prefix(160)) + "…" : clean
+        return "“\(cut)”"
     }
 
     // MARK: open loops
@@ -195,27 +212,19 @@ struct IdeaDetailView: View {
     }
 }
 
+/// One row of the Evolution card. `grid-template-columns: 30px 1fr`, `align-items: stretch`.
+/// Both the row and its content are pinned to full width so the 30pt rail column never drifts
+/// (a `VStack` of rows with varying intrinsic width was centring the narrow ones — the crooked
+/// rail). The divider is the mock's inset top box-shadow, drawn as a hairline over the whole row.
 private struct EvolutionRow: View {
     let step: ProvenanceStep
-    let isCurrent: Bool
-    let isFirstShown: Bool
-    let isLastShown: Bool
+    let isTop: Bool
+    let isBottom: Bool
+    let quote: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // rail column (30pt)
-            ZStack(alignment: .top) {
-                Rectangle().fill(Theme.ink(0.12)).frame(width: 1.5)
-                    .padding(.top, isFirstShown ? 16 : 0)
-                    .padding(.bottom, isLastShown ? 100 : 0)
-                Circle()
-                    .fill(isCurrent ? Theme.accent : Theme.ink(0.28))
-                    .frame(width: isCurrent ? 7 : 5, height: isCurrent ? 7 : 5)
-                    .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 3))  // mock: 0 0 0 3px rgba(255,255,255,.9)
-                    .padding(.top, 13)
-            }
-            .frame(width: 30)
-            .frame(maxHeight: .infinity)
+            EvolutionRail(isTop: isTop, isBottom: isBottom)
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -225,20 +234,64 @@ private struct EvolutionRow: View {
                     Text(Theme.ago(step.createdAt)).font(.system(size: 11)).foregroundStyle(Theme.ink(0.32))
                 }
                 Text(step.formulation)
-                    .font(.system(size: 12.5, weight: isCurrent ? .medium : .regular)).kerning(-0.06)
-                    .foregroundStyle(Theme.ink(isCurrent ? 0.87 : 0.68))
+                    .font(.system(size: 12.5, weight: isTop ? .medium : .regular)).kerning(-0.075)
+                    .lineSpacing(2)
+                    .foregroundStyle(Theme.ink(isTop ? 0.87 : 0.68))
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 3)
-                if isCurrent, let q = step.sourceText, !q.isEmpty {
-                    Text("“\(q.prefix(120))\(q.count > 120 ? "…" : "")”")
-                        .font(.system(size: 11.5)).foregroundStyle(Theme.ink(0.44))
+                if let q = quote {
+                    Text(q)
+                        .font(.system(size: 11.5)).lineSpacing(1.7)
+                        .foregroundStyle(Theme.ink(0.44))
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 8).padding(.top, 5)
-                        .overlay(Rectangle().fill(Theme.ink(0.14)).frame(width: 1.5), alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 8)
+                        .overlay(alignment: .leading) {
+                            Rectangle().fill(Theme.ink(0.14)).frame(width: 1.5)
+                        }
+                        .padding(.top, 5)
                 }
             }
-            .padding(.trailing, 12).padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.init(top: 9, leading: 0, bottom: 10, trailing: 12))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .top) {
+            if !isTop { Rectangle().fill(Theme.rowSep).frame(height: 0.5) }
+        }
+    }
+}
+
+/// The 30pt timeline column: one straight 1.5pt rail + a dot. On the top row the rail starts at
+/// the dot (16pt down); on the bottom row it stops at the dot; every row in between carries a
+/// full-height segment — so the stack reads as one unbroken vertical line. No GeometryReader:
+/// a bare greedy `Rectangle` fills the row height the content column defines, which lays out
+/// more predictably across passes.
+private struct EvolutionRail: View {
+    let isTop: Bool
+    let isBottom: Bool
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                if isTop { Color.clear.frame(height: 16) }
+                if isBottom {
+                    Rectangle().fill(Theme.rail).frame(width: 1.5, height: isTop ? 0 : 16)
+                    Spacer(minLength: 0)
+                } else {
+                    Rectangle().fill(Theme.rail).frame(width: 1.5)  // greedy height → fills the row
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            Circle()
+                .fill(isTop ? Theme.accent : Theme.railDot)
+                .frame(width: isTop ? 7 : 5, height: isTop ? 7 : 5)
+                .overlay(Circle().stroke(Color.white.opacity(0.92), lineWidth: 3).padding(-0.75))
+                .padding(.top, 13)
+        }
+        .frame(width: 30)
     }
 }
 
