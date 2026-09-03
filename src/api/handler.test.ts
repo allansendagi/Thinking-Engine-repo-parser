@@ -33,7 +33,11 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
     const res = await handler(new Request("http://x/v1/health"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: "ok" });
+    const health = (await res.json()) as { status: string; storage: string };
+    expect(health.status).toBe("ok");
+    // storage mode is reported so monitoring can catch an ephemeral deploy; the tests set
+    // THREAD_REGISTRY_PATH, so it's "explicit" here.
+    expect(health.storage).toBe("explicit");
   });
 
   test("protected routes reject missing or wrong credentials", async () => {

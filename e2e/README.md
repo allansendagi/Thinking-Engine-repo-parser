@@ -3,7 +3,7 @@
 ```sh
 bun run e2e            # journey.ts   — the whole user journey, 46 checks
 bun run e2e:payments   # payments.ts  — the Paddle billing surface, 30 checks
-bun run e2e:identity   # identity.ts  — passwordless auth + "remember me", 32 checks
+bun run e2e:identity   # identity.ts  — passwordless auth, sessions, "remember me", 45 checks
 ```
 
 All three are deterministic, no API key, ~1s, exit non-zero on the first failure, and run in CI
@@ -105,7 +105,7 @@ Everything downstream of step 6's webhook is what `payments.ts` already proves.
 
 # identity.ts — passwordless accounts, devices, "remember me"
 
-32 checks, 9 phases, through the real handler **and** by reading `registry.db` directly:
+45 checks, 10 phases, through the real handler **and** by reading `registry.db` directly:
 
 1. **The 6-digit code** — `issueCode` returns 6 random digits; stored **SHA-256 hashed**
    (`login_codes.code_hash`), ~10-min TTL, **single-use** (deleted on match), **5 wrong guesses
@@ -119,10 +119,12 @@ Everything downstream of step 6's webhook is what `payments.ts` already proves.
    is kept**; the original device token keeps working.
 5. **More devices** — signing in with `EMAIL.toUpperCase()` lands on the **same** account
    (case-insensitive unique index); **3 device tokens authenticate simultaneously**, nothing
-   rotated; `auth_tokens` shows 3 rows for the one account.
-6. **Sign out one device** — clients discard the *local* token only; the others are untouched.
-   **Documented gap: there is no server-side revoke endpoint**, so a lost device's token hash
-   stays in `auth_tokens` until (not yet built) revocation exists.
+   rotated. `GET /v1/auth/sessions` lists all three with labels + last-seen, exactly one flagged
+   `current`, and **never leaks a full token hash**.
+6. **Server-side revocation** — `DELETE /v1/auth/session` signs out *this* device (its token 401s
+   at once, the others keep working); `DELETE /v1/auth/sessions/:id` signs out a named device by
+   its list id (unknown id → 404); `POST /v1/auth/sessions/revoke-others` signs out everywhere
+   else and keeps only the caller. Verified by the token count in `auth_tokens` dropping each time.
 7. **One account per email** — a rival claiming an in-use email with data → `409 email_in_use`; a
    new email find-or-creates; an email on an *empty* account is reclaimed onto the one with data.
 8. **Charging maps to the account** — a webhook keyed by `custom_data.thread_user_id` flips
@@ -130,3 +132,7 @@ Everything downstream of step 6's webhook is what `payments.ts` already proves.
    Pro**, and a brand-new sign-in is Pro immediately (entitlement is on the account, not the device).
 9. **Restart durability** — a fresh handler instance over the same `registry.db` still
    authenticates the same token, same email, same Pro, same ideas.
+10. **Durability guard** — `GET /v1/health` reports the storage mode; `assertDurableStorage()`
+    **throws on boot** on a container host with ephemeral local storage (no volume, no override),
+    and passes once a volume is attached. `server.ts` calls it before `Bun.serve`, so a
+    misconfigured deploy fails instead of coming up and losing every session on the next redeploy.

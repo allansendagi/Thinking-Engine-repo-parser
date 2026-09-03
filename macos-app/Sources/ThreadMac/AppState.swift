@@ -336,11 +336,30 @@ final class AppState: ObservableObject {
     }
 
     func unpair() {
+        // Revoke this device's token server-side (best-effort) before dropping the local copy, so
+        // "Sign out" actually ends the session everywhere -- not just on this Mac.
+        if let cred = CredentialStore.credentials {
+            let base = apiBaseUrl
+            Task.detached {
+                try? await APIClient(baseURL: base, credentials: cred).signOutThisDevice()
+            }
+        }
         CredentialStore.clear()
         userId = nil
         thinkingState = nil
         searchResults = []
         closeIdea()
+    }
+
+    /// Sign out every other device on this account (keeps this Mac signed in).
+    func signOutOtherDevices() async {
+        guard isPaired else { return }
+        do {
+            let n = try await client.signOutOtherDevices()
+            errorMessage = n > 0 ? "Signed out \(n) other device\(n == 1 ? "" : "s")." : "No other devices were signed in."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func useExistingCredentials(userId: String, token: String) {

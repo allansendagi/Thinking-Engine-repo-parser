@@ -67,9 +67,14 @@ final class APIClient {
         }
     }
 
+    /// The label this device carries in the account's session list. The browser extension adopts
+    /// this same token via the local pairing server, so the one label names both.
+    static let deviceName = "Thread for Mac (+ browser)"
+
     static func createUser(baseURL: String, session: URLSession = .shared) async throws -> CreatedUser {
         let client = APIClient(baseURL: baseURL, credentials: nil, session: session)
-        return try await client.request("/v1/users", method: "POST")
+        let body = try JSONEncoder().encode(["deviceName": deviceName])
+        return try await client.request("/v1/users", method: "POST", body: body)
     }
 
     // MARK: - Passwordless sign-in (email + 6-digit code)
@@ -84,8 +89,25 @@ final class APIClient {
 
     static func authVerify(baseURL: String, email: String, code: String, session: URLSession = .shared) async throws -> CreatedUser {
         let client = APIClient(baseURL: baseURL, credentials: nil, session: session)
-        let body = try JSONEncoder().encode(["email": email, "code": code])
+        let body = try JSONEncoder().encode(["email": email, "code": code, "deviceName": deviceName])
         return try await client.request("/v1/auth/verify", method: "POST", body: body)
+    }
+
+    // MARK: - Device sessions
+
+    struct RevokedResponse: Decodable { let revoked: Int }
+
+    /// Sign this device out server-side (revoke exactly this token). Best-effort at unpair time.
+    func signOutThisDevice() async throws {
+        struct Empty: Decodable {}
+        let _: Empty = try await request("/v1/auth/session", method: "DELETE")
+    }
+
+    /// Sign out every other device on this account; this one keeps working.
+    @discardableResult
+    func signOutOtherDevices() async throws -> Int {
+        let r: RevokedResponse = try await request("/v1/auth/sessions/revoke-others", method: "POST")
+        return r.revoked
     }
 
     /// Claim the current (bearer-authed) account by attaching a verified email.

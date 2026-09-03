@@ -54,8 +54,13 @@ async function run(): Promise<void> {
   const authed = (tok: string, p: string, init: RequestInit = {}) =>
     call(p, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${tok}`, "content-type": "application/json" } });
   const post = (v: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(v) });
-  const startVerify = async (path: "/v1/auth/verify" | "/v1/account/email/verify", email: string, code: string, tok?: string) =>
-    tok ? authed(tok, path, post({ email, code })) : call(path, post({ email, code }));
+  const startVerify = async (
+    path: "/v1/auth/verify" | "/v1/account/email/verify",
+    email: string,
+    code: string,
+    tok?: string,
+    deviceName?: string,
+  ) => (tok ? authed(tok, path, post({ email, code, deviceName })) : call(path, post({ email, code, deviceName })));
 
   // ============================================================================================
   phase("Phase 1 — The 6-digit code: TTL, single-use, attempt cap, rate limit, hashed at rest");
@@ -138,10 +143,10 @@ async function run(): Promise<void> {
   check("the original device token still works after the claim", (await authed(`${anon.userId}:${anon.token}`, "/v1/account")).status === 200);
 
   // ============================================================================================
-  phase("Phase 5 — Sign in on more devices: many live tokens, case-insensitive email");
-  const phone = (await (await startVerify("/v1/auth/verify", email.toUpperCase(), await issueCode(email))).json()) as { userId: string; token: string };
+  phase("Phase 5 — Sign in on more devices: many live tokens, case-insensitive email, labels");
+  const phone = (await (await startVerify("/v1/auth/verify", email.toUpperCase(), await issueCode(email), undefined, "iPhone")).json()) as { userId: string; token: string };
   check("signing in with EMAIL.toUpperCase() lands on the SAME account", phone.userId === anon.userId && phone.token !== anon.token, phone.userId);
-  const laptop = (await (await startVerify("/v1/auth/verify", email, await issueCode(email))).json()) as { userId: string; token: string };
+  const laptop = (await (await startVerify("/v1/auth/verify", email, await issueCode(email), undefined, "Work laptop")).json()) as { userId: string; token: string };
 
   check("all three device tokens authenticate at the same time (per-device, nothing rotated)",
     (await verifyToken(anon.userId, anon.token)) &&
@@ -156,14 +161,53 @@ async function run(): Promise<void> {
   };
   check("registry shows 3 live tokens for the one account", tokenCount() === 3, tokenCount());
 
+  const sessions = (await (await authed(`${anon.userId}:${anon.token}`, "/v1/auth/sessions")).json()) as {
+    sessions: { id: string; label: string; createdAt: string; lastSeenAt: string | null; current: boolean }[];
+  };
+  check("GET /v1/auth/sessions lists all 3, with labels, timestamps, and exactly one flagged 'current'",
+    sessions.sessions.length === 3 &&
+      sessions.sessions.filter((s) => s.current).length === 1 &&
+      sessions.sessions.some((s) => s.label === "iPhone") &&
+      sessions.sessions.some((s) => s.label === "Work laptop") &&
+      sessions.sessions.every((s) => /^[a-f0-9]{16}$/.test(s.id) && !!s.lastSeenAt),
+    sessions.sessions);
+  check("the session list never leaks a full token hash",
+    !JSON.stringify(sessions).includes(await sha256Hex(anon.token)));
+
   // ============================================================================================
-  phase("Phase 6 — Sign out one device");
-  // "Sign out" / "Unpair" in the clients discards the LOCAL token only — there is no server-side
-  // revoke endpoint today, so the other devices are untouched by construction.
-  check("after the phone 'signs out' locally, the Mac + laptop tokens still work",
-    (await verifyToken(anon.userId, anon.token)) && (await verifyToken(anon.userId, laptop.token)));
-  check("NOTE: the phone's token hash is still in auth_tokens — no server-side revoke exists yet",
-    tokenCount() === 3);
+  phase("Phase 6 — Sign out: this device, a named other device, everywhere else");
+
+  // (a) "Sign out this device" — DELETE /v1/auth/session revokes exactly the calling token.
+  const outThis = await authed(`${phone.userId}:${phone.token}`, "/v1/auth/session", { method: "DELETE" });
+  check("DELETE /v1/auth/session (as the phone) → { revoked: 1 }", ((await outThis.json()) as { revoked: number }).revoked === 1);
+  check("the phone's token now 401s; Mac + laptop still work",
+    !(await verifyToken(anon.userId, phone.token)) &&
+      (await authed(`${anon.userId}:${anon.token}`, "/v1/account")).status === 200 &&
+      (await authed(`${laptop.userId}:${laptop.token}`, "/v1/account")).status === 200);
+  check("registry is down to 2 tokens", tokenCount() === 2, tokenCount());
+
+  // (b) "Sign out that device" — DELETE /v1/auth/sessions/:id, by the id from the list.
+  const list2 = (await (await authed(`${anon.userId}:${anon.token}`, "/v1/auth/sessions")).json()) as {
+    sessions: { id: string; label: string; current: boolean }[];
+  };
+  const laptopId = list2.sessions.find((s) => s.label === "Work laptop")!.id;
+  const outThat = await authed(`${anon.userId}:${anon.token}`, `/v1/auth/sessions/${laptopId}`, { method: "DELETE" });
+  check("DELETE /v1/auth/sessions/<laptop id> (as the Mac) → { revoked: 1 }", ((await outThat.json()) as { revoked: number }).revoked === 1);
+  check("the laptop token now 401s; the Mac still works",
+    !(await verifyToken(laptop.userId, laptop.token)) && (await authed(`${anon.userId}:${anon.token}`, "/v1/account")).status === 200);
+  check("revoking an unknown session id → 404", (await authed(`${anon.userId}:${anon.token}`, `/v1/auth/sessions/${"0".repeat(16)}`, { method: "DELETE" })).status === 404);
+
+  // (c) "Sign out everywhere else" — POST /v1/auth/sessions/revoke-others keeps only the caller.
+  const d1 = (await (await startVerify("/v1/auth/verify", email, await issueCode(email), undefined, "Tablet")).json()) as { userId: string; token: string };
+  const d2 = (await (await startVerify("/v1/auth/verify", email, await issueCode(email), undefined, "Second laptop")).json()) as { userId: string; token: string };
+  check("back up to 3 tokens after two more sign-ins", tokenCount() === 3, tokenCount());
+  const revokeOthers = await authed(`${anon.userId}:${anon.token}`, "/v1/auth/sessions/revoke-others", { method: "POST" });
+  check("POST /v1/auth/sessions/revoke-others → { revoked: 2 }", ((await revokeOthers.json()) as { revoked: number }).revoked === 2);
+  check("only the Mac survives; the two new devices 401",
+    (await authed(`${anon.userId}:${anon.token}`, "/v1/account")).status === 200 &&
+      !(await verifyToken(d1.userId, d1.token)) && !(await verifyToken(d2.userId, d2.token)),
+    tokenCount());
+  check("registry is back to 1 token", tokenCount() === 1, tokenCount());
 
   // ============================================================================================
   phase("Phase 7 — One account per email");
@@ -194,10 +238,11 @@ async function run(): Promise<void> {
     event_type: "subscription.activated",
     data: { id: "sub_id", customer_id: "ctm_id", status: "active", custom_data: { thread_user_id: anon.userId }, current_billing_period: { ends_at: new Date(Date.now() + 30 * 86_400_000).toISOString() } },
   });
+  const otherDevice = (await (await startVerify("/v1/auth/verify", email, await issueCode(email), undefined, "Home desktop")).json()) as { userId: string; token: string };
   const macAcct = (await (await authed(`${anon.userId}:${anon.token}`, "/v1/account")).json()) as Record<string, unknown>;
-  const laptopAcct = (await (await authed(`${laptop.userId}:${laptop.token}`, "/v1/account")).json()) as Record<string, unknown>;
+  const otherAcct = (await (await authed(`${otherDevice.userId}:${otherDevice.token}`, "/v1/account")).json()) as Record<string, unknown>;
   check("the payment (keyed by thread_user_id) makes the ACCOUNT Pro — seen from every device",
-    macAcct.plan === "pro" && macAcct.isPro === true && laptopAcct.plan === "pro" && laptopAcct.isPro === true, { macAcct, laptopAcct });
+    macAcct.plan === "pro" && macAcct.isPro === true && otherAcct.plan === "pro" && otherAcct.isPro === true, { macAcct, otherAcct });
   const regPaid = openRegistry();
   const paidRow = regPaid.query("SELECT paddle_customer_id, paddle_subscription_id, current_period_end FROM users WHERE id = ?").get(anon.userId) as Record<string, unknown>;
   regPaid.close();
@@ -216,6 +261,42 @@ async function run(): Promise<void> {
   check("  → still the same email, still Pro, ideas intact",
     arBody.email === email && arBody.isPro === true &&
       ((await (await authed(`${anon.userId}:${anon.token}`, "/v1/ideas?q=idea")).json()) as unknown[]).length === 1, arBody);
+
+  // ============================================================================================
+  phase("Phase 10 — Durability guard: don't boot on ephemeral storage");
+  const health = (await (await call("/v1/health")).json()) as { status: string; storage: string };
+  check("GET /v1/health reports the storage mode (monitoring can catch an ephemeral deploy)",
+    health.status === "ok" && health.storage === "explicit", health);
+  const { assertDurableStorage } = await import("../src/db/durability");
+  const savedRailway = process.env.RAILWAY_ENVIRONMENT;
+  const savedReg = process.env.THREAD_REGISTRY_PATH;
+  const savedData = process.env.THREAD_DATA_DIR;
+  try {
+    process.env.RAILWAY_ENVIRONMENT = "production";
+    delete process.env.THREAD_REGISTRY_PATH;
+    delete process.env.THREAD_DATA_DIR;
+    let threw = false;
+    try {
+      assertDurableStorage();
+    } catch {
+      threw = true;
+    }
+    check("on a container host with no volume + no override, boot THROWS (fails the deploy)", threw);
+    process.env.RAILWAY_VOLUME_MOUNT_PATH = "/vol";
+    let threw2 = false;
+    try {
+      assertDurableStorage();
+    } catch {
+      threw2 = true;
+    }
+    check("...but boots fine once a persistent volume is attached", !threw2);
+    delete process.env.RAILWAY_VOLUME_MOUNT_PATH;
+  } finally {
+    if (savedRailway === undefined) delete process.env.RAILWAY_ENVIRONMENT;
+    else process.env.RAILWAY_ENVIRONMENT = savedRailway;
+    if (savedReg !== undefined) process.env.THREAD_REGISTRY_PATH = savedReg;
+    if (savedData !== undefined) process.env.THREAD_DATA_DIR = savedData;
+  }
 }
 
 try {
@@ -238,7 +319,12 @@ How it works, confirmed by this run:
     it), lower-cased for matching, unique — one account per email, many email-less accounts fine.
   • A device is remembered by an opaque bearer token (user_<24hex>:<64hex>), SHA-256-hashed at
     rest, shown once. Per-device: an account holds many live tokens; signing in adds one and
-    rotates nothing. (Gap: no server-side revoke — 'sign out' only drops the local copy.)
+    rotates nothing. Each token carries a label + throttled last-seen.
+  • Server-side revocation: GET /v1/auth/sessions lists devices; DELETE /v1/auth/session signs
+    out this one; DELETE /v1/auth/sessions/:id signs out a named one; POST
+    /v1/auth/sessions/revoke-others signs out everywhere else. A revoked token 401s immediately.
+  • Durability: the API refuses to BOOT on a container host with ephemeral local storage
+    (assertDurableStorage in server.ts); /v1/health reports the storage mode.
   • First launch mints an anonymous Free account so capture works with zero setup; attaching an
     email later keeps every idea.
   • Charging: Paddle checkout on the website carries thread_user_id; the signed webhook flips

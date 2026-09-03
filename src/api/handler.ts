@@ -2,12 +2,18 @@ import { randomUUID } from "node:crypto";
 import {
   attachEmail,
   createUser,
+  deviceLabel,
   EmailInUseError,
   findAccountByEmail,
   getAccount,
   issueToken,
+  listSessions,
   reassignEmail,
-  verifyToken,
+  revokeOtherSessions,
+  revokeSession,
+  revokeTokenHash,
+  touchToken,
+  verifyTokenHash,
 } from "./auth";
 import { consumeCode, issueCode, RateLimitedError } from "./authCodes";
 import { sendEmail, signInCodeEmail } from "./email";
@@ -21,6 +27,7 @@ import {
   verifyPaddleSignature,
 } from "./billing";
 import { openUserDb } from "../db/tenancy";
+import { storageMode } from "../db/durability";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
@@ -85,6 +92,12 @@ function sanitizeSourceUrl(raw: unknown): string | null {
   }
 }
 
+/** A device label from an explicit `deviceName` in the request body, else the User-Agent. */
+function deviceNameFrom(body: { deviceName?: unknown } | null, req: Request): string {
+  const given = typeof body?.deviceName === "string" ? body.deviceName : undefined;
+  return deviceLabel(given, req.headers.get("user-agent"));
+}
+
 /** This user's current idea-node count -- drives the Free plan's capture cap. */
 function ideaCountFor(userId: string): number {
   const db = openUserDb(userId);
@@ -105,15 +118,19 @@ function accountIsEmpty(userId: string): boolean {
   }
 }
 
-/** `Authorization: Bearer <userId>:<token>`. Returns the userId if valid, or a 401 Response. */
-async function authenticate(req: Request): Promise<string | Response> {
+/**
+ * `Authorization: Bearer <userId>:<token>`. On success returns `{ userId, tokenHash }` -- the
+ * hash identifies which device row made the request (for last-seen, the session list, and "sign
+ * out this device"). On failure returns a 401 Response.
+ */
+async function authenticate(req: Request): Promise<{ userId: string; tokenHash: string } | Response> {
   const header = req.headers.get("authorization") ?? "";
   const match = header.match(/^Bearer (user_[a-f0-9]{24}):([a-f0-9]{64})$/);
   if (!match) return error(401, "Missing or malformed Authorization header");
   const [, userId, token] = match as unknown as [string, string, string];
-  const ok = await verifyToken(userId, token);
-  if (!ok) return error(401, "Invalid credentials");
-  return userId;
+  const tokenHash = await verifyTokenHash(userId, token);
+  if (!tokenHash) return error(401, "Invalid credentials");
+  return { userId, tokenHash };
 }
 
 export function createRequestHandler(providers: PipelineProviders): (req: Request) => Promise<Response> {
@@ -122,11 +139,17 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     const { pathname } = url;
 
     if (req.method === "GET" && pathname === "/v1/health") {
-      return json({ status: "ok" });
+      return json({ status: "ok", storage: storageMode() });
     }
 
     if (req.method === "POST" && pathname === "/v1/users") {
-      const user = await createUser();
+      let uBody: { deviceName?: string } = {};
+      try {
+        uBody = (await req.json()) as { deviceName?: string };
+      } catch {
+        /* body is optional here */
+      }
+      const user = await createUser(undefined, deviceNameFrom(uBody, req));
       return json(user, 201);
     }
 
@@ -152,9 +175,9 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     }
 
     if (req.method === "POST" && pathname === "/v1/auth/verify") {
-      let body: { email?: string; code?: string };
+      let body: { email?: string; code?: string; deviceName?: string };
       try {
-        body = (await req.json()) as { email?: string; code?: string };
+        body = (await req.json()) as { email?: string; code?: string; deviceName?: string };
       } catch {
         return error(400, "Invalid JSON body");
       }
@@ -163,14 +186,15 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return error(400, "Email and 6-digit code are required");
       if (!(await consumeCode(email, code))) return error(400, "That code is wrong or expired", "bad_code");
 
+      const label = deviceNameFrom(body, req);
       const existing = findAccountByEmail(email);
       if (existing) {
         // Sign-in issues a token for *this* device. Other devices (Mac app, extension,
         // desktop agent) keep their own tokens -- see auth.ts `auth_tokens`.
-        const token = await issueToken(existing.userId);
+        const token = await issueToken(existing.userId, label);
         return json({ userId: existing.userId, token });
       }
-      const created = await createUser(email);
+      const created = await createUser(email, label);
       return json(created, 201);
     }
 
@@ -194,7 +218,26 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     // Every route below requires auth.
     const auth = await authenticate(req);
     if (auth instanceof Response) return auth;
-    const userId = auth;
+    const { userId, tokenHash } = auth;
+    touchToken(tokenHash); // throttled last-seen bump for the session list
+
+    // --- Device sessions (list / revoke) --------------------------------------------------
+    if (req.method === "GET" && pathname === "/v1/auth/sessions") {
+      return json({ sessions: listSessions(userId, tokenHash) });
+    }
+    if (req.method === "DELETE" && pathname === "/v1/auth/session") {
+      // Sign out THIS device -- revoke exactly the token that made this request.
+      return json({ revoked: revokeTokenHash(tokenHash) });
+    }
+    if (req.method === "POST" && pathname === "/v1/auth/sessions/revoke-others") {
+      // Sign out everywhere else -- keep only the caller's token.
+      return json({ revoked: revokeOtherSessions(userId, tokenHash) });
+    }
+    const sessionMatch = pathname.match(/^\/v1\/auth\/sessions\/([a-f0-9]{16})$/);
+    if (req.method === "DELETE" && sessionMatch) {
+      const n = revokeSession(userId, sessionMatch[1]!);
+      return n > 0 ? json({ revoked: n }) : error(404, "No such session");
+    }
 
     if (req.method === "GET" && pathname === "/v1/account") {
       const account = getAccount(userId);

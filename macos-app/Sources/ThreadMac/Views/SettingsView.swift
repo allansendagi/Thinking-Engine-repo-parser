@@ -30,6 +30,9 @@ struct SettingsView: View {
                         Button("Sign out", role: .destructive) { appState.unpair(); dismiss() }
                             .controlSize(.small)
                     }
+                    Button("Sign out other devices") { Task { await appState.signOutOtherDevices() } }
+                        .controlSize(.small).font(.caption)
+                        .help("Revokes every other browser, phone, or Mac signed into this account. This one stays signed in.")
                 } else {
                     Text("This Mac uses an account with no email. Add one to buy Pro on the website and sign in on other devices — your ideas stay.")
                         .font(.caption).foregroundColor(.secondary)
