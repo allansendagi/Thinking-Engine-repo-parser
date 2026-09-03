@@ -19,11 +19,11 @@ struct WindowAccessor: NSViewRepresentable {
     }
 }
 
-/// Makes the green button enter real macOS full-screen -- menu bar hidden, the window covering
-/// the entire display -- the way ChatGPT and most modern Mac apps behave. `.fullScreenPrimary`
-/// alone often leaves a SwiftUI single-`Window` scene still just "zooming", so the zoom button's
-/// action is set explicitly to `toggleFullScreen:`. `windowWillUseStandardFrame` keeps the
-/// non-full-screen zoom paths (option-click, Window menu) maximising to the visible frame.
+/// Native window behaviour, like Notes/Finder: a plain click on the green button zooms the window
+/// to fill the visible screen (menu bar stays), and its hover menu still offers "Enter Full
+/// Screen" / Tile because we keep `.fullScreenPrimary`. `windowWillUseStandardFrame` returning
+/// the screen's visible frame is all it takes to make the plain-click zoom fill the display --
+/// we do NOT override the zoom button's action (that broke the titlebar rendering).
 final class WindowChrome: NSObject, NSWindowDelegate {
     weak var forward: NSWindowDelegate?
 
@@ -43,12 +43,13 @@ final class WindowChrome: NSObject, NSWindowDelegate {
 private var windowChromeStore: [ObjectIdentifier: WindowChrome] = [:]
 
 extension View {
-    /// Standard full-window configuration: green button enters full-screen, resizable,
-    /// non-restorable, no window tabbing.
+    /// Full-window config: full-screen capable, non-restorable, no tabbing, and a delegate so the
+    /// green-button zoom fills the visible screen. Deliberately leaves the style mask and the zoom
+    /// button's action ALONE -- SwiftUI's `Window` scene already gives a proper titled/resizable
+    /// window, and overriding the zoom action was what made the titlebar render broken.
     func fullWindowChrome() -> some View {
         background(
             WindowAccessor { w in
-                w.styleMask.insert([.resizable, .miniaturizable, .closable, .titled])
                 w.collectionBehavior.insert(.fullScreenPrimary)
                 w.isRestorable = false
                 w.tabbingMode = .disallowed
@@ -63,12 +64,6 @@ extension View {
                 if w.delegate !== chrome {
                     chrome.forward = w.delegate
                     w.delegate = chrome
-                }
-                // Green button -> real full-screen (covers the whole display, hides the menu bar).
-                if let zoom = w.standardWindowButton(.zoomButton),
-                   zoom.action != #selector(NSWindow.toggleFullScreen(_:)) {
-                    zoom.target = w
-                    zoom.action = #selector(NSWindow.toggleFullScreen(_:))
                 }
             }
         )

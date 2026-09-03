@@ -15,20 +15,24 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Account", systemImage: "person.crop.circle")
                     .font(.subheadline).fontWeight(.medium)
-                if let email = appState.account?.email {
-                    VStack(alignment: .leading, spacing: 2) {
+
+                // Plan state -- always visible once the account has loaded.
+                VStack(alignment: .leading, spacing: 2) {
+                    if let email = appState.account?.email {
                         Text(email).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                        Text(subscriptionLine).font(.caption).foregroundColor(.secondary)
                     }
+                    Text(subscriptionLine).font(.caption).foregroundColor(.secondary)
+                }
 
-                    if appState.account?.isPro == true {
-                        Button("Manage Subscription") { Task { await appState.openBillingPortal() } }
-                            .controlSize(.small)
-                    } else {
-                        Button("Subscribe to Pro") { appState.openUpgradePage() }
-                            .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
-                    }
+                if appState.account?.isPro == true {
+                    Button("Manage Subscription") { Task { await appState.openBillingPortal() } }
+                        .controlSize(.small)
+                } else {
+                    Button("Subscribe to Pro") { appState.openUpgradePage() }
+                        .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
+                }
 
+                if appState.account?.email != nil {
                     HStack(spacing: 12) {
                         Button("Sign Out", role: .destructive) { appState.unpair(); dismiss() }
                             .controlSize(.small)
@@ -37,9 +41,10 @@ struct SettingsView: View {
                             .help("Revokes every other browser, phone, or Mac signed into this account. This one stays signed in.")
                     }
                 } else {
-                    Text("This Mac uses an account with no email. Add one to subscribe on the website and sign in on other devices — your ideas stay.")
+                    Text("Add your email to check out on the website, then sign back in on any device — your ideas stay put.")
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
                     EmailCodeForm(
                         title: "Add your email",
                         sendCode: { await appState.sendClaimCode(email: $0) },

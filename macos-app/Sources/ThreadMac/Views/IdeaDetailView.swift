@@ -263,35 +263,37 @@ private struct EvolutionRow: View {
     }
 }
 
-/// The 30pt timeline column: one straight 1.5pt rail + a dot. On the top row the rail starts at
-/// the dot (16pt down); on the bottom row it stops at the dot; every row in between carries a
-/// full-height segment — so the stack reads as one unbroken vertical line. No GeometryReader:
-/// a bare greedy `Rectangle` fills the row height the content column defines, which lays out
-/// more predictably across passes.
+/// The 30pt timeline column: one straight 1.5pt rail + a dot. The rail is drawn as a `Path`
+/// inside an overlay on `Color.clear` — nothing here demands a size, it just fills the row
+/// height the content column defines. On the top row the line starts at the dot (16pt); on the
+/// bottom row it stops at the dot; rows between carry a full-height segment, so the stack reads
+/// as one unbroken line.
 private struct EvolutionRail: View {
     let isTop: Bool
     let isBottom: Bool
 
     var body: some View {
-        ZStack(alignment: .top) {
-            VStack(spacing: 0) {
-                if isTop { Color.clear.frame(height: 16) }
-                if isBottom {
-                    Rectangle().fill(Theme.rail).frame(width: 1.5, height: isTop ? 0 : 16)
-                    Spacer(minLength: 0)
-                } else {
-                    Rectangle().fill(Theme.rail).frame(width: 1.5)  // greedy height → fills the row
+        Color.clear
+            .frame(width: 30)
+            .overlay {
+                GeometryReader { geo in
+                    let x = geo.size.width / 2
+                    let top: CGFloat = isTop ? 16 : 0
+                    let bottom: CGFloat = isBottom ? 16 : geo.size.height
+                    Path { p in
+                        p.move(to: CGPoint(x: x, y: top))
+                        p.addLine(to: CGPoint(x: x, y: max(top, bottom)))
+                    }
+                    .stroke(Theme.rail, style: StrokeStyle(lineWidth: 1.5))
                 }
             }
-            .frame(maxWidth: .infinity)
-
-            Circle()
-                .fill(isTop ? Theme.accent : Theme.railDot)
-                .frame(width: isTop ? 7 : 5, height: isTop ? 7 : 5)
-                .overlay(Circle().stroke(Color.white.opacity(0.92), lineWidth: 3).padding(-0.75))
-                .padding(.top, 13)
-        }
-        .frame(width: 30)
+            .overlay(alignment: .top) {
+                Circle()
+                    .fill(isTop ? Theme.accent : Theme.railDot)
+                    .frame(width: isTop ? 7 : 5, height: isTop ? 7 : 5)
+                    .overlay(Circle().stroke(Color.white.opacity(0.92), lineWidth: 3).padding(-0.75))
+                    .padding(.top, 13)
+            }
     }
 }
 
