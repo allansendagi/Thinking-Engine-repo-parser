@@ -1,11 +1,12 @@
 # End-to-end simulations
 
 ```sh
-bun run e2e            # journey.ts  — the whole user journey, 46 checks
-bun run e2e:payments   # payments.ts — the Paddle billing surface, 30 checks
+bun run e2e            # journey.ts   — the whole user journey, 46 checks
+bun run e2e:payments   # payments.ts  — the Paddle billing surface, 30 checks
+bun run e2e:identity   # identity.ts  — passwordless auth + "remember me", 32 checks
 ```
 
-Both are deterministic, no API key, ~1s, exit non-zero on the first failure, and run in CI
+All three are deterministic, no API key, ~1s, exit non-zero on the first failure, and run in CI
 (backend job). They drive the real HTTP handler (`src/api/handler.ts`) and assert at every step.
 
 The extraction and identity-resolution models are **faked deterministically** (`journey/fixtures.ts`)
@@ -99,3 +100,33 @@ checkout, tax calculation, or `Paddle.js`. Once per environment, do this by hand
    period end.
 
 Everything downstream of step 6's webhook is what `payments.ts` already proves.
+
+---
+
+# identity.ts — passwordless accounts, devices, "remember me"
+
+32 checks, 9 phases, through the real handler **and** by reading `registry.db` directly:
+
+1. **The 6-digit code** — `issueCode` returns 6 random digits; stored **SHA-256 hashed**
+   (`login_codes.code_hash`), ~10-min TTL, **single-use** (deleted on match), **5 wrong guesses
+   burn it**, **6th issue within an hour → `RateLimitedError` (429)**. `/v1/auth/start` is always
+   `200 {ok:true}` — no account enumeration.
+2. **First launch** — `POST /v1/users` → `user_<24hex>:<64hex>`, Free plan, `email: null`.
+3. **Token storage** — the bearer token is **SHA-256 hashed at rest** (`auth_tokens.token_hash`),
+   shown once; malformed header or wrong token → 401.
+4. **Claim** — attach an email to the anonymous account; `users.email` stored (plaintext — it's an
+   identifier and we email to it) with `email_verified_at`; **every idea captured before the claim
+   is kept**; the original device token keeps working.
+5. **More devices** — signing in with `EMAIL.toUpperCase()` lands on the **same** account
+   (case-insensitive unique index); **3 device tokens authenticate simultaneously**, nothing
+   rotated; `auth_tokens` shows 3 rows for the one account.
+6. **Sign out one device** — clients discard the *local* token only; the others are untouched.
+   **Documented gap: there is no server-side revoke endpoint**, so a lost device's token hash
+   stays in `auth_tokens` until (not yet built) revocation exists.
+7. **One account per email** — a rival claiming an in-use email with data → `409 email_in_use`; a
+   new email find-or-creates; an email on an *empty* account is reclaimed onto the one with data.
+8. **Charging maps to the account** — a webhook keyed by `custom_data.thread_user_id` flips
+   `users.plan` and stores `paddle_customer_id` / `paddle_subscription_id`; **every device sees
+   Pro**, and a brand-new sign-in is Pro immediately (entitlement is on the account, not the device).
+9. **Restart durability** — a fresh handler instance over the same `registry.db` still
+   authenticates the same token, same email, same Pro, same ideas.
