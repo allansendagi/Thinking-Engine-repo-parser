@@ -164,11 +164,11 @@ private struct IdeaListColumn: View {
             }
         }
         // .safeAreaInset pins the field above the scrolling rows and insets them beneath it. The
-        // 34pt top pad clears the transparent window titlebar (this window draws full-bleed under
-        // it, so the SwiftUI safe area doesn't already exclude it the way a stock List does).
+        // window now has a normal opaque titlebar (see fullWindowChrome), so AppKit already insets
+        // the content below it -- a plain 10pt top pad is all this needs.
         .safeAreaInset(edge: .top, spacing: 0) {
             SearchField()
-                .padding(.horizontal, 14).padding(.top, 34).padding(.bottom, 10)
+                .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 10)
                 .background(Theme.panelTint.opacity(0.92))
         }
     }
