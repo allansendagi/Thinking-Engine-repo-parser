@@ -129,12 +129,20 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
   }
 }
 
+/** The parsed `THREAD_ADMIN_EMAILS` list (lowercased, deduped). Empty if unset. */
+export function adminEmails(): string[] {
+  return [
+    ...new Set(
+      (process.env.THREAD_ADMIN_EMAILS ?? "")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 /** Comma-separated `THREAD_ADMIN_EMAILS`. Nobody is admin if it's unset. */
 export function isAdmin(email: string | null | undefined): boolean {
   if (!email) return false;
-  const set = (process.env.THREAD_ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  return set.includes(email.toLowerCase());
+  return adminEmails().includes(email.toLowerCase());
 }

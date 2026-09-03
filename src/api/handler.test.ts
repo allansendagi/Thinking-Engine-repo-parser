@@ -580,4 +580,47 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       __resetRateLimiter();
     }
   });
+
+  test("feedback: public POST stores a row; too-short is rejected", async () => {
+    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+
+    const short = await handler(
+      new Request("http://x/v1/feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "bug", message: "broke" }),
+      }),
+    );
+    expect(short.status).toBe(400);
+    expect(((await short.json()) as { code: string }).code).toBe("message_too_short");
+
+    const ok = await handler(
+      new Request("http://x/v1/feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json", "user-agent": "TestUA/1.0" },
+        body: JSON.stringify({
+          kind: "idea",
+          message: "The evolution view could show timestamps.",
+          email: "reporter@example.com",
+          page: "/get-started",
+        }),
+      }),
+    );
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { ok: boolean }).ok).toBe(true);
+
+    const { openRegistry } = await import("./auth");
+    const db = openRegistry();
+    try {
+      const row = db
+        .query("SELECT kind, email, page, user_agent FROM feedback ORDER BY id DESC LIMIT 1")
+        .get() as { kind: string; email: string; page: string; user_agent: string };
+      expect(row.kind).toBe("idea");
+      expect(row.email).toBe("reporter@example.com");
+      expect(row.page).toBe("/get-started");
+      expect(row.user_agent).toBe("TestUA/1.0");
+    } finally {
+      db.close();
+    }
+  });
 });
