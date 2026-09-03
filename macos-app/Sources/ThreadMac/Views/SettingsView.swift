@@ -12,29 +12,32 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Settings").font(.headline)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 Label("Account", systemImage: "person.crop.circle")
                     .font(.subheadline).fontWeight(.medium)
                 if let email = appState.account?.email {
-                    Text(email).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    Text(appState.planLabel == "Cloud" ? "Signed in" : appState.planLabel)
-                        .font(.caption).foregroundColor(.secondary)
-                    HStack(spacing: 8) {
-                        if appState.account?.isPro == true {
-                            Button("Manage billing") { Task { await appState.openBillingPortal() } }
-                                .controlSize(.small)
-                        } else {
-                            Button("Upgrade to Pro") { appState.openUpgradePage() }
-                                .controlSize(.small)
-                        }
-                        Button("Sign out", role: .destructive) { appState.unpair(); dismiss() }
-                            .controlSize(.small)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(email).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        Text(subscriptionLine).font(.caption).foregroundColor(.secondary)
                     }
-                    Button("Sign out other devices") { Task { await appState.signOutOtherDevices() } }
-                        .controlSize(.small).font(.caption)
-                        .help("Revokes every other browser, phone, or Mac signed into this account. This one stays signed in.")
+
+                    if appState.account?.isPro == true {
+                        Button("Manage Subscription") { Task { await appState.openBillingPortal() } }
+                            .controlSize(.small)
+                    } else {
+                        Button("Subscribe to Pro") { appState.openUpgradePage() }
+                            .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
+                    }
+
+                    HStack(spacing: 12) {
+                        Button("Sign Out", role: .destructive) { appState.unpair(); dismiss() }
+                            .controlSize(.small)
+                        Button("Sign out other devices") { Task { await appState.signOutOtherDevices() } }
+                            .controlSize(.small)
+                            .help("Revokes every other browser, phone, or Mac signed into this account. This one stays signed in.")
+                    }
                 } else {
-                    Text("This Mac uses an account with no email. Add one to buy Pro on the website and sign in on other devices — your ideas stay.")
+                    Text("This Mac uses an account with no email. Add one to subscribe on the website and sign in on other devices — your ideas stay.")
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     EmailCodeForm(
@@ -138,6 +141,35 @@ struct SettingsView: View {
         .frame(width: 340)
         .tint(Theme.accent)   // buttons follow the app accent, not the OS accent colour
         .onAppear { urlDraft = appState.apiBaseUrl }
+    }
+
+    /// One clean line describing the plan -- the only place subscription state lives in the app.
+    private var subscriptionLine: String {
+        guard let a = appState.account else { return "Signed in" }
+        if a.isPro {
+            switch a.status {
+            case "canceled":
+                if let end = a.currentPeriodEnd { return "Thread Pro · Ends \(Self.shortDate(end))" }
+                return "Thread Pro · Ending"
+            case "past_due":
+                return "Thread Pro · Payment issue"
+            default:
+                return "Thread Pro"
+            }
+        }
+        let capped = a.ideaCount >= a.ideaCap
+        return "Thread Free · \(a.ideaCount) of \(a.ideaCap) ideas" + (capped ? " · limit reached" : "")
+    }
+
+    private static func shortDate(_ iso: String) -> String {
+        let parsers = [ISO8601DateFormatter(), { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()]
+        for p in parsers {
+            if let d = p.date(from: iso) {
+                let out = DateFormatter(); out.dateStyle = .medium
+                return out.string(from: d)
+            }
+        }
+        return String(iso.prefix(10))
     }
 }
 

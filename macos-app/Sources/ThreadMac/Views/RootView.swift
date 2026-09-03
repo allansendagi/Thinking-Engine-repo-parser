@@ -12,7 +12,7 @@ struct RootView: View {
         VStack(spacing: 0) {
             header
 
-            if appState.showsPaywallBanner {
+            if appState.showsPaywallBanner && !inDetail {
                 PaywallBanner()
             }
 

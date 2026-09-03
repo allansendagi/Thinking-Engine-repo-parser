@@ -79,17 +79,8 @@ struct MainWindowView: View {
             HStack(spacing: 6) {
                 Glyph(kind: .cloud, size: 12)
                 Text(appState.planLabel).font(.system(size: 11))
-                    .foregroundStyle(appState.isLocked ? Theme.stateColor("contested") : Theme.ink(0.42))
                 Spacer(minLength: 0)
-                if appState.account?.isPro != true {
-                    Button(appState.isLocked ? "Subscribe" : "Upgrade") { appState.openUpgradePage() }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 7).padding(.vertical, 2.5)
-                        .background(Theme.accent, in: Capsule())
-                        .help("Open threadnow.app to subscribe to Pro")
-                } else if let n = appState.thinkingState?.currentIdeas.count {
+                if let n = appState.thinkingState?.currentIdeas.count {
                     Text("\(n)").font(.system(size: 11)).monospacedDigit()
                 }
             }
@@ -146,9 +137,6 @@ private struct IdeaListColumn: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if appState.showsPaywallBanner {
-                PaywallBanner()
-            }
             if !searching, let s = appState.resumeSuggestion {
                 ResumeBar(
                     suggestion: s,
