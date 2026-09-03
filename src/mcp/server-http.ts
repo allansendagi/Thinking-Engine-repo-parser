@@ -26,21 +26,15 @@ const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSO
 type ToolResult = { content: { type: "text"; text: string }[] };
 
 /**
- * Register through one loosely-typed boundary. `server.tool()` infers a very deep conditional
- * type from each zod shape; on Linux (case-sensitive FS, slightly different module-resolution
- * order than macOS) `tsc` tips past its instantiation-depth limit and reports TS2589 for this
- * file -- green locally, red in CI. Widening the schema to the base `ZodRawShape` collapses that
- * inference to a single site. Runtime is unchanged: zod still validates every call; only the
- * compile-time arg shape is widened, so each handler annotates the fields it reads.
+ * Register through one loosely-typed boundary. `McpServer.tool()` is generic over the zod shape
+ * and infers a conditional type deep enough that, on a case-sensitive FS with CI's
+ * module-resolution order, `tsc` reports TS2589 ("excessively deep") for every call site --
+ * green on macOS, red on Linux. Calling it via a structural `{ tool: (...args) => void }` cast
+ * never touches the generic overload, so the inference doesn't happen at all. Runtime is
+ * unchanged (zod still validates every call); handlers annotate the fields they read.
  */
-const tool = (
-  name: string,
-  description: string,
-  schema: z.ZodRawShape,
-  handler: (args: Record<string, unknown>) => Promise<ToolResult>,
-): void => {
-  server.tool(name, description, schema, handler);
-};
+const registrar = server as unknown as { tool: (name: string, description: string, schema: z.ZodRawShape, handler: (args: any) => Promise<ToolResult>) => void };
+const tool = registrar.tool.bind(registrar);
 
 tool(
   "search_ideas",
