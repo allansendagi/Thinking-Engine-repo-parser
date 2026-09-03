@@ -42,17 +42,29 @@ for the adapter warnings above. Fixing a stale selector is a one-file change in
 ```
 content-{chatgpt,claude,gemini}.ts   (IIFE, injected per-site)
         |
-        v  content/adapters/*.ts        (site-specific DOM -> RawMessage[])
+        v  content/adapters/*.ts        (site-specific DOM -> RawMessage[], + getConversationUrl())
         v  content/common/capture.ts    (debounce, position-based ids, local dedup)
+        v  content/common/resumeNudge.ts (on a fresh/empty chat: "pick up where you left off?")
         |
         v  chrome.runtime.sendMessage
 background.ts                          (relays to the API, holds the auth token)
         |
         v  lib/api.ts  ->  Thread API (../src/api)
+        v  lib/resume.ts                 (shared rule with the Mac app: which idea to resurface)
         |
 popup.ts        (pairing / API URL)
 sidepanel.ts     (recovery + correction UI: search, trace, rename, reject/delete, resolve loops, continue)
 ```
+
+### Return nudge
+
+`resumeNudge.ts` runs alongside capture on every supported site. When you land on a *new or
+empty* chat (not an existing thread), it asks the background worker for the one idea you're most
+likely returning to — computed from Thinking State with the exact rule the Mac app uses
+(`lib/resume.ts`: unfinished, 3–45 days old, not snoozed since it last moved). If there is one,
+it draws a small shadow-DOM card bottom-right. **Resume in Thread** opens
+`thread://continue?idea=<id>` (the Mac app builds the packet — no Pro-gated `/v1/continue` call
+from the browser); **Not now** snoozes that idea until it next changes. At most one card per URL.
 
 Message ids are `${conversationId}::${index}` -- position-based, not derived from message text.
 That's deliberate: an assistant reply's text grows while streaming, and a text-derived id would

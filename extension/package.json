@@ -9,6 +9,7 @@
     "test": "bun test"
   },
   "devDependencies": {
+    "@types/bun": "latest",
     "@types/chrome": "^0.0.280",
     "happy-dom": "^15.11.7",
     "typescript": "^5.6.0"

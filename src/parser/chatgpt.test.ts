@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseChatGptExport } from "./chatgpt";
 
-const FIXTURE_PATH = join(import.meta.dir, "../../eval/fixture/conversations.json");
+const FIXTURE_PATH = join(import.meta.dir, "../../eval/cases/authority-payments/conversations.json");
 
 describe("parseChatGptExport", () => {
   test("resolves the kept branch and excludes abandoned regenerations", () => {

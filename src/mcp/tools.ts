@@ -50,6 +50,9 @@ export interface ProvenanceStep {
   sourceRole: string | null;
   /** Which tool this step was captured from -- "chatgpt" | "claude" | "gemini" | "cursor" | "paste". */
   source: string | null;
+  /** Canonical URL of the conversation this step was captured from -- a "view source" link.
+   *  Null for pastes and pre-URL data. Never rendered into the paste-ready continuation text. */
+  sourceUrl: string | null;
 }
 
 export interface IdeaTrace {
@@ -70,6 +73,7 @@ export function traceIdea(db: Database, id: string): IdeaTrace | null {
       sourceText: source?.text ?? null,
       sourceRole: source?.role ?? null,
       source: source?.source ?? null,
+      sourceUrl: source?.sourceUrl ?? null,
     };
   });
 
@@ -150,6 +154,9 @@ export interface ContinuationEvolutionStep {
   formulation: string;
   /** The full user message the step came from -- for the app's "view source" affordance. Not in `text`. */
   sourceText: string | null;
+  /** Canonical URL of the conversation this step came from -- the app's "view source" link.
+   *  Null for pastes / pre-URL data. Not in `text` (a link to another chat is noise there). */
+  sourceUrl: string | null;
 }
 
 export interface ContinuationPacket {
@@ -220,6 +227,7 @@ export async function buildContinuationPacket(
       source: sourceLabel(p.source),
       formulation: p.formulation,
       sourceText: p.sourceText,
+      sourceUrl: p.sourceUrl,
     }));
   const evolutionUnverified = evolution.length === 0 && trace.provenance.length > 0;
 

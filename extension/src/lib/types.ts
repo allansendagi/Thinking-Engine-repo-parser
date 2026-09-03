@@ -12,6 +12,8 @@ export interface CaptureMessage {
   type: "thread:capture";
   source: Source;
   conversationId: string;
+  /** Canonical URL of the conversation (origin + path), or null when it can't be determined. */
+  sourceUrl: string | null;
   messages: CapturedMessage[];
 }
 

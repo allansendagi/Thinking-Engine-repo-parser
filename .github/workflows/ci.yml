@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, world-class-loop, production-hardening]
+    branches: [main, world-class-loop, production-hardening, continuity-sources-resume-eval]
   pull_request:
     branches: [main]
 
@@ -21,7 +21,25 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bunx tsc --noEmit
-      - run: bun test src/
+      # Absolute path so the filter anchors to the repo-root src/ -- a bare "src/" substring-matches
+      # extension/src/ too, whose tests need deps this job doesn't install.
+      - run: bun test "$PWD/src/"
+      # Full user-journey simulation (deterministic, no API key). Onboarding -> multi-tool capture
+      # -> recall -> continuation packet -> email claim -> 2nd device -> Free cap -> signed Paddle
+      # webhook -> Pro -> cancel. Imports extension/src/lib/resume.ts, so needs those deps too.
+      - run: (cd extension && bun install --frozen-lockfile)
+      - run: bun run e2e
+      # The eval harness runs the real extraction/reasoning models, so it only runs when the key
+      # is available as a repo secret. Without it, skip cleanly -- `bun run eval` is a local step.
+      - name: eval (golden set)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::notice::ANTHROPIC_API_KEY not set -- skipping eval (calls the real model, costs tokens). Run 'bun run eval' locally."
+            exit 0
+          fi
+          bun run eval
 
   extension:
     name: extension (bun · tsc)

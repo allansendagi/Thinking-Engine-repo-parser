@@ -25,12 +25,14 @@ Agreed thresholds, scored separately:
 Precision matters more than recall: a false attribution destroys trust in a way a missed one
 doesn't.
 
-**The gate is still unmeasured.** `eval/fixture` is a small, hand-authored fixture (~6 substantive
-events) that proves the pipeline's *mechanics* -- branch resolution, grounding, the
-authority/payments non-merge, candidate narrowing -- not that the gate is met at a statistically
-meaningful sample size. No `ANTHROPIC_API_KEY` has been available in this environment, so no LLM
-call in this pipeline has been observed to run against a live model. Every extraction, identity
-resolution, and gate number is unverified until `bun run eval` is actually run with a real key.
+**The gate is still unmeasured.** `eval/cases/authority-payments` is a small, hand-authored case
+(~5 substantive events) that proves the pipeline's *mechanics* -- branch resolution, grounding,
+the authority/payments non-merge, candidate narrowing -- not that the gate is met at a
+statistically meaningful sample size. `bun run eval` now runs every case under `eval/cases/*` and
+micro-averages the metrics, so closing this gap is a matter of hand-labelling 50-100
+conversations' worth of a real ChatGPT export and dropping them in as cases -- see
+`eval/README.md` for the labelling schema. Until then every gate number is a mechanics smoke
+test, not a measurement.
 
 ## What's verified vs. what isn't
 

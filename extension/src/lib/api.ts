@@ -55,10 +55,11 @@ export function ingestConversation(
   conversationId: string,
   source: Source,
   messages: CapturedMessage[],
+  sourceUrl: string | null = null,
 ): Promise<IngestResult> {
   return request("/v1/conversations", {
     method: "POST",
-    body: JSON.stringify({ conversationId, source, messages }),
+    body: JSON.stringify({ conversationId, source, messages, sourceUrl }),
   });
 }
 

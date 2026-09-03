@@ -1,13 +1,16 @@
 import {
   clearCredentials,
   getPairingState,
+  getResumeSnooze,
   getSettings,
   setApiBaseUrl,
   setCredentials,
   setPairingState,
+  setResumeSnooze,
 } from "./lib/storage";
-import { ApiError, ingestConversation, isPaymentRequired, isUnauthorized, verifyCredentials } from "./lib/api";
+import { ApiError, getThinkingState, ingestConversation, isPaymentRequired, isUnauthorized, verifyCredentials } from "./lib/api";
 import { fetchDesktopPairing } from "./lib/pairing";
+import { suggestionFromState, type ResumeSuggestion } from "./lib/resume";
 import type { CaptureMessage, PairingState } from "./lib/types";
 
 /**
@@ -103,8 +106,38 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     return true; // keep the channel open for the async sendResponse
   }
 
+  if (isResumeCheckMessage(message)) {
+    resumeSuggestion()
+      .then((suggestion) => sendResponse({ ok: true, suggestion }))
+      .catch((err) => sendResponse({ ok: false, error: String(err), suggestion: null }));
+    return true;
+  }
+
+  if (isResumeDismissMessage(message)) {
+    setResumeSnooze(message.ideaId)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
   return false;
 });
+
+/**
+ * The one qualifying "you may be returning to this" idea, or null. Computed from Thinking State
+ * with the exact rule the Mac app uses (lib/resume.ts). Silent about pairing/network problems --
+ * a return nudge is a nicety; if we can't answer, we just don't show one.
+ */
+async function resumeSuggestion(): Promise<ResumeSuggestion | null> {
+  const { credentials } = await getSettings();
+  if (!credentials) return null;
+  try {
+    const [state, snoozed] = await Promise.all([getThinkingState(), getResumeSnooze()]);
+    return suggestionFromState(state, snoozed);
+  } catch {
+    return null;
+  }
+}
 
 async function handleCapture(
   message: CaptureMessage,
@@ -116,7 +149,7 @@ async function handleCapture(
   }
 
   try {
-    const result = await ingestConversation(message.conversationId, message.source, message.messages);
+    const result = await ingestConversation(message.conversationId, message.source, message.messages, message.sourceUrl);
     console.log(`[Thread] ingested ${message.conversationId}:`, result);
     await markPaired((await getSettings()).credentials!.userId, "Capturing.");
     return { ok: true, result };
@@ -126,7 +159,7 @@ async function handleCapture(
       await setPairingState({ status: "rejected", detail: "Credentials rejected mid-capture. Re-pairing…" });
       const repaired = await ensurePaired("capture-401");
       if (repaired) {
-        const result = await ingestConversation(message.conversationId, message.source, message.messages);
+        const result = await ingestConversation(message.conversationId, message.source, message.messages, message.sourceUrl);
         return { ok: true, result };
       }
       return { ok: false, error: "Credentials expired -- reconnect Thread for Mac." };
@@ -152,4 +185,17 @@ function isCaptureMessage(message: unknown): message is CaptureMessage {
 
 function isPairNowMessage(message: unknown): message is { type: "thread:pair-now" } {
   return typeof message === "object" && message !== null && (message as { type?: unknown }).type === "thread:pair-now";
+}
+
+function isResumeCheckMessage(message: unknown): message is { type: "thread:resume-check" } {
+  return typeof message === "object" && message !== null && (message as { type?: unknown }).type === "thread:resume-check";
+}
+
+function isResumeDismissMessage(message: unknown): message is { type: "thread:resume-dismiss"; ideaId: string } {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    (message as { type?: unknown }).type === "thread:resume-dismiss" &&
+    typeof (message as { ideaId?: unknown }).ideaId === "string"
+  );
 }

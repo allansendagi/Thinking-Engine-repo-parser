@@ -46,7 +46,7 @@ switch (command) {
   case "eval": {
     const { runEval } = await import("../eval/harness");
     await runEval();
-    break;
+    process.exit(process.exitCode ?? 0);
   }
   case "import": {
     await runImport();
@@ -56,7 +56,8 @@ switch (command) {
     console.log(`Usage: bun src/cli.ts <command>
 
 Commands:
-  eval                                    Run the pipeline against eval/fixture and score it.
+  eval                                    Run the pipeline against every eval/cases/* case and
+                                           score it (micro-averaged). Needs ANTHROPIC_API_KEY.
   import <chatgpt|claude> <file> [--user=<id>]
                                            Import a real export file. Creates a new user if
                                            --user isn't given, and prints its credentials once.

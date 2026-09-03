@@ -62,3 +62,18 @@ export async function addSentIds(conversationId: string, ids: string[]): Promise
   for (const id of ids) existing.add(id);
   await chrome.storage.local.set({ [key]: [...existing] });
 }
+
+/**
+ * When the return nudge for an idea was last dismissed or acted on, as `{ ideaId: ISO }`. The
+ * rule in lib/resume.ts suppresses a suggestion whose idea hasn't been touched since this
+ * timestamp, so a "Not now" holds until the idea genuinely moves -- matching the Mac app's snooze.
+ */
+export async function getResumeSnooze(): Promise<Record<string, string>> {
+  const result = await chrome.storage.local.get("resumeSnooze");
+  return (result.resumeSnooze as Record<string, string> | undefined) ?? {};
+}
+
+export async function setResumeSnooze(ideaId: string, whenIso: string = new Date().toISOString()): Promise<void> {
+  const next = { ...(await getResumeSnooze()), [ideaId]: whenIso };
+  await chrome.storage.local.set({ resumeSnooze: next });
+}

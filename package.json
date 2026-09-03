@@ -10,6 +10,7 @@
     "start": "bun run src/api/server.ts",
     "cli": "bun src/cli.ts",
     "eval": "bun src/cli.ts eval",
+    "e2e": "bun run e2e/journey.ts",
     "mcp": "bun src/mcp/server.ts",
     "lint": "tsc --noEmit",
     "test": "bun test",

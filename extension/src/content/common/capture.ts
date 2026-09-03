@@ -76,7 +76,8 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
       const hasNew = messages.some((m) => !sentIds.has(m.id));
       if (!hasNew) return;
 
-      await sendMessage({ type: "thread:capture", source: adapter.source, conversationId, messages });
+      const sourceUrl = adapter.getConversationUrl?.() ?? null;
+      await sendMessage({ type: "thread:capture", source: adapter.source, conversationId, sourceUrl, messages });
       await addSentIds(
         conversationId,
         messages.map((m) => m.id),

@@ -30,53 +30,66 @@ function json(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
 }
 
-server.tool(
+type ToolResult = { content: { type: "text"; text: string }[] };
+
+/**
+ * `McpServer.tool()` is generic over the zod shape and infers a conditional type deep enough
+ * that, on a case-sensitive FS with CI's module-resolution order, `tsc` reports TS2589
+ * ("excessively deep") for every call site -- green on macOS, red on Linux. Calling it via a
+ * structural `{ tool: (...) => void }` cast never touches the generic overload, so the inference
+ * doesn't happen. Runtime is unchanged (zod still validates every call); handlers annotate the
+ * fields they read.
+ */
+const registrar = server as unknown as { tool: (name: string, description: string, schema: z.ZodRawShape, handler: (args: any) => Promise<ToolResult>) => void };
+const tool = registrar.tool.bind(registrar);
+
+tool(
   "search_ideas",
   "Search the user's ideas by keyword. Returns idea summaries ranked by lexical relevance.",
   { query: z.string().describe("Search terms"), limit: z.number().int().positive().max(50).optional() },
-  async ({ query, limit }) => json(searchIdeas(db, query, limit)),
+  async ({ query, limit }: { query: string; limit?: number }) => json(searchIdeas(db, query, limit)),
 );
 
-server.tool(
+tool(
   "get_idea",
   "Fetch one idea by id, including its full evolution, open loops, decisions, and related ideas.",
   { id: z.string() },
-  async ({ id }) => json(getIdea(db, id)),
+  async ({ id }: { id: string }) => json(getIdea(db, id)),
 );
 
-server.tool(
+tool(
   "trace_idea",
   "Fetch one idea's evolution alongside the original source text each step is grounded in.",
   { id: z.string() },
-  async ({ id }) => json(traceIdea(db, id)),
+  async ({ id }: { id: string }) => json(traceIdea(db, id)),
 );
 
-server.tool(
+tool(
   "get_thread_state",
   "Reconstruct the Thinking State for a topic: current ideas, recent changes, decisions, open loops, contradictions, related ideas.",
   { topic: z.string().optional().describe("Case-insensitive substring match; omit for all ideas") },
-  async ({ topic }) => json(getThreadState(db, topic)),
+  async ({ topic }: { topic?: string }) => json(getThreadState(db, topic)),
 );
 
-server.tool(
+tool(
   "get_open_loops",
   "List unresolved open loops, optionally filtered to a topic.",
   { topic: z.string().optional() },
-  async ({ topic }) => json(getOpenLoops(db, topic)),
+  async ({ topic }: { topic?: string }) => json(getOpenLoops(db, topic)),
 );
 
-server.tool(
+tool(
   "get_recent_changes",
   "List evolution steps within a recent window (default 14 days).",
   { sinceDays: z.number().int().positive().optional() },
-  async ({ sinceDays }) => json(getRecentChanges(db, sinceDays)),
+  async ({ sinceDays }: { sinceDays?: number }) => json(getRecentChanges(db, sinceDays)),
 );
 
-server.tool(
+tool(
   "continue_thinking",
   "Summarize where the user's thinking on a topic currently stands and suggest a next step. Requires a configured reasoning provider.",
   { topic: z.string() },
-  async ({ topic }) => {
+  async ({ topic }: { topic: string }) => {
     const text = await continueThinking(db, topic, createReasoningProvider());
     return { content: [{ type: "text" as const, text }] };
   },

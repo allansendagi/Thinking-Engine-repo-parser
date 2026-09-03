@@ -34,6 +34,11 @@ export const chatGptAdapter: SiteAdapter = {
     return id;
   },
 
+  getConversationUrl(): string | null {
+    // Only once getConversationId settles (permanent id, no provisional `WEB:` prefix).
+    return this.getConversationId() ? location.origin + location.pathname : null;
+  },
+
   extractMessages(root: ParentNode): RawMessage[] {
     const nodes = collect(root);
     const messages: RawMessage[] = [];

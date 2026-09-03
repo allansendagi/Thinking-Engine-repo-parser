@@ -8,7 +8,10 @@ CREATE TABLE IF NOT EXISTS canonical_events (
   role TEXT NOT NULL,
   text TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  idx INTEGER NOT NULL
+  idx INTEGER NOT NULL,
+  -- Canonical conversation URL (origin + path). Same for every row of a conversation. NULL for
+  -- pastes and for rows written before this column existed. See CanonicalEvent.sourceUrl.
+  source_url TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cognitive_events (

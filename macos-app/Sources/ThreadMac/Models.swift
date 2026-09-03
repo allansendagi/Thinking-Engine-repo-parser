@@ -121,6 +121,9 @@ struct ProvenanceStep: Codable, Identifiable {
     let sourceRole: String?
     /// Tool this step was captured from: "chatgpt" | "claude" | "gemini" | "cursor" | "paste".
     let source: String?
+    /// Canonical URL of the conversation this step came from -- a "view source" link. Nil for
+    /// pastes and data captured before the URL was recorded.
+    let sourceUrl: String?
     var id: String { formulation + createdAt }
 
     var sourceLabel: String? { displaySourceLabel(source) }
@@ -181,6 +184,9 @@ struct ContinuationPacket: Codable {
         let source: String?
         let formulation: String
         let sourceText: String?
+        /// Canonical URL of the conversation this step came from -- the "view source" link.
+        /// Nil for pastes / pre-URL data. Deliberately absent from the paste-ready `text`.
+        let sourceUrl: String?
         var id: String { when + formulation }
     }
     struct PacketDecision: Codable, Identifiable {

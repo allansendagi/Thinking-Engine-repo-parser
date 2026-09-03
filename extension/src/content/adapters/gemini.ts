@@ -38,6 +38,10 @@ export const geminiAdapter: SiteAdapter = {
     return matchFirst(location.pathname, [/\/app\/([a-zA-Z0-9-]+)/]);
   },
 
+  getConversationUrl(): string | null {
+    return this.getConversationId() ? location.origin + location.pathname : null;
+  },
+
   extractMessages(root: ParentNode): RawMessage[] {
     const userNodes = collect(root, USER_SELECTORS).map((el) => ({ el, role: "user" as const }));
     const assistantNodes = collect(root, ASSISTANT_SELECTORS).map((el) => ({ el, role: "assistant" as const }));
