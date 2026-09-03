@@ -46,6 +46,24 @@ Set `THREAD_DATA_DIR` and/or `THREAD_REGISTRY_PATH` explicitly to take full cont
 | `PORT` | Set by Railway automatically. |
 | `RAILWAY_VOLUME_MOUNT_PATH` | Set by Railway automatically **once a volume is attached** (see above). |
 
+### Optional
+
+| Var | Purpose |
+|---|---|
+| `THREAD_ADMIN_EMAILS` | Comma-separated. These accounts can read `GET /v1/events/downloads` (the `/admin` dashboard). Nobody is admin if unset. |
+| `THREAD_RATE_LIMIT` | Set to `off` to disable the per-IP limiter on the unauthenticated routes (`/v1/users`, `/v1/auth/start`, `/v1/events/download`). **Never set in production** — the tests and e2e sims set it for themselves. |
+| `THREAD_ALLOW_EPHEMERAL` | `1` lets the server boot on non-durable storage instead of failing fast. Only for throwaway environments. |
+
+### Unauthenticated-route protection
+
+`/v1/users`, `/v1/auth/start`, and `/v1/events/download` take no bearer token, so a per-process,
+per-IP sliding-window limiter (`src/api/rateLimit.ts`) caps them — it exists to stop a trivial
+loop from filling the volume with anon accounts / per-user DB files or poisoning the download
+metrics, not as a hard quota. It keys off `x-forwarded-for` (Railway sets it). `/v1/paddle/webhook`
+is unauthenticated but HMAC-verified before any DB write. There is intentionally **no CORS
+header** — every client is native, server-side, or an extension with explicit host permission;
+adding `Access-Control-Allow-Origin` would only open the API to browser-page probing.
+
 ## Verifying a deploy
 
 ```sh

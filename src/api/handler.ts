@@ -17,6 +17,7 @@ import {
   verifyTokenHash,
 } from "./auth";
 import { consumeCode, issueCode, RateLimitedError } from "./authCodes";
+import { clientKey, rateLimit } from "./rateLimit";
 import { sendEmail, signInCodeEmail } from "./email";
 import {
   accountView,
@@ -145,6 +146,11 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     }
 
     if (req.method === "POST" && pathname === "/v1/users") {
+      // Anon account creation is unauthenticated by design (zero-setup first launch). Cap it per
+      // IP so a loop can't fill the volume with `users` rows + a per-user SQLite file each.
+      if (!rateLimit(clientKey(req, "users"), { limit: 15, windowMs: 3_600_000 })) {
+        return error(429, "Too many accounts created from here. Try again later.");
+      }
       let uBody: { deviceName?: string } = {};
       try {
         uBody = (await req.json()) as { deviceName?: string };
@@ -165,6 +171,11 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       }
       const email = (body.email ?? "").trim();
       if (!EMAIL_RE.test(email)) return error(400, "A valid email is required");
+      // Per-IP ceiling on top of authCodes.ts's per-email limit -- one IP shouldn't be able to
+      // spray sign-in codes at many different addresses.
+      if (!rateLimit(clientKey(req, "auth-start"), { limit: 20, windowMs: 3_600_000 })) {
+        return error(429, "Too many sign-in attempts from here. Try again later.");
+      }
       try {
         const code = await issueCode(email);
         await sendEmail({ to: email, ...signInCodeEmail(code) });
@@ -220,6 +231,11 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     // Download counter -- public, no auth (anyone can download). The website's /download/mac
     // endpoint pings this, then redirects to the DMG. Best-effort: a bad body still 204s.
     if (req.method === "POST" && pathname === "/v1/events/download") {
+      // Public beacon: silently drop once an IP is over the ceiling so a loop can't inflate the
+      // /admin numbers or grow the table without bound. Still a 204 -- it's fire-and-forget.
+      if (!rateLimit(clientKey(req, "download"), { limit: 40, windowMs: 3_600_000 })) {
+        return new Response(null, { status: 204 });
+      }
       let body: Record<string, unknown> = {};
       try {
         body = (await req.json()) as Record<string, unknown>;

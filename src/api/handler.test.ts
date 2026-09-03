@@ -11,12 +11,16 @@ beforeAll(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "thread-api-test-"));
   process.env.THREAD_REGISTRY_PATH = join(tmpDir, "registry.db");
   process.env.THREAD_DATA_DIR = join(tmpDir, "users");
+  // This suite drives many synthetic clients from one (absent) IP; the per-IP limiter would
+  // otherwise 429 them. One test below re-enables it deliberately.
+  process.env.THREAD_RATE_LIMIT = "off";
 });
 
 afterAll(() => {
   rmSync(tmpDir, { recursive: true, force: true });
   delete process.env.THREAD_REGISTRY_PATH;
   delete process.env.THREAD_DATA_DIR;
+  delete process.env.THREAD_RATE_LIMIT;
 });
 
 function extractionResponse(events: object[]): string {
@@ -538,6 +542,42 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       expect(s.byCountry.find((c) => c.country === "QA")?.count).toBe(3);
     } finally {
       delete process.env.THREAD_ADMIN_EMAILS;
+    }
+  });
+
+  test("per-IP rate limiter guards the unauthenticated routes", async () => {
+    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const { __resetRateLimiter } = await import("./rateLimit");
+    delete process.env.THREAD_RATE_LIMIT; // re-enable for this test only
+    __resetRateLimiter();
+    try {
+      const ip = "198.51.100.7";
+      const mk = () =>
+        handler(
+          new Request("http://x/v1/users", {
+            method: "POST",
+            headers: { "x-forwarded-for": ip },
+          }),
+        );
+      let sawCreated = 0;
+      let saw429 = false;
+      for (let i = 0; i < 20; i++) {
+        const r = await mk();
+        if (r.status === 201) sawCreated++;
+        if (r.status === 429) saw429 = true;
+      }
+      expect(sawCreated).toBeGreaterThan(0);
+      expect(sawCreated).toBeLessThanOrEqual(15);
+      expect(saw429).toBe(true);
+
+      // A different IP is unaffected.
+      const other = await handler(
+        new Request("http://x/v1/users", { method: "POST", headers: { "x-forwarded-for": "203.0.113.42" } }),
+      );
+      expect(other.status).toBe(201);
+    } finally {
+      process.env.THREAD_RATE_LIMIT = "off";
+      __resetRateLimiter();
     }
   });
 });

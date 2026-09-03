@@ -58,6 +58,7 @@ const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString(
 const tmp = mkdtempSync(join(tmpdir(), "thread-payments-"));
 process.env.THREAD_REGISTRY_PATH = join(tmp, "registry.db");
 process.env.THREAD_DATA_DIR = join(tmp, "users");
+process.env.THREAD_RATE_LIMIT = "off"; // deterministic sim: many synthetic clients through one process
 for (const k of ["PADDLE_API_KEY", "PADDLE_PRICE_ID", "PADDLE_WEBHOOK_SECRET", "PADDLE_ENV"]) delete process.env[k];
 
 async function run(): Promise<void> {
