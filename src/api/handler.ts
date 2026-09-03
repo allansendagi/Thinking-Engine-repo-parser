@@ -31,7 +31,6 @@ import {
 import { openUserDb } from "../db/tenancy";
 import { storageMode } from "../db/durability";
 import { downloadSummary, isAdmin, recordDownload } from "./metrics";
-import { recordFeedback } from "./feedback";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
@@ -255,36 +254,6 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
         console.error("[Thread] download event failed:", e);
       }
       return new Response(null, { status: 204 });
-    }
-
-    // "Report an issue" from the website footer -- public, unauthenticated, rate-limited.
-    if (req.method === "POST" && pathname === "/v1/feedback") {
-      if (!rateLimit(clientKey(req, "feedback"), { limit: 6, windowMs: 3_600_000 })) {
-        return error(429, "Too many reports from here. Try again later.");
-      }
-      let fb: Record<string, unknown> = {};
-      try {
-        fb = (await req.json()) as Record<string, unknown>;
-      } catch {
-        return error(400, "Invalid JSON body");
-      }
-      const result = await recordFeedback({
-        kind: fb.kind,
-        message: fb.message,
-        email: fb.email,
-        page: fb.page,
-        userAgent: fb.userAgent ?? req.headers.get("user-agent"),
-      });
-      if (!result.ok) {
-        return error(
-          400,
-          result.error === "message_too_short"
-            ? "Please add a little more detail."
-            : "That's longer than we can accept — please trim it.",
-          result.error,
-        );
-      }
-      return json({ ok: true });
     }
 
     // Every route below requires auth.
