@@ -65,6 +65,7 @@ final class LocalStoreTests: XCTestCase {
                     createdAt: Date(timeIntervalSince1970: 1_700_000_100), status: .queued
                 )
             ],
+            pendingEdits: [PendingEdit.rename("i1", "renamed")],
             savedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
         let data = try JSONEncoder().encode(snap)
@@ -73,13 +74,15 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertTrue(back.traces.isEmpty)
         XCTAssertNil(back.thinkingState)
         XCTAssertEqual(back.pendingCaptures, snap.pendingCaptures)
+        XCTAssertEqual(back.pendingEdits, snap.pendingEdits)
     }
 
-    /// A snapshot written before `pendingCaptures` existed must still decode.
-    func testSnapshotBackCompatWithoutPendingCaptures() throws {
+    /// A snapshot written before `pendingCaptures` / `pendingEdits` existed must still decode.
+    func testSnapshotBackCompatWithoutNewFields() throws {
         let legacy = #"{"traces":{},"savedAt":751000000}"#.data(using: .utf8)!
         let back = try JSONDecoder().decode(LocalSnapshot.self, from: legacy)
         XCTAssertTrue(back.pendingCaptures.isEmpty)
+        XCTAssertTrue(back.pendingEdits.isEmpty)
         XCTAssertTrue(back.traces.isEmpty)
     }
 

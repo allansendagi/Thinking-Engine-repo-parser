@@ -19,8 +19,10 @@ final class AppState: ObservableObject {
         // so recall renders instantly and works offline. `refresh()` keeps the snapshot current.
         if let snap = LocalStore.load(userId: CredentialStore.userId) {
             snapshot = snap
-            thinkingState = snap.thinkingState
             pendingCaptures = snap.pendingCaptures
+            pendingEdits = snap.pendingEdits
+            // Show the cached graph with any unsynced edits already folded in.
+            thinkingState = snap.thinkingState.map { applyAll(pendingEdits, to: $0) }
             lastSyncedAt = snap.savedAt == .distantPast ? nil : snap.savedAt
         }
     }
@@ -40,6 +42,7 @@ final class AppState: ObservableObject {
     private func persistSnapshot() {
         snapshot.thinkingState = thinkingState
         snapshot.pendingCaptures = pendingCaptures
+        snapshot.pendingEdits = pendingEdits
         snapshot.savedAt = Date()
         LocalStore.save(snapshot, userId: CredentialStore.userId)
     }
@@ -50,6 +53,10 @@ final class AppState: ObservableObject {
     /// panel with the on-device draft; cleared once the authoritative graph absorbs them.
     @Published var pendingCaptures: [PendingCapture] = []
     private var isFlushingCaptures = false
+
+    /// Field edits made on this Mac that the backend hasn't confirmed yet. Overlaid on server
+    /// state until each one syncs; see the "Local-first edits" section.
+    @Published var pendingEdits: [PendingEdit] = []
 
     /// The local-first capture entry point. Writes the raw text locally and returns immediately;
     /// the on-device model drafts what it is, then it syncs in the background (and keeps retrying
@@ -445,6 +452,8 @@ final class AppState: ObservableObject {
         }
         LocalStore.clear(userId: CredentialStore.userId)
         snapshot = .empty
+        pendingCaptures = []
+        pendingEdits = []
         lastSyncedAt = nil
         isOffline = false
         CredentialStore.clear()
@@ -481,12 +490,16 @@ final class AppState: ObservableObject {
         guard isPaired else { return }
         isLoading = true
         do {
-            thinkingState = try await client.getThinkingState()
+            let server = try await client.getThinkingState()
+            // Overlay edits made here that the backend hasn't taken yet, so the user's intent
+            // isn't visually reverted by a sync that predates their offline change.
+            thinkingState = pendingEdits.isEmpty ? server : applyAll(pendingEdits, to: server)
             isOffline = false
             lastSyncedAt = Date()
             errorMessage = nil
             persistSnapshot()
             await flushPending()
+            await flushEdits()
         } catch {
             // Local-first: a failed sync is not an error the user has to see. Keep the cached
             // graph on screen; just note we're offline so the UI can show a quiet hint.
@@ -581,15 +594,16 @@ final class AppState: ObservableObject {
         selectedIdeaId = id
         errorMessage = nil
 
-        // Cache-first: show the last-synced trace immediately, then revalidate.
+        // Cache-first: show the last-synced trace immediately (with unsynced edits overlaid),
+        // then revalidate.
         let cached = snapshot.traces[id]
-        if let cached { selectedTrace = cached }
+        if let cached { selectedTrace = applyAll(pendingEdits, to: cached) }
 
         do {
             let fresh = try await client.traceIdea(id: id)
             guard selectedIdeaId == id else { return }   // user moved on while it loaded
-            selectedTrace = fresh
             snapshot.traces[id] = fresh
+            selectedTrace = applyAll(pendingEdits, to: fresh)
             persistSnapshot()
         } catch {
             // Only an error if we had nothing cached to show.
@@ -608,43 +622,90 @@ final class AppState: ObservableObject {
         sentToTool = nil
     }
 
+    // MARK: - Local-first edits
+    //
+    // Every edit applies to the local read model at once and queues its call. Last-write-wins
+    // per field — no merge. `refresh()` overlays the queue on top of the server's state until
+    // each edit lands; a 4xx drops the edit (the idea's gone / the request was bad), a network
+    // error keeps it for the next retry.
+
+    private var isFlushingEdits = false
+
+    /// Fold an edit into the local snapshot + the live @Published state, enqueue it, sync.
+    private func enqueueEdit(_ edit: PendingEdit) {
+        pendingEdits = coalesced(pendingEdits, adding: edit)
+        if let s = thinkingState { thinkingState = apply(edit.kind, to: s, ideaId: edit.ideaId) }
+        if let t = selectedTrace, t.idea.id == edit.ideaId {
+            selectedTrace = applyAll([edit], to: t)
+        }
+        persistSnapshot()
+        Task { await flushEdits() }
+    }
+
     func renameSelected(to title: String) async {
         guard let id = selectedIdeaId else { return }
-        do {
-            _ = try await client.renameIdea(id: id, title: title)
-            await openIdea(id)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        enqueueEdit(.rename(id, t))
     }
 
     func setSelectedState(_ state: String) async {
         guard let id = selectedIdeaId else { return }
-        do {
-            _ = try await client.setIdeaState(id: id, state: state)
-            await openIdea(id)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        enqueueEdit(.setState(id, state))
     }
 
     func deleteSelected() async {
         guard let id = selectedIdeaId else { return }
-        do {
-            try await client.deleteIdea(id: id)
-            closeIdea()
-            await refresh()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        snapshot.traces[id] = nil
+        closeIdea()
+        enqueueEdit(.delete(id))
     }
 
     func toggleLoop(_ loopId: String, resolved: Bool) async {
-        do {
+        let ideaId = selectedIdeaId
+            ?? thinkingState?.openLoops.first { $0.loopId == loopId }?.ideaId
+            ?? ""
+        enqueueEdit(.resolveLoop(ideaId, loopId: loopId, resolved: resolved))
+    }
+
+    /// Send queued edits oldest-first. Stops on the first network error (retried next refresh);
+    /// drops any edit the backend rejects with a 4xx.
+    private func flushEdits() async {
+        guard isPaired, !isFlushingEdits else { return }
+        isFlushingEdits = true
+        defer { isFlushingEdits = false }
+
+        while let edit = pendingEdits.first {
+            do {
+                try await send(edit)
+                pendingEdits.removeAll { $0.id == edit.id }
+                persistSnapshot()
+            } catch let APIError.http(status, _) where (400..<500).contains(status) && status != 429 {
+                // Dead edit — idea deleted server-side, bad request. Drop it, keep going.
+                pendingEdits.removeAll { $0.id == edit.id }
+                persistSnapshot()
+            } catch {
+                // Network / 5xx — leave the queue intact and try again on the next refresh.
+                if let i = pendingEdits.firstIndex(where: { $0.id == edit.id }) {
+                    pendingEdits[i].attempts += 1
+                }
+                persistSnapshot()
+                break
+            }
+        }
+    }
+
+    private func send(_ edit: PendingEdit) async throws {
+        switch edit.kind {
+        case .rename(let title):
+            _ = try await client.renameIdea(id: edit.ideaId, title: title)
+        case .setState(let state):
+            _ = try await client.setIdeaState(id: edit.ideaId, state: state)
+        case .resolveLoop(let loopId, let resolved):
             try await client.setOpenLoopResolved(id: loopId, resolved: resolved)
-            if let id = selectedIdeaId { await openIdea(id) } else { await refresh() }
-        } catch {
-            errorMessage = error.localizedDescription
+        case .delete:
+            do { try await client.deleteIdea(id: edit.ideaId) }
+            catch APIError.http(404, _) { /* already gone — done */ }
         }
     }
 

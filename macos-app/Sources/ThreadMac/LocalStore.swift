@@ -15,27 +15,31 @@ struct LocalSnapshot: Codable {
     /// Captures made on this Mac that haven't been confirmed by the backend yet — kept so an
     /// offline capture survives a relaunch and still syncs later. See `PendingCapture`.
     var pendingCaptures: [PendingCapture]
+    /// Field edits (rename / state / resolve-loop / delete) made here and not yet synced.
+    var pendingEdits: [PendingEdit]
     var savedAt: Date
 
     static let empty = LocalSnapshot(
-        thinkingState: nil, traces: [:], pendingCaptures: [], savedAt: .distantPast
+        thinkingState: nil, traces: [:], pendingCaptures: [], pendingEdits: [], savedAt: .distantPast
     )
 
-    // Hand-rolled so a snapshot written before `pendingCaptures` existed still decodes.
+    // Hand-rolled so a snapshot written before `pendingCaptures` / `pendingEdits` existed still decodes.
     init(
         thinkingState: ThinkingStateResponse?,
         traces: [String: IdeaTrace],
         pendingCaptures: [PendingCapture],
+        pendingEdits: [PendingEdit],
         savedAt: Date
     ) {
         self.thinkingState = thinkingState
         self.traces = traces
         self.pendingCaptures = pendingCaptures
+        self.pendingEdits = pendingEdits
         self.savedAt = savedAt
     }
 
     enum CodingKeys: String, CodingKey {
-        case thinkingState, traces, pendingCaptures, savedAt
+        case thinkingState, traces, pendingCaptures, pendingEdits, savedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -43,6 +47,7 @@ struct LocalSnapshot: Codable {
         thinkingState = try c.decodeIfPresent(ThinkingStateResponse.self, forKey: .thinkingState)
         traces = try c.decodeIfPresent([String: IdeaTrace].self, forKey: .traces) ?? [:]
         pendingCaptures = try c.decodeIfPresent([PendingCapture].self, forKey: .pendingCaptures) ?? []
+        pendingEdits = try c.decodeIfPresent([PendingEdit].self, forKey: .pendingEdits) ?? []
         savedAt = try c.decodeIfPresent(Date.self, forKey: .savedAt) ?? .distantPast
     }
 }
