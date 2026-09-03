@@ -21,7 +21,9 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bunx tsc --noEmit
-      - run: bun test src/
+      # Absolute path so the filter anchors to the repo-root src/ -- a bare "src/" substring-matches
+      # extension/src/ too, whose tests need deps this job doesn't install.
+      - run: bun test "$PWD/src/"
       # The eval harness runs the real extraction/reasoning models, so it only runs when the key
       # is available as a repo secret. Without it, skip cleanly -- `bun run eval` is a local step.
       - name: eval (golden set)
