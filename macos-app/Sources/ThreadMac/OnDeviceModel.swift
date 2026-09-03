@@ -92,6 +92,39 @@ enum OnDeviceModel {
     position, not a reword. No preamble, no hedging, one sentence.
     """
 
+    /// The trajectory distilled: one phrase of ≤6 words per formulation, same order. Returns nil
+    /// unless the model is ready and the line count matches the input; the caller then keeps the
+    /// server's first-words template.
+    static func trajectory(formulations: [String]) async -> [String]? {
+        guard formulations.count >= 2 else { return nil }
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *), case .available = SystemLanguageModel.default.availability {
+            let numbered = formulations.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+            do {
+                let session = LanguageModelSession(instructions: Self.trajectoryInstructions)
+                let raw = try await session.respond(to: numbered).content
+                let lines = raw.split(separator: "\n").map {
+                    $0.trimmingCharacters(in: CharacterSet(charactersIn: " \t-•*0123456789.)"))
+                }.filter { !$0.isEmpty }
+                // Reject unless it actually distilled — a small model sometimes echoes the input.
+                let distilled = lines.count == formulations.count
+                    && lines.allSatisfy { $0.split(separator: " ").count <= 7 && $0.count <= 60 }
+                return distilled ? lines : nil
+            } catch {
+                return nil
+            }
+        }
+        #endif
+        return nil
+    }
+
+    private static let trajectoryInstructions = """
+    Distil each numbered formulation to a headline of AT MOST 5 words — the core move, not a \
+    summary, never the sentence itself. Output ONLY the headlines, one per line, same count and \
+    order, nothing else. Example: "AI governance needs better oversight policies." becomes \
+    "governance by written policy".
+    """
+
     /// A fast, local read of what a freshly captured transcript is *about* — enough to show a
     /// real card the instant it's captured, before the backend's full extraction pipeline runs.
     /// The backend stays the authority on the durable idea graph (identity, evolution); this is

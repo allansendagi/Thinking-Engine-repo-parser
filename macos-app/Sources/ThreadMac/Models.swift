@@ -210,7 +210,13 @@ struct ContinuationPacket: Codable {
     let evolutionUnverified: Bool
     let decisions: [PacketDecision]
     let unresolvedQuestion: String?
+    /// Every unresolved loop (newest first, capped) — the machine handoff's UNRESOLVED block.
+    /// Absent on older servers.
+    var unresolvedQuestions: [String]?
     let suggestedNext: String
+    /// The trajectory distilled to one short phrase per verified step. Fills the
+    /// {{THINKING_EVOLUTION}} token in `text`. `var` so Free can swap in an on-device version.
+    var trajectory: [String]?
     /// One synthesized sentence — "You moved from X toward Y". Nil unless there are ≥2 verified
     /// steps. `var` so the free tier can swap in an on-device version. Absent on older servers.
     var thinkingShift: String?
@@ -222,6 +228,12 @@ struct ContinuationPacket: Codable {
     /// with one literal replace — no client-side re-rendering of the packet.
     static let continueToken = "{{CONTINUE_FROM_HERE}}"
     static let thinkingShiftToken = "{{THINKING_SHIFT}}"
+    static let thinkingEvolutionToken = "{{THINKING_EVOLUTION}}"
+
+    /// The distilled steps as a top-down chain, matching the server's `trajectoryChain`.
+    var trajectoryChain: String {
+        (trajectory ?? []).filter { !$0.isEmpty }.joined(separator: "\n  ↓\n  ")
+    }
 }
 
 struct APIErrorBody: Codable {

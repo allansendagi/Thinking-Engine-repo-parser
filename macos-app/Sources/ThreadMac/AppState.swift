@@ -1042,6 +1042,7 @@ final class AppState: ObservableObject {
             .replacingOccurrences(of: ContinuationPacket.continueToken, with: line)
             .replacingOccurrences(of: ContinuationPacket.thinkingShiftToken,
                                   with: (packet.thinkingShift ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+            .replacingOccurrences(of: ContinuationPacket.thinkingEvolutionToken, with: packet.trajectoryChain)
     }
 
     /// The payoff. Builds the continuation packet for the selected idea, copies the paste-ready
@@ -1086,13 +1087,18 @@ final class AppState: ObservableObject {
                     continuationEngine = .template
                 }
 
-                // Same treatment for the "how your thinking changed" line: the server sent the
-                // literal template; sharpen it on-device when there's a real shift to name.
+                // Same treatment for the synthesized lines the server left as templates: sharpen
+                // the "how your thinking changed" sentence and the distilled trajectory chain
+                // on-device.
                 if OnDeviceModel.status.isReady, p.evolution.count >= 2,
                    let first = p.evolution.first?.formulation,
-                   let latest = p.evolution.last?.formulation,
-                   let shift = await OnDeviceModel.thinkingShift(from: first, to: latest) {
-                    continuationPacket?.thinkingShift = shift
+                   let latest = p.evolution.last?.formulation {
+                    if let shift = await OnDeviceModel.thinkingShift(from: first, to: latest) {
+                        continuationPacket?.thinkingShift = shift
+                    }
+                    if let traj = await OnDeviceModel.trajectory(formulations: p.evolution.map { $0.formulation }) {
+                        continuationPacket?.trajectory = traj
+                    }
                 }
             }
         } catch {

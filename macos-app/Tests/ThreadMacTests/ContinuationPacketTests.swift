@@ -3,7 +3,7 @@ import XCTest
 
 final class ContinuationPacketTests: XCTestCase {
 
-    func testDecodesWithTheNewSecondPersonFields() throws {
+    func testDecodesTheFullMachineHandoffPacket() throws {
         let json = """
         {
           "idea": { "id": "i1", "title": "Computable Authority", "state": "contested" },
@@ -13,16 +13,23 @@ final class ContinuationPacketTests: XCTestCase {
           "evolutionUnverified": false,
           "decisions": [{ "statement": "Frame NOMOS as a protocol.", "decidedAt": "2026-08-20T00:00:00.000Z" }],
           "unresolvedQuestion": "Who performs the verification, and why trust them?",
+          "unresolvedQuestions": ["Who performs verification?", "Why trust that verifier?"],
           "suggestedNext": "Help me compare verification models.",
+          "trajectory": ["AI governance", "policy/execution gap", "authority must be executable"],
           "thinkingShift": "You moved from AI governance toward machine-executable institutional authority.",
           "lastExploredSource": "Claude",
           "lastExploredAt": "2026-08-15T00:00:00.000Z"
         }
         """.data(using: .utf8)!
         let p = try JSONDecoder().decode(ContinuationPacket.self, from: json)
+        XCTAssertEqual(p.trajectory, ["AI governance", "policy/execution gap", "authority must be executable"])
+        XCTAssertEqual(p.unresolvedQuestions, ["Who performs verification?", "Why trust that verifier?"])
         XCTAssertEqual(p.thinkingShift, "You moved from AI governance toward machine-executable institutional authority.")
         XCTAssertEqual(p.lastExploredSource, "Claude")
-        XCTAssertEqual(p.decisions.first?.statement, "Frame NOMOS as a protocol.")
+        XCTAssertEqual(
+            p.trajectoryChain,
+            "AI governance\n  ↓\n  policy/execution gap\n  ↓\n  authority must be executable"
+        )
     }
 
     /// A response from the currently-deployed server, before these fields shipped, must still decode.
@@ -41,24 +48,37 @@ final class ContinuationPacketTests: XCTestCase {
         """.data(using: .utf8)!
         let p = try JSONDecoder().decode(ContinuationPacket.self, from: json)
         XCTAssertNil(p.thinkingShift)
+        XCTAssertNil(p.trajectory)
+        XCTAssertNil(p.unresolvedQuestions)
         XCTAssertNil(p.lastExploredSource)
-        XCTAssertNil(p.lastExploredAt)
+        XCTAssertEqual(p.trajectoryChain, "")
     }
 
     @MainActor
-    func testCopyTextSubstitutesBothTokens() {
+    func testCopyTextFillsEveryToken() {
         let state = AppState()
-        state.continuationText = "How your thinking changed\n\(ContinuationPacket.thinkingShiftToken)\n\nContinue from here\n\(ContinuationPacket.continueToken)\n"
+        state.continuationText = """
+        THINKING EVOLUTION
+          \(ContinuationPacket.thinkingEvolutionToken)
+
+        TASK
+        Continue the reasoning from this exact state. Do not restart the exploration.
+
+        \(ContinuationPacket.continueToken)
+        """
         state.continuationPacket = ContinuationPacket(
             idea: .init(id: "i", title: "T", state: "developing"),
             whereYouLeftOff: "x", contested: false, evolution: [], evolutionUnverified: false,
-            decisions: [], unresolvedQuestion: nil, suggestedNext: "the templated next step",
-            thinkingShift: "You moved from A toward B.", lastExploredSource: nil, lastExploredAt: nil
+            decisions: [], unresolvedQuestion: nil, unresolvedQuestions: nil,
+            suggestedNext: "the templated next step",
+            trajectory: ["AI governance", "policy/execution gap", "authority must be executable"],
+            thinkingShift: nil, lastExploredSource: nil, lastExploredAt: nil
         )
         state.nextStepDraft = ""
         let out = state.continuationCopyText ?? ""
-        XCTAssertTrue(out.contains("You moved from A toward B."))
+        XCTAssertTrue(out.contains("AI governance\n  ↓\n  policy/execution gap\n  ↓\n  authority must be executable"))
         XCTAssertTrue(out.contains("the templated next step"))
+        XCTAssertTrue(out.contains("Do not restart the exploration."))
         XCTAssertFalse(out.contains("{{"))
     }
 }
