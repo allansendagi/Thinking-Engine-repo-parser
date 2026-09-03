@@ -20,11 +20,14 @@ struct LocalSnapshot: Codable {
     /// The idea graph built on this Mac by the on-device model — the fallback rendered whenever
     /// the backend hasn't provided state. See `LocalGraph`.
     var localGraph: LocalGraph
+    /// ideaId → on-device semantic vector for its current text. Recomputed only when the text
+    /// changes (see `EmbeddingEntry.contentHash`). Powers meaning-based recall + "Related".
+    var embeddings: [String: EmbeddingEntry]
     var savedAt: Date
 
     static let empty = LocalSnapshot(
         thinkingState: nil, traces: [:], pendingCaptures: [], pendingEdits: [],
-        localGraph: .empty, savedAt: .distantPast
+        localGraph: .empty, embeddings: [:], savedAt: .distantPast
     )
 
     // Hand-rolled so a snapshot written before these fields existed still decodes.
@@ -34,6 +37,7 @@ struct LocalSnapshot: Codable {
         pendingCaptures: [PendingCapture],
         pendingEdits: [PendingEdit],
         localGraph: LocalGraph,
+        embeddings: [String: EmbeddingEntry],
         savedAt: Date
     ) {
         self.thinkingState = thinkingState
@@ -41,11 +45,12 @@ struct LocalSnapshot: Codable {
         self.pendingCaptures = pendingCaptures
         self.pendingEdits = pendingEdits
         self.localGraph = localGraph
+        self.embeddings = embeddings
         self.savedAt = savedAt
     }
 
     enum CodingKeys: String, CodingKey {
-        case thinkingState, traces, pendingCaptures, pendingEdits, localGraph, savedAt
+        case thinkingState, traces, pendingCaptures, pendingEdits, localGraph, embeddings, savedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -55,8 +60,16 @@ struct LocalSnapshot: Codable {
         pendingCaptures = try c.decodeIfPresent([PendingCapture].self, forKey: .pendingCaptures) ?? []
         pendingEdits = try c.decodeIfPresent([PendingEdit].self, forKey: .pendingEdits) ?? []
         localGraph = try c.decodeIfPresent(LocalGraph.self, forKey: .localGraph) ?? .empty
+        embeddings = try c.decodeIfPresent([String: EmbeddingEntry].self, forKey: .embeddings) ?? [:]
         savedAt = try c.decodeIfPresent(Date.self, forKey: .savedAt) ?? .distantPast
     }
+}
+
+/// A cached idea vector plus the hash of the text it was computed from, so a re-embed happens
+/// only when the idea's title/formulation actually changes.
+struct EmbeddingEntry: Codable, Equatable {
+    var contentHash: Int
+    var vector: [Float]
 }
 
 /// The on-device model's first read of a capture: enough to show a real card immediately.

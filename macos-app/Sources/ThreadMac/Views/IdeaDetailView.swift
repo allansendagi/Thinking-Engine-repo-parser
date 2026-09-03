@@ -17,6 +17,7 @@ struct IdeaDetailView: View {
                     headBlock(trace)
                     evolutionBlock(trace)
                     if !trace.idea.openLoops.isEmpty { loopsBlock(trace) }
+                    relatedBlock(trace)
                 }
                 .padding(.top, 2).padding(.bottom, 10)
             } else {
@@ -204,6 +205,38 @@ struct IdeaDetailView: View {
     }
 
     // MARK: open loops
+
+    /// "Related" — other ideas whose *meaning* is close to this one, found on-device. Quiet:
+    /// nothing shows unless there's a genuinely near match.
+    @ViewBuilder
+    private func relatedBlock(_ trace: IdeaTrace) -> some View {
+        let related = appState.relatedIdeas(to: trace.idea.id)
+        if !related.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Related thinking").font(.system(size: 12, weight: .semibold)).kerning(-0.1)
+                    .foregroundStyle(Theme.ink(0.85))
+                ForEach(related) { idea in
+                    Button {
+                        Task { await appState.openIdea(idea.id) }
+                    } label: {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: IdeaStatus.symbol(idea.state))
+                                .font(.system(size: 8.5, weight: .regular))
+                                .foregroundStyle(idea.state == "contested" ? Theme.stateColor("contested") : Theme.ink(0.35))
+                                .padding(.top, 3)
+                            Text(cleanIdeaTitle(idea.title, fallback: idea.currentFormulation))
+                                .font(.system(size: 12)).foregroundStyle(Theme.ink(0.7))
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
+        }
+    }
 
     private func loopsBlock(_ trace: IdeaTrace) -> some View {
         VStack(alignment: .leading, spacing: 8) {
