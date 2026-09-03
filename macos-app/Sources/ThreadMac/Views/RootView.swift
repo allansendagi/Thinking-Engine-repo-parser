@@ -79,10 +79,20 @@ struct RootView: View {
                 }
                 .padding(.leading, -6)
             }
-            Text(inDetail ? "Recent" : "Thread")
-                .font(.system(size: inDetail ? 13 : 15, weight: inDetail ? .medium : .semibold))
-                .kerning(inDetail ? -0.104 : -0.225)
-                .foregroundStyle(Theme.ink(inDetail ? 0.6 : 0.85))
+            HStack(spacing: 7) {
+                if !inDetail {
+                    Image(nsImage: BrandMark.menuBarImage)
+                        .renderingMode(.template)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 17, height: 17)
+                        .foregroundStyle(Theme.ink(0.85))
+                }
+                Text(inDetail ? "Recent" : "Thread")
+                    .font(.system(size: inDetail ? 13 : 15, weight: inDetail ? .medium : .semibold))
+                    .kerning(inDetail ? -0.104 : -0.225)
+                    .foregroundStyle(Theme.ink(inDetail ? 0.6 : 0.85))
+            }
 
             Spacer(minLength: 0)
 

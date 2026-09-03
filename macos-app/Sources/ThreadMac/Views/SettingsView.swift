@@ -115,7 +115,12 @@ struct SettingsView: View {
             }
             .font(.caption)
 
+            Divider()
+
             HStack {
+                Button("Quit Thread") { NSApp.terminate(nil) }
+                    .controlSize(.small)
+                    .keyboardShortcut("q", modifiers: .command)
                 Spacer()
                 Button("Done") {
                     // Only write if the field was actually populated and changed. It starts empty
