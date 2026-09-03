@@ -6,12 +6,18 @@ enum BrandMark {
     /// A template NSImage for the menu-bar item. Rendered once. `isTemplate` lets macOS tint it
     /// for light/dark menu bars automatically — the reliable way to put a custom shape up there
     /// (a raw SwiftUI Shape as a MenuBarExtra label can render invisibly).
-    static let menuBarImage: NSImage = {
+    static let menuBarImage: NSImage = render(color: .black, template: true)
+
+    /// The same glyph for in-app UI (the panel header), drawn in a fixed dark ink and NOT a
+    /// template — so it never picks up the panel's accent `.tint` (which was turning it blue).
+    static let inkImage: NSImage = render(color: NSColor.black.withAlphaComponent(0.85), template: false)
+
+    private static func render(color: NSColor, template: Bool) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in
             let c = CGPoint(x: rect.midX, y: rect.midY)
             let r = rect.width * 0.34
-            NSColor.black.setStroke()
+            color.setStroke()
 
             let ring = NSBezierPath(ovalIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
             ring.lineWidth = 1.6
@@ -29,11 +35,11 @@ enum BrandMark {
             thread.stroke()
 
             let k = r * 0.42
-            NSColor.black.setFill()
+            color.setFill()
             NSBezierPath(ovalIn: CGRect(x: c.x - k, y: c.y - k, width: 2 * k, height: 2 * k)).fill()
             return true
         }
-        image.isTemplate = true
+        image.isTemplate = template
         return image
-    }()
+    }
 }

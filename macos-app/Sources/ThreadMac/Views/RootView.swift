@@ -81,12 +81,11 @@ struct RootView: View {
             }
             HStack(spacing: 7) {
                 if !inDetail {
-                    // The real app icon (indigo squircle + white mark), full colour, exactly as
-                    // it appears in Applications -- not the monochrome menu-bar template.
-                    Image(nsImage: NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage)
+                    // The plain Thread glyph in dark ink -- no colour, matches the wordmark.
+                    Image(nsImage: BrandMark.inkImage)
                         .resizable()
                         .interpolation(.high)
-                        .frame(width: 18, height: 18)
+                        .frame(width: 17, height: 17)
                 }
                 Text(inDetail ? "Recent" : "Thread")
                     .font(.system(size: inDetail ? 13 : 15, weight: inDetail ? .medium : .semibold))
