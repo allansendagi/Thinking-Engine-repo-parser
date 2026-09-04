@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1002,6 +1002,9 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect((await post({ email: "not-an-email" })).status).toBe(400);
     expect((await post({})).status).toBe(400);
 
+    // A confirmation email goes out exactly once -- on the real join, never on a repeat. No
+    // RESEND_API_KEY in this test env, so sendEmail logs instead of calling out to Resend.
+    const logSpy = spyOn(console, "log");
     const email = `waiter-${Date.now()}@example.com`;
     const first = await post({
       email,
@@ -1010,11 +1013,19 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     });
     expect(first.status).toBe(200);
     expect(await first.json()).toEqual({ ok: true, alreadyJoined: false });
+    expect(
+      logSpy.mock.calls.some(
+        (c) => String(c[0]).includes(email) && String(c[0]).includes("waitlist"),
+      ),
+    ).toBe(true);
+    logSpy.mockClear();
 
-    // Same email again (any case) -- idempotent, not an error, and says so.
+    // Same email again (any case) -- idempotent, not an error, and says so. No second email.
     const again = await post({ email: email.toUpperCase() });
     expect(again.status).toBe(200);
     expect(await again.json()).toEqual({ ok: true, alreadyJoined: true });
+    expect(logSpy.mock.calls.some((c) => String(c[0]).includes("waitlist"))).toBe(false);
+    logSpy.mockRestore();
 
     // Reading the actual list needs auth AND an admin email -- same gate as downloads.
     const nonAdmin = await createTestUser(handler);

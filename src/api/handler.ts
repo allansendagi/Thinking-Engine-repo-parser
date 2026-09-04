@@ -18,7 +18,7 @@ import {
 } from "./auth";
 import { consumeCode, issueCode, RateLimitedError } from "./authCodes";
 import { clientKey, rateLimit } from "./rateLimit";
-import { sendEmail, signInCodeEmail } from "./email";
+import { sendEmail, signInCodeEmail, waitlistJoinedEmail } from "./email";
 import {
   accountView,
   applyPaddleEvent,
@@ -345,6 +345,17 @@ export function createRequestHandler(
           referrer: body.referrer ?? req.headers.get("referer"),
           country: body.country ?? req.headers.get("x-vercel-ip-country"),
         });
+        if (!alreadyJoined) {
+          // Best-effort: the signup already succeeded and is durable either way. A failed send
+          // here shouldn't turn into a 502 for something that already worked -- so it's awaited
+          // (deterministic: the response reflects whether the email actually went out, and
+          // nothing races the request's own lifetime) but its own errors are swallowed.
+          try {
+            await sendEmail({ to: email, ...waitlistJoinedEmail() });
+          } catch (e) {
+            console.error("[Thread] waitlist confirmation email failed:", e);
+          }
+        }
         return json({ ok: true, alreadyJoined });
       } catch (e) {
         console.error("[Thread] waitlist signup failed:", e);
