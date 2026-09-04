@@ -53,6 +53,9 @@ export interface ProvenanceStep {
   /** Canonical URL of the conversation this step was captured from -- a "view source" link.
    *  Null for pastes and pre-URL data. Never rendered into the paste-ready continuation text. */
   sourceUrl: string | null;
+  /** Id of the conversation this step came from. Lets a client open the captured transcript
+   *  (`GET /v1/conversations/:id`) rather than only linking out to the live chat. */
+  conversationId: string | null;
 }
 
 export interface IdeaTrace {
@@ -74,6 +77,7 @@ export function traceIdea(db: Database, id: string): IdeaTrace | null {
       sourceRole: source?.role ?? null,
       source: source?.source ?? null,
       sourceUrl: source?.sourceUrl ?? null,
+      conversationId: source?.conversationId ?? null,
     };
   });
 

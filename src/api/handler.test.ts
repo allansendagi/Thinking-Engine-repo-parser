@@ -92,6 +92,30 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     const searchRes = await handler(new Request("http://x/v1/ideas?q=authority%20boundaries", { headers: authHeader }));
     const results = (await searchRes.json()) as { id: string }[];
     expect(results.length).toBeGreaterThan(0);
+
+    // The source-conversation bridge: an idea's trace carries the conversation id, and
+    // GET /v1/conversations/:id returns the captured messages.
+    const ideaId = results[0]!.id;
+    const traceRes = await handler(new Request(`http://x/v1/ideas/${encodeURIComponent(ideaId)}/trace`, { headers: authHeader }));
+    const trace = (await traceRes.json()) as { provenance: { conversationId: string | null }[] };
+    expect(trace.provenance[0]?.conversationId).toBe("conv_1");
+
+    const convRes = await handler(new Request("http://x/v1/conversations/conv_1", { headers: authHeader }));
+    expect(convRes.status).toBe(200);
+    const conv = (await convRes.json()) as {
+      conversationId: string;
+      source: string;
+      messages: { role: string; text: string; index: number }[];
+    };
+    expect(conv.conversationId).toBe("conv_1");
+    expect(conv.source).toBe("fixture");
+    expect(conv.messages[0]).toMatchObject({ role: "user", text: "Authority needs explicit boundaries.", index: 0 });
+
+    const missing = await handler(new Request("http://x/v1/conversations/nope", { headers: authHeader }));
+    expect(missing.status).toBe(404);
+
+    const noAuthConv = await handler(new Request("http://x/v1/conversations/conv_1"));
+    expect(noAuthConv.status).toBe(401);
   });
 
   test("one user cannot read another user's data even with a valid token for a different account", async () => {

@@ -31,6 +31,9 @@ struct IdeaDetailView: View {
                 .padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .sheet(item: $appState.transcript) { t in
+            ConversationView(transcript: t).environmentObject(appState)
+        }
     }
 
     // MARK: head
@@ -180,7 +183,8 @@ struct IdeaDetailView: View {
                         step: step,
                         isTop: isTop,
                         isBottom: shown == rows.count - 1,
-                        quote: isTop ? quotedSource(step.sourceText) : nil
+                        quote: isTop ? quotedSource(step.sourceText) : nil,
+                        onOpenSource: { cid in Task { await appState.openConversation(cid) } }
                     )
                 }
             }
@@ -277,18 +281,33 @@ private struct EvolutionRow: View {
     let isTop: Bool
     let isBottom: Bool
     let quote: String?
+    var onOpenSource: (String) -> Void = { _ in }
+
+    private var canOpenSource: Bool { step.conversationId != nil }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             EvolutionRail(isTop: isTop, isBottom: isBottom)
 
             VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    if let src = step.sourceLabel {
-                        Text(src).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ink(0.5))
+                Button {
+                    if let cid = step.conversationId { onOpenSource(cid) }
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        if let src = step.sourceLabel {
+                            Text(src).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ink(0.5))
+                        }
+                        Text(Theme.ago(step.createdAt)).font(.system(size: 11)).foregroundStyle(Theme.ink(0.32))
+                        if canOpenSource {
+                            Image(systemName: "text.bubble")
+                                .font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.accent.opacity(0.8))
+                        }
                     }
-                    Text(Theme.ago(step.createdAt)).font(.system(size: 11)).foregroundStyle(Theme.ink(0.32))
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .disabled(!canOpenSource)
+                .help(canOpenSource ? "View the source conversation" : "")
                 Text(step.formulation)
                     .font(.system(size: 12.5, weight: isTop ? .medium : .regular)).kerning(-0.075)
                     .lineSpacing(2)

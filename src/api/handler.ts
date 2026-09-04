@@ -32,7 +32,7 @@ import { openUserDb } from "../db/tenancy";
 import { storageMode } from "../db/durability";
 import { downloadSummary, isAdmin, recordDownload } from "./metrics";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
-import { loadCanonicalEvents, loadIdeas } from "../db/queries";
+import { getConversation, loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { parsePastedConversation } from "../import/pasteParser";
 import {
@@ -430,6 +430,14 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       if (req.method === "GET" && pathname === "/v1/ideas") {
         const q = url.searchParams.get("q") ?? "";
         return json(searchIdeas(db, q));
+      }
+
+      // The captured messages behind an idea -- the "evidence" layer. `:id` is a conversation id
+      // (from ProvenanceStep.conversationId), percent-encoded like the idea ids above.
+      const convMatch = pathname.match(/^\/v1\/conversations\/(.+)$/);
+      if (req.method === "GET" && convMatch) {
+        const conv = getConversation(db, decodePathId(convMatch[1] as string));
+        return conv ? json(conv) : error(404, "Conversation not found");
       }
 
       const ideaMatch = pathname.match(/^\/v1\/ideas\/([^/]+)(\/trace)?$/);

@@ -124,6 +124,9 @@ struct ProvenanceStep: Codable, Identifiable {
     /// Canonical URL of the conversation this step came from -- a "view source" link. Nil for
     /// pastes and data captured before the URL was recorded.
     let sourceUrl: String?
+    /// Id of the source conversation. Present -> the captured transcript can be opened in Thread
+    /// (GET /v1/conversations/:id). Optional so an older server still decodes.
+    let conversationId: String?
     var id: String { formulation + createdAt }
 
     var sourceLabel: String? { displaySourceLabel(source) }
@@ -132,6 +135,25 @@ struct ProvenanceStep: Codable, Identifiable {
 struct IdeaTrace: Codable {
     let idea: IdeaDetail
     let provenance: [ProvenanceStep]
+}
+
+/// The captured messages behind an idea -- the "evidence" layer. Fetched on demand when the
+/// user taps a source on an evolution step.
+struct ConversationTranscript: Codable, Identifiable {
+    struct Turn: Codable, Identifiable {
+        let role: String        // "user" | "assistant"
+        let text: String
+        let index: Int
+        let createdAt: String
+        var id: Int { index }
+    }
+    let conversationId: String
+    let source: String
+    let sourceUrl: String?
+    let messages: [Turn]
+
+    var id: String { conversationId }
+    var sourceLabel: String { displaySourceLabel(source) ?? source.capitalized }
 }
 
 struct IngestResult: Codable {

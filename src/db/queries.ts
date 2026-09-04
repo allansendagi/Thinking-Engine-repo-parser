@@ -170,6 +170,38 @@ export function loadCanonicalEvents(db: Database): CanonicalEvent[] {
   }));
 }
 
+export interface ConversationTranscript {
+  conversationId: string;
+  /** "chatgpt" | "claude" | "gemini" | "cursor" | "paste" */
+  source: string;
+  sourceUrl: string | null;
+  messages: { role: Role; text: string; index: number; createdAt: string }[];
+}
+
+/** Every captured message of one conversation, in order -- the evidence behind an idea. Null if
+ *  no rows exist for that id. */
+export function getConversation(db: Database, conversationId: string): ConversationTranscript | null {
+  const rows = db
+    .query(
+      "SELECT role, text, idx, created_at, source, source_url FROM canonical_events WHERE conversation_id = ? ORDER BY idx ASC",
+    )
+    .all(conversationId) as {
+    role: string;
+    text: string;
+    idx: number;
+    created_at: string;
+    source: string;
+    source_url: string | null;
+  }[];
+  if (rows.length === 0) return null;
+  return {
+    conversationId,
+    source: rows[0]!.source,
+    sourceUrl: rows.find((r) => r.source_url)?.source_url ?? null,
+    messages: rows.map((r) => ({ role: r.role as Role, text: r.text, index: r.idx, createdAt: r.created_at })),
+  };
+}
+
 export function loadCanonicalEvent(db: Database, id: string): CanonicalEvent | undefined {
   const row = db.query("SELECT * FROM canonical_events WHERE id = ?").get(id) as CanonicalEventRow | null;
   if (!row) return undefined;
