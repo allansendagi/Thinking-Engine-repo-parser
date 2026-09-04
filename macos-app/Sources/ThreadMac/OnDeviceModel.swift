@@ -274,6 +274,224 @@ enum OnDeviceModel {
     }
 }
 
+// MARK: - Governing thought (Minto synthesis across related ideas, self-consistency gated)
+//
+// STATUS: dormant research, not activated. Nothing in AppState or any view calls
+// governingThought(_:_:) below -- production governing-thought synthesis is 100% the server path
+// (src/mcp/tools.ts buildGoverningThought, PR #29: candidate retrieval -> strong reasoning model
+// -> deterministic validation -> persist). Why: this isn't disposable prose, it becomes part of
+// what Continue tells someone their own thinking is -- a false "these ideas are related" doesn't
+// just read badly, it corrupts that record. Probabilistic intelligence, deterministic authority:
+// the strong model clears the bar for that today (see GoverningThoughtBenchmark.swift's history
+// for the actual numbers); on-device doesn't yet. Kept, tested, and benchmarked as the upgrade
+// path for whenever a future Apple model does.
+//
+// The server has its own version of this (src/mcp/tools.ts, buildGoverningThought / PR #29) —
+// this is NOT that ported to Swift wholesale. It's specifically the piece the benchmark
+// (macos-app/Tests/ThreadMacTests/GoverningThoughtBenchmark.swift, kept local/uncommitted so it
+// can be re-run against every future Apple model) showed was worth building on-device: given a
+// small, already-retrieved candidate set, decide whether it's one coherent argument and
+// synthesize it. Candidate retrieval itself stays server-side/deterministic elsewhere; this
+// function takes candidates as input, it doesn't find them.
+//
+// What the benchmark found, and why this function is shaped the way it is:
+//   - A single on-device call's raw coherence accuracy was ~56% (10/18) -- real, but not
+//     reliable enough to trust unattended near Thread's actual state.
+//   - Asking the model to also self-report a confidence field measurably HURT accuracy (56% ->
+//     33%), and the confidence value itself didn't correlate with correctness. Not a usable
+//     signal -- this never asks for one.
+//   - Calling 3 independent times and checking STRUCTURAL agreement (same coherent flag, same
+//     selected candidate indexes -- never the governing-thought wording, which varies harmlessly
+//     run to run) predicted correctness well: 86% right when unanimous (6/7) vs. 60% when split
+//     (6/10). But voting the 3 answers into one did NOT beat a single call (majority-vote
+//     accuracy did not exceed single-call accuracy) -- agreement is an ACCEPT/REJECT gate, never
+//     a way to resolve a disagreement into an answer.
+//   - Deterministic validation (JSON shape, index range, uniqueness, non-empty required fields)
+//     held 18/18 across every round -- the model's output SHAPE is trustworthy even when its
+//     judgment isn't, so that half of the gate is enforced in full, unconditionally.
+//
+// Net: 3 calls, structural agreement only (no voting), full deterministic validation, and a
+// split vote returns `.uncertain` rather than ever resolving itself -- the model never gets
+// authority to decide Thread's state on a disagreement. Nothing currently escalates `.uncertain`
+// to the server (no on-device caller exists yet that would); it's returned distinctly, and
+// logged distinctly, so a future caller can, without this function's contract changing.
+
+/// One candidate idea offered to the classifier. `id` is the app's real idea id; the model only
+/// ever sees a 1-based slot number (mirrors the server's numbered-candidate protocol), never the
+/// id itself.
+struct GoverningThoughtCandidate {
+    let id: String
+    let formulation: String
+}
+
+struct GoverningThoughtResult: Equatable {
+    var statement: String
+    var kind: String
+    var memberIds: [String]
+}
+
+enum GoverningThoughtOutcome: Equatable {
+    /// All 3 calls structurally agreed on a real, validated cluster.
+    case found(GoverningThoughtResult)
+    /// All 3 calls agreed there's no coherent cluster here -- confidently nothing, not a reason
+    /// to ask anything else.
+    case confidentlyNone
+    /// The 3 calls disagreed, or one produced unusable output -- a real signal (see above), not
+    /// treated as either "yes" or "no". This is where a future caller could escalate to the
+    /// server's reasoning pass.
+    case uncertain
+    /// Never attempted: the model isn't available (older macOS, Apple Intelligence off), or
+    /// there were no candidates to evaluate. Not counted as a local_attempts run.
+    case unavailable
+}
+
+/// One on-device run's decision. Mirrors src/mcp/tools.ts's GoverningThoughtDecision /
+/// parseGoverningThoughtResponse: same JSON shape, same validation bounds (statement <= 240
+/// chars, kind <= 4 words / 40 chars, refusal-shape rejection via OnDeviceModel.looksUnusable) --
+/// a result this trusts is held to the identical bar the server enforces server-side.
+struct GoverningThoughtDecision: Equatable {
+    var coherent: Bool
+    var statement: String
+    var kind: String
+    var supportingIndexes: [Int]
+
+    /// nil on anything unparseable or refusal-shaped. A clean `coherent: false` is NOT nil --
+    /// it's a real, valid decision, returned as `.coherent = false` with empty content (stray
+    /// content alongside a false answer is deliberately ignored, never validated or trusted).
+    static func parse(_ raw: String, candidateCount: Int) -> GoverningThoughtDecision? {
+        guard let start = raw.firstIndex(of: "{"), let end = raw.lastIndex(of: "}"), start < end else { return nil }
+        guard let data = String(raw[start...end]).data(using: .utf8) else { return nil }
+        struct Wire: Decodable {
+            var coherent: Bool?
+            var governingThought: String?
+            var groupType: String?
+            var supportingIdeaIds: [Int]?
+        }
+        guard let w = try? JSONDecoder().decode(Wire.self, from: data) else { return nil }
+        guard w.coherent == true else {
+            return GoverningThoughtDecision(coherent: false, statement: "", kind: "", supportingIndexes: [])
+        }
+        let statement = (w.governingThought ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let kind = (w.groupType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !statement.isEmpty, !kind.isEmpty else { return nil }
+        guard !OnDeviceModel.looksUnusable(statement), !OnDeviceModel.looksUnusable(kind) else { return nil }
+        guard statement.count <= 240 else { return nil }
+        guard kind.split(separator: " ").count <= 4, kind.count <= 40 else { return nil }
+        let indexes = Array(Set((w.supportingIdeaIds ?? []).filter { $0 >= 1 && $0 <= candidateCount })).sorted()
+        guard !indexes.isEmpty else { return nil }
+        return GoverningThoughtDecision(coherent: true, statement: statement, kind: kind, supportingIndexes: indexes)
+    }
+}
+
+extension OnDeviceModel {
+    static let governingThoughtMaxCandidates = 4
+
+    /// Governing-thought synthesis, gated on self-consistency across 3 independent calls. See
+    /// the module doc above for what the benchmark found and why this is shaped this way.
+    static func governingThought(
+        currentThought: String,
+        candidates: [GoverningThoughtCandidate]
+    ) async -> GoverningThoughtOutcome {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *), case .available = SystemLanguageModel.default.availability, !candidates.isEmpty {
+            let capped = Array(candidates.prefix(Self.governingThoughtMaxCandidates))
+            let facts = Self.governingThoughtFacts(currentThought: currentThought, candidates: capped)
+
+            var runs: [GoverningThoughtDecision] = []
+            for _ in 0..<3 {
+                do {
+                    let session = LanguageModelSession(instructions: Self.governingThoughtInstructions)
+                    let raw = try await session.respond(to: facts).content
+                    guard let decision = GoverningThoughtDecision.parse(raw, candidateCount: capped.count) else {
+                        Self.logGoverningThought(agreed: false, accepted: false, outcome: "unparseable")
+                        return .uncertain
+                    }
+                    runs.append(decision)
+                } catch {
+                    Self.logGoverningThought(agreed: false, accepted: false, outcome: "call-failed")
+                    return .uncertain
+                }
+            }
+
+            let outcome = Self.structuralAgreement(runs, candidates: capped)
+            switch outcome {
+            case .found: Self.logGoverningThought(agreed: true, accepted: true, outcome: "found")
+            case .confidentlyNone: Self.logGoverningThought(agreed: true, accepted: false, outcome: "confidently-none")
+            case .uncertain: Self.logGoverningThought(agreed: false, accepted: false, outcome: "uncertain")
+            case .unavailable: break // structuralAgreement never returns this
+            }
+            return outcome
+        }
+        #endif
+        return .unavailable
+    }
+
+    /// Pure and independently testable (no live model call): given 3 decisions and the candidate
+    /// list they were judged against, decide the outcome. This is the "structural-agreement
+    /// evaluator" -- the only place a disagreement is decided, and it never resolves one, only
+    /// detects it.
+    static func structuralAgreement(
+        _ runs: [GoverningThoughtDecision],
+        candidates: [GoverningThoughtCandidate]
+    ) -> GoverningThoughtOutcome {
+        guard runs.count == 3 else { return .uncertain }
+
+        guard Set(runs.map(\.coherent)).count == 1 else { return .uncertain }
+        guard runs[0].coherent else { return .confidentlyNone }
+
+        let idSets = Set(runs.map { Set($0.supportingIndexes) })
+        guard idSets.count == 1, let indexes = idSets.first, !indexes.isEmpty else { return .uncertain }
+
+        let members = indexes.sorted().compactMap { i -> GoverningThoughtCandidate? in
+            candidates.indices.contains(i - 1) ? candidates[i - 1] : nil
+        }
+        guard members.count == indexes.count else { return .uncertain } // shouldn't happen; never trust a mismatch
+
+        let agreed = runs[0] // any of the 3 -- they structurally agree; wording differences are fine
+        return .found(GoverningThoughtResult(statement: agreed.statement, kind: agreed.kind, memberIds: members.map(\.id)))
+    }
+
+    /// .prettyPrinted matters, not just cosmetics: it's what the self-consistency benchmark that
+    /// justified shipping this actually measured against (86%/60%). Compact JSON is untested --
+    /// don't drop this flag without re-running the benchmark against whatever replaces it.
+    private static func governingThoughtFacts(currentThought: String, candidates: [GoverningThoughtCandidate]) -> String {
+        let items = candidates.enumerated().map { i, c -> [String: Any] in ["id": i + 1, "formulation": c.formulation] }
+        let obj: [String: Any] = ["currentThought": currentThought, "otherIdeas": items]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
+              let s = String(data: data, encoding: .utf8)
+        else { return currentThought } // shouldn't happen -- plain strings only
+        return s
+    }
+
+    /// Console-only instrumentation: how often the local path resolves vs. would need
+    /// escalation, measurable in real use, not just in the benchmark. No idea content leaves the
+    /// device or this line -- only counts and an outcome label.
+    private static func logGoverningThought(agreed: Bool, accepted: Bool, outcome: String) {
+        print("[Thread][governing-thought] local_attempts=1 local_agreement=\(agreed) local_accept=\(accepted) cloud_escalation=\(!agreed) local_result=\(outcome)")
+    }
+
+    /// On-device-tuned (NOT the server's verbatim prompt -- the benchmark found the server's
+    /// caution framing, "a wrong synthesis is worse than none", measurably suppressed true
+    /// positives on this model). Keep in sync by hand with the server's GOVERNING_THOUGHT_PROMPT
+    /// lineage (src/mcp/tools.ts) only in spirit, not text -- they're allowed to diverge because
+    /// they're tuned for different models.
+    private static let governingThoughtInstructions = """
+    You are given a person's current line of thinking, and up to 4 other ideas from their thinking graph (numbered 1-4) that were retrieved because they read similarly.
+
+    Determine whether one or more of these other ideas form a coherent group with the current thought -- genuinely continuing the same line of thinking, as a reason, consequence, step, example, or a direct challenge to it. Not merely sharing vocabulary, and not just restating the current thought in different words. Base your answer only on what the ideas actually say -- never invent a relationship they don't support.
+
+    If they do form a coherent group, identify the governing thought -- one sentence for what the current thought and its genuine supporters collectively mean -- and select only the ideas that genuinely support it, dropping any that are unrelated or that just restate the current thought.
+
+    Reply with ONLY a JSON object, no other text:
+    {"coherent": true or false,
+     "governingThought": "the governing thought, one sentence. Present only when coherent is true.",
+     "groupType": "a plural noun naming what the supporting ideas ARE in relation to the governing thought -- e.g. reasons, objections, consequences, examples, preconditions, constraints, steps. Present only when coherent is true.",
+     "supportingIdeaIds": "the numbers of ONLY the ideas that genuinely support the governing thought. Present only when coherent is true."}
+
+    Never mention being an AI or a model.
+    """
+}
+
 /// Which engine wrote the "Continue from here" line in the current handoff — drives a quiet
 /// caption in the preview so the user knows whether it was drafted locally or by the server.
 enum ContinuationEngine {
