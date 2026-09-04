@@ -8,7 +8,7 @@ import {
 } from "../db/queries";
 import { buildThinkingState } from "../state/thinkingState";
 import { lexicalOverlap, entityOverlap } from "../identity/signals";
-import type { IdeaNode, ThinkingState } from "../types";
+import type { IdeaNode, OpenLoop, ThinkingState } from "../types";
 
 /**
  * The actual logic behind every MCP tool, deliberately separated from the MCP protocol wiring
@@ -299,13 +299,42 @@ function looksLikeRefusal(s: string): boolean {
 
 const THINKING_SHIFT_PROMPT = `You're given the first and current version of one line of a person's thinking. In ONE sentence beginning "You moved from", name the conceptual shift between them — the change in position, not a reword. No preamble, no hedging, one sentence.`;
 
-const THINKING_EVOLUTION_PROMPT = `Distil each formulation to a headline of AT MOST 5 words — the core move, not a summary, never the sentence itself. Output ONLY the headlines, one per line, same count and order, nothing else. Example: "AI governance needs better oversight policies." becomes "governance by written policy".`;
+/** Was "distil each formulation to a headline, same count and order" -- one line per raw step,
+ *  always, so an idea with 11 verified steps produced 11 fragments the next AI had to re-derive
+ *  the actual argument from. This asks for the compressed sequence of real moves instead --
+ *  merge restatements, cap regardless of input length. The acceptance check below (`distilled`)
+ *  was changed to match: it used to require the output count equal the input count exactly,
+ *  which would have rejected genuine compression as "didn't distil everything" and silently
+ *  fallen back to the old one-per-step template. */
+const THINKING_EVOLUTION_PROMPT = `Compress this line of thinking into the sequence of real moves it made -- not one line per formulation, one line per distinct shift in position. Merge formulations that are the same point restated; skip ones that didn't change anything. Each line starts with the move itself, not a summary of it, and is AT MOST 12 words. Cap at 5 lines even if there were more real shifts than that -- keep the ones that changed the direction most. Output ONLY the lines, one per line, nothing else. Example: "AI governance needs better oversight policies." becomes "governance by written policy".`;
+
+const THINKING_EVOLUTION_MAX_LINES = 5;
 
 /** Template fallback for a trajectory phrase: the formulation's leading clause, first ~6 words. */
 function shortPhrase(s: string): string {
   const clause = s.split(/[—–:;.]/)[0]!.trim() || s.trim();
   const words = clause.split(/\s+/).slice(0, 6).join(" ");
   return words.replace(/[.,;:]+$/, "");
+}
+
+/** No-provider / Free-tier fallback for `trajectory`. Below the cap, every step gets its own
+ *  phrase, unchanged from before. Above it, thinned deterministically -- first step, last step,
+ *  and evenly-spaced picks between, in order -- rather than showing every raw step: a real
+ *  compression needs judgment no template has, but showing the shape of the whole arc beats
+ *  truncating to just the most recent few. */
+export function templateTrajectory(
+  evolution: { formulation: string }[],
+): string[] {
+  if (evolution.length <= THINKING_EVOLUTION_MAX_LINES) {
+    return evolution.map((e) => shortPhrase(e.formulation));
+  }
+  const picks = new Set<number>([0, evolution.length - 1]);
+  const step = (evolution.length - 1) / (THINKING_EVOLUTION_MAX_LINES - 1);
+  for (let i = 0; i < THINKING_EVOLUTION_MAX_LINES; i++)
+    picks.add(Math.round(i * step));
+  return [...picks]
+    .sort((a, b) => a - b)
+    .map((i) => shortPhrase(evolution[i]!.formulation));
 }
 
 function pickIdeaForTopic(db: Database, topic: string): IdeaNode | null {
@@ -321,8 +350,39 @@ function pickIdeaForTopic(db: Database, topic: string): IdeaNode | null {
   return getIdea(db, best.id);
 }
 
+/** Open loops with near-duplicate restatements collapsed, newest first. An idea captured across
+ *  several conversations can accumulate several near-identical versions of the same open
+ *  question ("Should X treat A or B as the primary object?" / "...as its primary object?") --
+ *  collapsed here the same way governing-thought retrieval treats near-verbatim text as one
+ *  thing, not several (same signal, same threshold, confirmed against real prod pairs).
+ *
+ *  Deliberately does NOT try to detect that a loop has since been resolved in substance by the
+ *  idea's own current formulation -- tried a lexicalOverlap check against `currentFormulation`
+ *  for exactly that, and it doesn't work: a question and the statement that answers it share
+ *  little vocabulary (measured ~0.3 on realistic text, nowhere near a threshold that separates
+ *  "resolved" from "unrelated"). Recognizing that a later formulation answered an earlier
+ *  question needs real judgment, not a lexical proxy -- see buildContinuationPacket's
+ *  `suggestedNext`, which already gets this right because a model sees the full context, not a
+ *  pairwise text comparison. Closing the gap properly means marking loops resolved when a later
+ *  formulation answers them, at extraction time -- a pipeline feature, not this function. */
+export function distinctOpenLoops(idea: IdeaNode): OpenLoop[] {
+  const open = [...idea.openLoops.filter((l) => !l.resolved)].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  );
+  const kept: OpenLoop[] = [];
+  for (const loop of open) {
+    const isDuplicate = kept.some(
+      (k) =>
+        lexicalOverlap(loop.statement, k.statement) >=
+        GOVERNING_THOUGHT_NEAR_DUPLICATE_CEILING,
+    );
+    if (!isDuplicate) kept.push(loop);
+  }
+  return kept;
+}
+
 function mostRelevantOpenLoop(idea: IdeaNode): string | null {
-  const open = idea.openLoops.filter((l) => !l.resolved);
+  const open = distinctOpenLoops(idea);
   if (open.length === 0) return null;
   if (idea.state === "contested") {
     const contradiction = open.find((l) =>
@@ -330,8 +390,7 @@ function mostRelevantOpenLoop(idea: IdeaNode): string | null {
     );
     if (contradiction) return contradiction.statement;
   }
-  return [...open].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
-    .statement;
+  return open[0]!.statement;
 }
 
 // --- Governing thought: the Minto-style synthesis across a small cluster of related ideas ---
@@ -560,10 +619,11 @@ export async function buildContinuationPacket(
     }
   }
 
-  // The trajectory, one <=6-word phrase per verified step.
+  // The trajectory: the compressed sequence of real moves, capped at
+  // THINKING_EVOLUTION_MAX_LINES regardless of how many verified steps there are.
   let trajectory: string[] = [];
   if (evolution.length >= 2) {
-    trajectory = evolution.map((e) => shortPhrase(e.formulation));
+    trajectory = templateTrajectory(evolution);
     if (provider) {
       try {
         const raw = (
@@ -586,26 +646,33 @@ export async function buildContinuationPacket(
               .replace(/[.,;:]+$/, ""),
           )
           .filter(Boolean);
-        // Take it only if it actually distilled — a weaker model sometimes echoes the input.
+        // Take it only if it actually compressed — at least one real line, never more than the
+        // cap (or the input count, for a short evolution where the cap doesn't bind), each
+        // short enough to be a move rather than a paragraph. A weaker model sometimes echoes
+        // the input back near-verbatim instead of compressing it; that's still caught by the
+        // per-line length bound, just a looser one than the old "headline" prompt needed.
+        const cap = Math.min(evolution.length, THINKING_EVOLUTION_MAX_LINES);
         const distilled =
-          lines.length === evolution.length &&
+          lines.length >= 1 &&
+          lines.length <= cap &&
           lines.every(
             (l) =>
-              l.split(/\s+/).length <= 7 &&
-              l.length <= 60 &&
+              l.split(/\s+/).length <= 14 &&
+              l.length <= 100 &&
               !looksLikeRefusal(l),
           );
         if (distilled) trajectory = lines;
       } catch {
-        // keep the first-words template
+        // keep the template
       }
     }
   }
 
-  // Every unresolved loop, newest first, capped — for the machine handoff's UNRESOLVED block.
-  const unresolvedQuestions = [...idea.openLoops]
-    .filter((l) => !l.resolved)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  // Distinct unresolved loops (see distinctOpenLoops), capped — for the machine handoff's
+  // UNRESOLVED block. Was "every open loop, newest first" -- on a real account that meant
+  // several near-identical restatements of the same question in a row, which is exactly the
+  // "genuinely unresolved" signal this block exists to carry, diluted into noise.
+  const unresolvedQuestions = distinctOpenLoops(idea)
     .slice(0, 3)
     .map((l) => stripLoopPrefix(l.statement));
 
