@@ -1,6 +1,7 @@
 /**
  * Transactional email via Resend's HTTP API -- plain fetch, no SDK, matching the rest of this
- * codebase's "no external dependencies" stance. The only thing Thread sends is a sign-in code.
+ * codebase's "no external dependencies" stance. Thread sends two things: a sign-in code, and a
+ * one-time waitlist confirmation.
  *
  * With no RESEND_API_KEY set (local dev, tests), it logs the message instead of sending -- the
  * e2e verification flow reads the code out of the server log.
@@ -36,7 +37,6 @@ export async function sendEmail(msg: { to: string; subject: string; text: string
   }
 }
 
-/** The one email Thread sends. */
 export function signInCodeEmail(code: string): { subject: string; text: string } {
   return {
     subject: `Your Thread sign-in code: ${code}`,
@@ -44,6 +44,19 @@ export function signInCodeEmail(code: string): { subject: string; text: string }
       `Your Thread sign-in code is ${code}`,
       ``,
       `It expires in 10 minutes. If you didn't ask for this, you can ignore this email.`,
+    ].join("\n"),
+  };
+}
+
+/** Sent once, right after a new /waitlist signup -- never on a repeat join (addToWaitlist's
+ *  `alreadyJoined` case). Matches the page's own promise: "no spam, one email when it matters." */
+export function waitlistJoinedEmail(): { subject: string; text: string } {
+  return {
+    subject: `You're on the Thread waitlist`,
+    text: [
+      `You're on the list.`,
+      ``,
+      `We'll email you again the moment it's your turn -- nothing else in the meantime.`,
     ].join("\n"),
   };
 }
