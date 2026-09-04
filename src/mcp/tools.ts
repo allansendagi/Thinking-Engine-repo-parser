@@ -343,10 +343,13 @@ function mostRelevantOpenLoop(idea: IdeaNode): string | null {
 // retrieval precision, is what decides whether a governing thought ever renders.
 
 const GOVERNING_THOUGHT_CANDIDATE_FLOOR = 0.2;
-/** At/above this, a candidate isn't a "supporting idea" -- it's a near-duplicate of the seed
- *  (dedup's job, see state/dedup.ts). Real data surfaced exactly this: two garbage-titled ideas
- *  with a 1.00 current-formulation overlap. Filtered out before the model ever sees them, not
- *  left for the model to notice. */
+/** At/above this, a candidate is near-VERBATIM the same text as the seed -- not a "supporting
+ *  idea", a duplicate (dedup's job, see state/dedup.ts). This is narrow by construction: it only
+ *  catches near-identical strings (confirmed against the real account -- the 1.00 pairs there
+ *  were exact-duplicate `current_formulation` text), not a paraphrased restatement of the same
+ *  claim in different words (measured ~0.26 for a realistic paraphrase, comfortably inside the
+ *  candidate window). Paraphrased duplicates are left to the model's coherence judgment below,
+ *  not this floor -- the prompt is written to ask for it explicitly. */
 const GOVERNING_THOUGHT_NEAR_DUPLICATE_CEILING = 0.85;
 const GOVERNING_THOUGHT_MAX_CANDIDATES = 4;
 
@@ -371,13 +374,13 @@ function relatedCandidates(seed: IdeaNode, allIdeas: IdeaNode[]): IdeaNode[] {
     .map((c) => c.idea);
 }
 
-const GOVERNING_THOUGHT_PROMPT = `You are given a person's current line of thinking, and up to 4 other ideas from their thinking graph (numbered 1-4) retrieved because they read similarly. Decide whether they genuinely form ONE coherent line of thinking -- not just shared vocabulary. Never invent a relationship the ideas themselves don't support.
+const GOVERNING_THOUGHT_PROMPT = `You are given a person's current line of thinking, and up to 4 other ideas from their thinking graph (numbered 1-4) retrieved because they read similarly. Decide whether they genuinely form ONE coherent line of thinking -- not just shared vocabulary. Never invent a relationship the ideas themselves don't support. If one of the other ideas is really just a restatement of the current thought in different words -- not a distinct reason, consequence, or step -- drop it; it is not support.
 
 Reply with ONLY a JSON object, no other text:
 {"coherent": true or false,
  "governingThought": "one sentence stating what the current thought and the SUPPORTING ideas collectively mean -- the synthesis, never a list or a restatement of the current thought alone. Required when coherent is true.",
  "groupType": "a plural noun naming what the supporting ideas ARE in relation to the governing thought -- e.g. reasons, objections, consequences, examples, preconditions, constraints. At most a few words, no sentence. Required when coherent is true.",
- "supportingIdeaIds": "the numbers (1-4) of ONLY the other ideas that actually belong to this governing thought -- drop any that don't fit rather than forcing them in. Required, non-empty, when coherent is true."}
+ "supportingIdeaIds": "the numbers (1-4) of ONLY the other ideas that actually belong to this governing thought -- drop any that don't fit or merely restate the current thought. Required, non-empty, when coherent is true."}
 
 Say coherent:false whenever none of the other ideas genuinely build one argument with the current thought -- a wrong synthesis is worse than none. Never mention being an AI or a model.`;
 

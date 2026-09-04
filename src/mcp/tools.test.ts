@@ -469,9 +469,11 @@ function seedGoverningThoughtIdeas() {
     formulation: "A higher hydration dough needs a longer bulk ferment.",
     createdAt: "2026-08-05T00:00:00.000Z",
   });
-  // Near-verbatim reword of A -- a duplicate, not a supporting idea. Must be excluded from
-  // candidates outright (below GOVERNING_THOUGHT_NEAR_DUPLICATE_CEILING), not offered to the
-  // model and rejected.
+  // Near-VERBATIM reword of A (one word inserted) -- what the real 1.00 pairs on the prod
+  // account turned out to be: near-identical text, not a paraphrase. Must be excluded from
+  // candidates outright, at/above GOVERNING_THOUGHT_NEAR_DUPLICATE_CEILING -- never offered to
+  // the model at all. A genuine paraphrase (different words, same claim) scores well below this
+  // ceiling and is NOT caught here; see the prompt's explicit "drop a restatement" instruction.
   insertIdea(db, {
     id: "E",
     title: "Authority becomes machine-executable",
@@ -573,7 +575,7 @@ describe("buildContinuationPacket · governing thought", () => {
     expect(r!.packet.governingThought).toBeNull();
   });
 
-  test("only a near-duplicate is nearby -> excluded as a candidate, not treated as support", async () => {
+  test("only a near-verbatim duplicate is nearby -> excluded as a candidate, not treated as support", async () => {
     const db = openDb(":memory:");
     insertIdea(db, {
       id: "A",
