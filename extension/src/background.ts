@@ -119,7 +119,42 @@ async function setBadge(needsAttention: boolean): Promise<void> {
   if (needsAttention) await chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
 }
 
-chrome.runtime.onInstalled.addListener(() => void ensurePaired("install"));
+/**
+ * Reloading/updating the extension leaves the content script dead in every AI tab that was
+ * already open ("Extension context invalidated" -- see capture.ts, which tears itself down).
+ * Re-inject the fresh content script into those tabs so capture resumes without the user
+ * reloading each one by hand. `bootstrapContentScript` is idempotent, so a tab that reloaded on
+ * its own in the meantime is unharmed.
+ */
+const CONTENT_SCRIPT_TARGETS: { matches: string[]; file: string }[] = [
+  { matches: ["https://chatgpt.com/*", "https://chat.openai.com/*"], file: "dist/content-chatgpt.js" },
+  { matches: ["https://claude.ai/*"], file: "dist/content-claude.js" },
+  { matches: ["https://gemini.google.com/*"], file: "dist/content-gemini.js" },
+];
+
+async function reinjectOpenTabs(): Promise<void> {
+  for (const { matches, file } of CONTENT_SCRIPT_TARGETS) {
+    let tabs: chrome.tabs.Tab[] = [];
+    try {
+      tabs = await chrome.tabs.query({ url: matches });
+    } catch {
+      continue;
+    }
+    for (const tab of tabs) {
+      if (tab.id == null) continue;
+      try {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [file] });
+      } catch {
+        // Tab navigated away / a restricted page / no host permission on that exact URL -- skip.
+      }
+    }
+  }
+}
+
+chrome.runtime.onInstalled.addListener((details) => {
+  void ensurePaired("install");
+  if (details.reason === "install" || details.reason === "update") void reinjectOpenTabs();
+});
 chrome.runtime.onStartup.addListener(() => void ensurePaired("startup"));
 
 chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 1 });

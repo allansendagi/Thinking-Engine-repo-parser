@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Thread — Continuity Layer",
+  "name": "Thread \u2014 Continuity Layer",
   "version": "0.2.0",
   "description": "Captures the ideas you develop in ChatGPT, Claude, and Gemini, and lets you recover and continue your thinking.",
   "icons": {
@@ -9,7 +9,12 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "sidePanel", "alarms"],
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "alarms",
+    "scripting"
+  ],
   "host_permissions": [
     "http://localhost/*",
     "http://127.0.0.1/*",
@@ -25,18 +30,31 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["dist/content-chatgpt.js"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "dist/content-chatgpt.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://claude.ai/*"],
-      "js": ["dist/content-claude.js"],
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "js": [
+        "dist/content-claude.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://gemini.google.com/*"],
-      "js": ["dist/content-gemini.js"],
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "dist/content-gemini.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -54,4 +72,3 @@
     "default_path": "dist/sidepanel.html"
   }
 }
-
