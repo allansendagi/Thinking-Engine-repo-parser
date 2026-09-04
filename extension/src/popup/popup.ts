@@ -1,4 +1,11 @@
-import { getPairingState, getSettings, setApiBaseUrl, setCredentials, setPairingState } from "../lib/storage";
+import {
+  DEFAULT_API_BASE_URL,
+  getPairingState,
+  getSettings,
+  setApiBaseUrl,
+  setCredentials,
+  setPairingState,
+} from "../lib/storage";
 import { parsePairingString } from "../lib/pairing";
 import type { PairingState } from "../lib/types";
 
@@ -14,20 +21,29 @@ function showError(message: string): void {
 }
 
 function render(state: PairingState): void {
+  const paired = state.status === "paired";
   const labels: Record<PairingState["status"], string> = {
-    paired: state.userId ? `Paired as ${state.userId.slice(0, 16)}…` : "Paired",
+    paired: "Connected to Thread for Mac",
     unpaired: "Not connected",
-    rejected: "Credentials expired",
+    rejected: "Connection expired",
   };
   $("statusText").textContent = labels[state.status];
-  $("statusDetail").textContent = state.detail ?? "";
+  $("statusDetail").textContent = paired
+    ? "Capturing from this browser."
+    : (state.detail ?? "Open Thread for Mac to connect.");
   $("dot").className = `dot ${state.status}`;
-  ($("connect") as HTMLButtonElement).textContent =
-    state.status === "paired" ? "Reconnect to Thread for Mac" : "Connect to Thread for Mac";
+
+  // When connected, the big blue button is noise -- collapse it to a quiet "Reconnect" link.
+  ($("connect") as HTMLButtonElement).hidden = paired;
+  ($("reconnect") as HTMLButtonElement).hidden = !paired;
+  // The code paste-in section only matters when the automatic path isn't working.
+  ($("codeSection") as HTMLDetailsElement).hidden = paired;
 }
 
 async function refresh(): Promise<void> {
-  input("apiBaseUrl").value = (await getSettings()).apiBaseUrl;
+  const s = await getSettings();
+  // Don't surface the default backend URL -- only show a value the user has deliberately set.
+  input("apiBaseUrl").value = s.apiBaseUrl === DEFAULT_API_BASE_URL ? "" : s.apiBaseUrl;
   render(await getPairingState());
 }
 
@@ -75,11 +91,14 @@ async function usePairingString(): Promise<void> {
 
 function init(): void {
   void refresh();
+  // Opening the popup is a good moment to tell the Mac we're here.
+  void chrome.runtime.sendMessage({ type: "thread:announce" });
   $("connect").addEventListener("click", () => void connect());
+  $("reconnect").addEventListener("click", () => void connect());
   $("usePairingString").addEventListener("click", () => void usePairingString());
   $("saveUrl").addEventListener("click", async () => {
-    const value = input("apiBaseUrl").value.trim();
-    if (value) await setApiBaseUrl(value);
+    // Blank = reset to the default backend.
+    await setApiBaseUrl(input("apiBaseUrl").value.trim() || DEFAULT_API_BASE_URL);
     await refresh();
   });
 }

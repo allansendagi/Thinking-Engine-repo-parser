@@ -8,6 +8,9 @@ struct SettingsView: View {
     @State private var copied = false
     @State private var showAdvanced = false
     @State private var confirmStrandedUnpair = false
+    /// Re-evaluates the time-based `browserConnected` / `browserReconnecting` while Settings is open.
+    @State private var tick = 0
+    private let heartbeat = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -67,34 +70,33 @@ struct SettingsView: View {
                     .font(.caption).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                // Connected / not-connected state. `browserEverPaired` is persisted; "· active"
-                // shows only while a handshake is genuinely fresh.
+                // Live connection state, derived from the extension's heartbeat (it pings every
+                // minute while alive + on this account) -- not a sticky flag. So it self-heals
+                // after a sign-out/in and goes stale on its own if the browser closes.
                 HStack(spacing: 8) {
-                    if appState.browserEverPaired {
-                        Label(
-                            appState.browserActiveNow ? "Browser connected · active" : "Browser connected",
-                            systemImage: "checkmark.circle.fill"
-                        )
-                        .font(.caption).foregroundStyle(.green)
-                        Button("Reconnect") { appState.openPairingWindow() }
-                            .font(.caption2).buttonStyle(.plain).foregroundStyle(Theme.accent)
+                    if appState.browserConnected {
+                        Label("Browser connected", systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    } else if appState.browserReconnecting {
+                        Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Button("Connect a browser") { appState.openPairingWindow() }
                             .font(.caption)
-                    }
-                    if appState.isPairingWindowOpen {
-                        Label("Listening…", systemImage: "dot.radiowaves.left.and.right")
-                            .font(.caption2).foregroundStyle(Theme.accent)
+                        if appState.isPairingWindowOpen {
+                            Label("Listening…", systemImage: "dot.radiowaves.left.and.right")
+                                .font(.caption2).foregroundStyle(Theme.accent)
+                        }
                     }
                 }
                 .padding(.top, 2)
 
-                if !appState.browserEverPaired && !appState.isPairingWindowOpen {
-                    Text("No browser connected yet.")
+                if !appState.browserConnected && !appState.browserReconnecting && !appState.isPairingWindowOpen {
+                    Text("No browser connected.")
                         .font(.caption2).foregroundColor(.secondary)
                 }
 
-                if let pairing = appState.pairingString {
+                if !appState.browserConnected, let pairing = appState.pairingString {
                     Text("Or paste this into the extension:")
                         .font(.caption2).foregroundColor(.secondary).padding(.top, 4)
                     HStack {
@@ -174,6 +176,7 @@ struct SettingsView: View {
         .frame(width: 340)
         .tint(Theme.accent)   // buttons follow the app accent, not the OS accent colour
         .onAppear { urlDraft = appState.apiBaseUrl }
+        .onReceive(heartbeat) { _ in tick &+= 1 }   // keep the browser-connection line current
     }
 
     /// One clean line describing the plan -- the only place subscription state lives in the app.

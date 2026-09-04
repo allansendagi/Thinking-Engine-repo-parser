@@ -451,17 +451,28 @@ final class AppState: ObservableObject {
     /// loopback pairing server. Drives the footer's "capturing" indicator.
     @Published var lastExtensionHandshake: Date?
 
-    /// Whether a browser has ever completed the loopback handshake on this account. Persisted,
-    /// because the extension pulls credentials once and then works off its own copy -- so a live
-    /// handshake this session is the exception, not the rule. Settings shows this as the
-    /// connected / not-connected state; "Reconnect" is the escape hatch if it goes stale.
-    private let browserPairedKey = "thread.browserPaired"
-    @Published var browserEverPaired = UserDefaults.standard.bool(forKey: "thread.browserPaired")
+    /// Last time a browser said "I'm connected as <this account>" -- via a loopback handshake or
+    /// the periodic `/thread/hello` ping. This is *derived* connection state, not a sticky flag:
+    /// the extension pings every minute (and on start, on capture, on popup-open) while it's
+    /// alive and pointed here, so "connected" == "pinged recently". Persisted only so a relaunch
+    /// doesn't flash "no browser" for the few seconds before the next ping lands.
+    private let lastPingKey = "thread.lastExtensionPing"
+    @Published var lastExtensionPing: Date? = {
+        let t = UserDefaults.standard.double(forKey: "thread.lastExtensionPing")
+        return t > 0 ? Date(timeIntervalSince1970: t) : nil
+    }()
 
-    /// True only while a handshake is fresh (< 5 min) -- a genuine "talking right now" pulse.
-    var browserActiveNow: Bool {
-        guard let last = lastExtensionHandshake else { return false }
-        return Date().timeIntervalSince(last) < 300
+    /// A browser is connected: it pinged within the last 90s (≥ the 60s ping interval + slack).
+    var browserConnected: Bool {
+        guard let t = lastExtensionPing else { return false }
+        return Date().timeIntervalSince(t) < 90
+    }
+
+    /// Pinged within the last 10 minutes but not the last 90s -- e.g. right after a sign-in or a
+    /// relaunch, before the next ping. Shown as "Reconnecting…" instead of "No browser".
+    var browserReconnecting: Bool {
+        guard let t = lastExtensionPing, !browserConnected else { return false }
+        return Date().timeIntervalSince(t) < 600
     }
 
     /// Trial / subscription state. nil until first fetched.
@@ -495,18 +506,21 @@ final class AppState: ObservableObject {
 
     func noteExtensionHandshake() {
         lastExtensionHandshake = Date()
-        if !browserEverPaired {
-            browserEverPaired = true
-            UserDefaults.standard.set(true, forKey: browserPairedKey)
-        }
+        recordExtensionPing()
     }
 
-    /// The extension pinged `/thread/hello` to say it's connected. Count it only when it's for
-    /// *this* account (or the ping didn't say) -- a stray ping for some other account shouldn't
-    /// light up "Browser connected" here.
+    /// The extension pinged (`/thread/hello`) to say it's connected. Count it only when it's for
+    /// *this* account (or the ping didn't say) -- a stray ping for another account must not light
+    /// up "Browser connected" here, and its absence is how a mismatched extension goes stale.
     func noteExtensionPing(userId: String?) {
         guard userId == nil || userId?.isEmpty == true || userId == CredentialStore.userId else { return }
-        noteExtensionHandshake()
+        recordExtensionPing()
+    }
+
+    private func recordExtensionPing() {
+        let now = Date()
+        lastExtensionPing = now
+        UserDefaults.standard.set(now.timeIntervalSince1970, forKey: lastPingKey)
     }
 
     /// Footer's third slot: "Free · N/25" / "Pro" once billing is live, else "Cloud".
@@ -859,8 +873,10 @@ final class AppState: ObservableObject {
         searchResults = []
         reconnect = nil
         lastExtensionHandshake = nil
-        browserEverPaired = false
-        UserDefaults.standard.removeObject(forKey: browserPairedKey)
+        // `lastExtensionPing` is deliberately NOT cleared: if the same browser is still running
+        // it re-confirms within a minute, so signing out and back in doesn't force a manual
+        // "Connect a browser". A ping for a *different* account is rejected in noteExtensionPing,
+        // so a genuine account switch still goes stale on its own.
         closeIdea()
     }
 
