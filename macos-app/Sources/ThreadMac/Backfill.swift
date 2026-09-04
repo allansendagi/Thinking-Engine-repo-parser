@@ -186,6 +186,37 @@ enum Backfill {
         return (latest, nil)
     }
 
+    /// Cursor keeps its history in a local `state.vscdb`, so its backfill needs no export -- read
+    /// it and send each conversation to `/v1/conversations` (the backend dedupes on message id).
+    /// Same progress + 402 handling as `run`.
+    static func runCursor(
+        client: APIClient,
+        progress: @escaping (BackfillProgress) -> Void
+    ) async throws -> (summary: ImportSummary, cappedAt: Int?) {
+        let convs = CursorBackfill.readConversations()
+        guard !convs.isEmpty else { throw BackfillError.emptyExport }
+
+        let iso = ISO8601DateFormatter()
+        var done = 0
+        var lastIdeaCount = 0
+        for c in convs {
+            let base = Date()
+            let messages = c.messages.enumerated().map { i, m in
+                (id: "\(c.id)::\(i)", role: m.role, text: m.text,
+                 createdAt: iso.string(from: base.addingTimeInterval(Double(i))))
+            }
+            do {
+                lastIdeaCount = try await client.ingestConversation(id: c.id, source: "cursor", messages: messages).ideaCount
+            } catch let APIError.http(status, _) where status == 402 {
+                return (ImportSummary(newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: lastIdeaCount), done)
+            }
+            done += 1
+            let snap = BackfillProgress(conversationsDone: done, conversationsTotal: convs.count, ideaCount: lastIdeaCount)
+            await MainActor.run { progress(snap) }
+        }
+        return (ImportSummary(newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: lastIdeaCount), nil)
+    }
+
     // MARK: - helpers
 
     /// Returns a URL to a readable `conversations.json` -- the file itself if `url` already is

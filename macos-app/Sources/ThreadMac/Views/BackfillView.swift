@@ -39,11 +39,30 @@ struct BackfillView: View {
         Text("Thread can reconstruct the ideas, decisions and open questions from AI conversations you've already had.")
             .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
 
+        if appState.cursorBackfillAvailable {
+            Button { appState.runCursorBackfill() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles").foregroundStyle(Theme.accent)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Recover from Cursor").font(.system(size: 12, weight: .medium))
+                        Text("Your local Cursor history — no export needed").font(.caption2).foregroundColor(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.system(size: 10)).foregroundColor(.secondary)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+
         if exports.isEmpty {
             Button {
                 appState.lookForExports()
             } label: {
-                Label("I have an export in Downloads — check", systemImage: "folder")
+                Label("I have a ChatGPT / Claude export in Downloads — check", systemImage: "folder")
                     .font(.system(size: 12, weight: .medium))
             }
             .buttonStyle(.borderedProminent)

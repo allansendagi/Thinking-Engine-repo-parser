@@ -552,16 +552,32 @@ final class AppState: ObservableObject {
     /// "Hide" during a run -- keep importing, just get the sheet out of the way.
     func hideBackfillSheet() { backfillHidden = true }
 
+    /// Cursor's local history needs no export -- offered separately in the sheet.
+    var cursorBackfillAvailable: Bool { CursorBackfill.available }
+
     func runBackfill(_ export: DetectedExport) {
+        runBackfillTask(total: export.conversationCount) { client, progress in
+            try await Backfill.run(export, client: client, progress: progress)
+        }
+    }
+
+    func runCursorBackfill() {
+        runBackfillTask(total: 0) { client, progress in
+            try await Backfill.runCursor(client: client, progress: progress)
+        }
+    }
+
+    private func runBackfillTask(
+        total: Int,
+        _ work: @escaping (APIClient, @escaping (BackfillProgress) -> Void) async throws -> (summary: ImportSummary, cappedAt: Int?)
+    ) {
         guard isPaired, reconnect == nil else { return }
         let before = thinkingState?.currentIdeas.count ?? 0
-        backfill = .running(BackfillProgress(conversationsDone: 0, conversationsTotal: export.conversationCount, ideaCount: before))
+        backfill = .running(BackfillProgress(conversationsDone: 0, conversationsTotal: total, ideaCount: before))
         let c = client
         Task {
             do {
-                let (summary, cappedAt) = try await Backfill.run(export, client: c) { [weak self] p in
-                    self?.backfill = .running(p)
-                }
+                let (summary, cappedAt) = try await work(c) { [weak self] p in self?.backfill = .running(p) }
                 let added = max(summary.ideaCount - before, 0)
                 if cappedAt != nil {
                     backfill = .partial(ideaCount: summary.ideaCount, newIdeas: added)

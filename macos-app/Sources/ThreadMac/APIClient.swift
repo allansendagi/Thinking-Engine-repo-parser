@@ -199,6 +199,20 @@ final class APIClient {
         return try await request("/v1/paste", method: "POST", body: body)
     }
 
+    /// Ingest one structured conversation (used by the on-Mac Cursor history pass -- the browser
+    /// extension has its own path). The backend dedupes on message id, so re-sending is free.
+    func ingestConversation(
+        id: String, source: String, messages: [(id: String, role: String, text: String, createdAt: String)]
+    ) async throws -> IngestResult {
+        let payload: [String: Any] = [
+            "conversationId": id,
+            "source": source,
+            "messages": messages.map { ["id": $0.id, "role": $0.role, "text": $0.text, "createdAt": $0.createdAt] },
+        ]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await request("/v1/conversations", method: "POST", body: body)
+    }
+
     func getAccount() async throws -> AccountStatus {
         try await request("/v1/account")
     }
