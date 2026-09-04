@@ -179,6 +179,9 @@ struct SettingsView: View {
     /// One clean line describing the plan -- the only place subscription state lives in the app.
     private var subscriptionLine: String {
         guard let a = appState.account else { return "Signed in" }
+        if a.isAdmin == true {
+            return "Admin · unlimited capture · \(a.ideaCount) ideas"
+        }
         if a.isPro {
             switch a.status {
             case "canceled":
