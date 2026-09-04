@@ -290,6 +290,23 @@ describe("db/mutations · mergeIdeas", () => {
     expect(merged?.updatedAt).toBe("2026-08-04T00:00:00.000Z"); // latest step
   });
 
+  test("a human-set state on the kept idea survives the merge (not reverted by replay)", async () => {
+    const db = await seedTwoIdeas();
+    // A human mutes A. 'dormant' is unreachable by replaying events, so the merge must keep it
+    // even though B's rejection would otherwise drive the merged state to 'rejected'.
+    expect(setIdeaState(db, A, "dormant")).toBe(true);
+    mergeIdeas(db, A, B);
+    expect(loadIdeas(db)[0]?.state).toBe("dormant");
+  });
+
+  test("the dropped idea's state carries no weight -- the live kept idea stays live", async () => {
+    const db = await seedTwoIdeas();
+    expect(setIdeaState(db, B, "dormant")).toBe(true); // human muted the twin being dissolved
+    mergeIdeas(db, A, B);
+    // A's own steps replay to 'established'; nothing human on A -> merged sequence wins.
+    expect(loadIdeas(db)[0]?.state).toBe("rejected"); // u4 rejection is last in the merged timeline
+  });
+
   test("a cognitive event that already backs the kept idea is not moved or lost", async () => {
     const db = await seedTwoIdeas();
     // Force a shared step: make cog_u1_0 (already on A) also back B.

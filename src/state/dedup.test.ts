@@ -27,9 +27,26 @@ function insertIdea(
     formulation: string;
     createdAt: string;
   };
+  // Store the state the pipeline would have derived from these steps -- that's how rows exist on
+  // disk, and mergeIdeas treats a stored state that DIFFERS from the replay as a human override.
+  let state = "developing";
+  for (const s of o.steps) {
+    if (s.type === "decision") state = "established";
+    else if (s.type === "rejection") state = "rejected";
+    else if (s.type === "contradiction") state = "contested";
+    else if (s.type === "resolution" && state === "contested")
+      state = "developing";
+  }
   db.prepare(
-    "INSERT INTO idea_nodes (id, title, state, current_formulation, why_it_matters, created_at, updated_at) VALUES (?, ?, 'developing', ?, NULL, ?, ?)",
-  ).run(o.id, o.title, last.formulation, first.createdAt, last.createdAt);
+    "INSERT INTO idea_nodes (id, title, state, current_formulation, why_it_matters, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?)",
+  ).run(
+    o.id,
+    o.title,
+    state,
+    last.formulation,
+    first.createdAt,
+    last.createdAt,
+  );
 
   for (const s of o.steps) {
     const canon = `canon_${s.cog}`;

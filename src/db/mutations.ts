@@ -145,6 +145,19 @@ export function mergeIdeas(
   }
 
   return db.transaction((): MergeIdeasResult => {
+    // Decide the merged idea's state BEFORE any row moves. If keepId's stored `state` can't be
+    // reproduced by replaying its own evolution steps, a human set it via setIdeaState (`dormant`
+    // is unreachable by replay at all; a manual `rejected`/`established` can be too) -- and a
+    // merge must not silently revert that. The dropped idea's state carries no weight: it's being
+    // dissolved into keepId, and if a human muted it as a stale twin, the live idea stays live.
+    const keepStored = (
+      db.query("SELECT state FROM idea_nodes WHERE id = ?").get(keepId) as {
+        state: string;
+      }
+    ).state;
+    const preservedState =
+      keepStored !== derivedState(db, keepId) ? keepStored : null;
+
     // evolution_steps -- PK (idea_id, cognitive_event_id). A collision means the SAME cognitive
     // event already backs keepId. That shouldn't happen for a genuine duplicate, but if it does
     // the shared step must stay on keepId, not vanish.
@@ -205,7 +218,7 @@ export function mergeIdeas(
       "UPDATE identity_resolutions SET matched_idea_id = ? WHERE matched_idea_id = ?",
     ).run(keepId, dropId);
 
-    rederiveIdea(db, keepId);
+    rederiveIdea(db, keepId, preservedState);
     db.prepare("DELETE FROM idea_nodes WHERE id = ?").run(dropId);
 
     return {
@@ -250,14 +263,51 @@ function dedupeOpenLoops(db: Database, ideaId: string): number {
   return removed;
 }
 
+/** The state applyCognitiveEvent would leave an idea in given this sequence of event types, in
+ *  order. The only transitions that exist; `dormant` is unreachable (set only by a human). */
+function replayState(types: string[]): string {
+  let state = "developing";
+  for (const type of types) {
+    if (type === "decision") state = "established";
+    else if (type === "rejection") state = "rejected";
+    else if (type === "contradiction") state = "contested";
+    else if (type === "resolution" && state === "contested")
+      state = "developing";
+  }
+  return state;
+}
+
+/** What an idea's stored `state` WOULD be if re-derived from its own evolution steps. A mismatch
+ *  with the stored value means a human set it (setIdeaState). Null when the idea has no steps. */
+function derivedState(db: Database, ideaId: string): string | null {
+  const types = (
+    db
+      .query(
+        `SELECT ce.type AS type
+           FROM evolution_steps es
+           JOIN cognitive_events ce ON ce.id = es.cognitive_event_id
+          WHERE es.idea_id = ?
+          ORDER BY es.created_at ASC, es.cognitive_event_id ASC`,
+      )
+      .all(ideaId) as { type: string }[]
+  ).map((r) => r.type);
+  return types.length === 0 ? null : replayState(types);
+}
+
 /**
- * Re-derive an idea's current_formulation / state / created_at / updated_at from its evolution
- * steps, replaying the state transitions applyCognitiveEvent applies at ingest. Replays over
- * every step including the first: for a real duplicate cluster the earliest step is always a
- * `new_idea` (non-state-changing), so this matches ingest; if it somehow isn't, the more-decided
- * outcome is the safer answer anyway.
+ * Re-derive an idea's current_formulation / created_at / updated_at from its evolution steps, and
+ * its `state` too UNLESS `preservedState` is given (a human correction the caller has decided to
+ * keep). The formulation/timestamp recompute re-derives, from real provenance-linked steps only,
+ * exactly the invariant applyCognitiveEvent maintains at ingest -- not the blocked "manual
+ * formulation edit" case (which is blocked because a hand-typed formulation has no source event).
+ * Replays over every step including the first: for a real duplicate cluster the earliest step is
+ * always a `new_idea` (non-state-changing), so this matches ingest.
  */
-function rederiveIdea(db: Database, ideaId: string): void {
+function rederiveIdea(
+  db: Database,
+  ideaId: string,
+  preservedState: string | null = null,
+): void {
   const steps = db
     .query(
       `SELECT es.formulation AS formulation, es.created_at AS created_at, ce.type AS type
@@ -269,15 +319,7 @@ function rederiveIdea(db: Database, ideaId: string): void {
     .all(ideaId) as { formulation: string; created_at: string; type: string }[];
   if (steps.length === 0) return;
 
-  let state = "developing";
-  for (const s of steps) {
-    if (s.type === "decision") state = "established";
-    else if (s.type === "rejection") state = "rejected";
-    else if (s.type === "contradiction") state = "contested";
-    else if (s.type === "resolution" && state === "contested")
-      state = "developing";
-  }
-
+  const state = preservedState ?? replayState(steps.map((s) => s.type));
   const first = steps[0] as { created_at: string };
   const last = steps[steps.length - 1] as {
     formulation: string;
