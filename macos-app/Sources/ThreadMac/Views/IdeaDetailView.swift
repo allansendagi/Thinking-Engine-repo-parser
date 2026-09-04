@@ -512,13 +512,15 @@ private struct ContinuationPreview: View {
     /// This idea turned out to be part of one argument with a few others — the Minto-style
     /// synthesis (see GoverningThought). Leads the card, ahead of "Where you left off", matching
     /// the server's own `text` render order — it's the wider claim the rest sits inside of.
-    /// No background tint: everything else in this card is plain text on the card's own fill,
-    /// and a nested-card treatment here is unverified, so it stays consistent with its siblings.
+    /// Deliberately unlabeled: this is presented as the thought itself, not an annotated
+    /// feature — no "Governing thought" eyebrow, no mention of how it was produced. Weight and
+    /// size alone carry that it's the headline. No background tint, for the same reason the
+    /// other blocks in this card don't have one: nothing here should read as a bolted-on widget.
     private func governingThoughtBlock(_ governing: GoverningThought) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            eyebrow("Governing thought")
             Text(governing.statement)
-                .font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.ink(0.9))
+                .font(.system(size: 14.5, weight: .semibold)).kerning(-0.1)
+                .foregroundStyle(Theme.ink(0.92))
                 .fixedSize(horizontal: false, vertical: true)
             if !governing.members.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
