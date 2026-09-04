@@ -152,6 +152,13 @@ final class APIClient {
         try await request("/v1/conversations/\(Self.pathSegment(id))")
     }
 
+    /// Every conversation Thread has captured, newest first -- the "Activity" feed.
+    func listConversations() async throws -> [ConversationSummary] {
+        struct Wrap: Decodable { let conversations: [ConversationSummary] }
+        let w: Wrap = try await request("/v1/conversations")
+        return w.conversations
+    }
+
     func renameIdea(id: String, title: String) async throws -> IdeaDetail {
         let body = try JSONEncoder().encode(["title": title])
         return try await request("/v1/ideas/\(Self.pathSegment(id))", method: "PATCH", body: body)

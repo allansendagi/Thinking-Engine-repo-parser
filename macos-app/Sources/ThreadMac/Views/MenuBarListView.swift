@@ -120,29 +120,38 @@ struct MenuBarListView: View {
 
     private var flatIDs: [String] { groups.flatMap { $0.rows.map(\.id) } }
 
+    /// "All → Activity" — the chronological feed of captured conversations. Only on the All tab.
+    private var showingActivity: Bool { !searching && tab == .all && appState.allMode == .activity }
+
     var body: some View {
         VStack(spacing: 0) {
             chrome
-            if !searching, tab == .recent, let s = appState.resumeSuggestion {
-                ResumeBar(
-                    suggestion: s,
-                    onResume: {
-                        appState.snoozeResume(s.ideaId)
-                        Task {
-                            await appState.openIdea(s.ideaId)
-                            await appState.continueThinking(sendTo: nil)
-                        }
-                    },
-                    onDismiss: { withAnimation(.easeOut(duration: 0.16)) { appState.snoozeResume(s.ideaId) } }
-                )
-                .onAppear { appState.noteResumeShown(s.ideaId, lastActivity: appState.lastActivity(of: s.ideaId)) }
-            }
-            if groups.isEmpty {
-                EmptyState(onboard: !appState.onboardingDismissed && tab != .loops,
-                           dismiss: { appState.dismissOnboarding() }, loops: tab == .loops)
+
+            if showingActivity {
+                ActivityListView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                scroller
+                if !searching, tab == .recent, let s = appState.resumeSuggestion {
+                    ResumeBar(
+                        suggestion: s,
+                        onResume: {
+                            appState.snoozeResume(s.ideaId)
+                            Task {
+                                await appState.openIdea(s.ideaId)
+                                await appState.continueThinking(sendTo: nil)
+                            }
+                        },
+                        onDismiss: { withAnimation(.easeOut(duration: 0.16)) { appState.snoozeResume(s.ideaId) } }
+                    )
+                    .onAppear { appState.noteResumeShown(s.ideaId, lastActivity: appState.lastActivity(of: s.ideaId)) }
+                }
+                if groups.isEmpty {
+                    EmptyState(onboard: !appState.onboardingDismissed && tab != .loops,
+                               dismiss: { appState.dismissOnboarding() }, loops: tab == .loops)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    scroller
+                }
             }
         }
         .onAppear { searchFocused = true; selectFirstIfNeeded() }
@@ -189,6 +198,14 @@ struct MenuBarListView: View {
             if !searching {
                 Segmented(selection: tabBinding)
                     .onChange(of: tab) { newTab in selection = newTab == .loops ? nil : flatIDs.first }
+
+                // "All" alone carries the Ideas / Activity split. Recent and Open loops are
+                // always ideas.
+                if tab == .all {
+                    AllModeToggle(selection: Binding(
+                        get: { appState.allMode }, set: { appState.allMode = $0 }
+                    ))
+                }
             }
         }
         .padding(.horizontal, 12).padding(.bottom, 10)
@@ -330,6 +347,145 @@ private struct OnboardingCard: View {
             Text("\(n)").font(.system(size: 9, weight: .bold, design: .rounded)).foregroundStyle(Theme.accent)
                 .frame(width: 14, height: 14).background(Theme.accent.opacity(0.15), in: Circle())
             Text(t).font(.system(size: 11)).foregroundStyle(Theme.ink(0.5))
+        }
+    }
+}
+
+// MARK: - "All" sub-toggle: Ideas / Activity
+
+/// Lighter than the main `Segmented` — a sub-mode picker that only appears on the All tab.
+private struct AllModeToggle: View {
+    @Binding var selection: AllMode
+    var body: some View {
+        HStack(spacing: 14) {
+            ForEach(AllMode.allCases) { m in
+                let on = selection == m
+                Text(m.rawValue)
+                    .font(.system(size: 11.5, weight: on ? .semibold : .medium)).kerning(-0.04)
+                    .foregroundStyle(Theme.ink(on ? 0.8 : 0.42))
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(Theme.accent).frame(height: 1.5)
+                            .offset(y: 5).opacity(on ? 1 : 0)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { withAnimation(.easeOut(duration: 0.12)) { selection = m } }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 1)
+    }
+}
+
+// MARK: - Activity feed (All → Activity)
+
+/// Every conversation Thread captured, newest first, grouped by day. A row opens the captured
+/// transcript; the idea chips open the idea. Deliberately not a chat-inbox: every row points up
+/// into the ideas it moved.
+private struct ActivityListView: View {
+    @EnvironmentObject var appState: AppState
+
+    private struct DayGroup: Identifiable {
+        let id: Int
+        let label: String
+        let rows: [ConversationSummary]
+    }
+    private var days: [DayGroup] {
+        let by = Dictionary(grouping: appState.conversations) { Theme.bucket($0.lastAt).order }
+        return by.keys.sorted().map { key in
+            let label = Theme.bucket(by[key]!.first!.lastAt).label
+            let rows = by[key]!.sorted { $0.lastAt > $1.lastAt }
+            return DayGroup(id: key, label: label, rows: rows)
+        }
+    }
+
+    var body: some View {
+        if appState.conversations.isEmpty {
+            VStack(spacing: 10) {
+                Spacer()
+                Image(systemName: appState.conversationsLoading ? "arrow.triangle.2.circlepath" : "clock")
+                    .font(.system(size: 24, weight: .light)).foregroundStyle(Theme.ink(0.3))
+                Text(appState.conversationsLoading ? "Loading…" : "Nothing captured yet")
+                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.ink(0.5))
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    ForEach(days) { g in
+                        Section {
+                            ForEach(g.rows) { c in ActivityRow(conv: c) }
+                        } header: {
+                            IdeaRowSectionHeader(label: g.label)
+                        }
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+            .scrollContentBackground(.hidden)
+        }
+    }
+}
+
+private struct ActivityRow: View {
+    @EnvironmentObject var appState: AppState
+    let conv: ConversationSummary
+    @State private var hover = false
+
+    var body: some View {
+        Button {
+            Task { await appState.openConversation(conv.conversationId) }
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(conv.sourceLabel)
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ink(0.55))
+                    Text(Theme.ago(conv.lastAt))
+                        .font(.system(size: 10.5)).foregroundStyle(Theme.ink(0.34))
+                    Spacer(minLength: 0)
+                    Text("\(conv.messageCount) msg")
+                        .font(.system(size: 10)).monospacedDigit().foregroundStyle(Theme.ink(0.3))
+                }
+                if conv.ideas.isEmpty {
+                    Text("No idea extracted yet")
+                        .font(.system(size: 12)).italic().foregroundStyle(Theme.ink(0.4))
+                } else {
+                    FlowChips(ideas: conv.ideas) { id in Task { await appState.openIdea(id) } }
+                }
+            }
+            .padding(.vertical, 9).padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(hover ? Theme.ink(0.04) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .overlay(alignment: .top) { Rectangle().fill(Theme.rowSep).frame(height: 0.5) }
+    }
+}
+
+/// The idea chips under an activity row. Simple wrap via a fixed 2-per-line cap — the panel is
+/// narrow and an idea rarely feeds more than a couple of conversations.
+private struct FlowChips: View {
+    let ideas: [ConversationSummary.IdeaRef]
+    let onTap: (String) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(ideas.prefix(3)) { idea in
+                Button { onTap(idea.id) } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.system(size: 8, weight: .semibold)).foregroundStyle(Theme.accent.opacity(0.7))
+                        Text(cleanIdeaTitle(idea.title, fallback: idea.title))
+                            .font(.system(size: 12)).foregroundStyle(Theme.ink(0.78))
+                            .lineLimit(1)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            if ideas.count > 3 {
+                Text("+\(ideas.count - 3) more").font(.system(size: 10)).foregroundStyle(Theme.ink(0.35))
+            }
         }
     }
 }

@@ -31,9 +31,6 @@ struct IdeaDetailView: View {
                 .padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .sheet(item: $appState.transcript) { t in
-            ConversationView(transcript: t).environmentObject(appState)
-        }
     }
 
     // MARK: head
