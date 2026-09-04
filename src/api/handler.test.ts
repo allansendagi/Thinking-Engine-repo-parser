@@ -129,6 +129,62 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(row!.ideas.map((i) => i.id)).toContain(ideaId);
   });
 
+  test("POST /v1/import ingests a batch of an exported conversations.json", async () => {
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([
+        extractionResponse([
+          { type: "new_idea", statement: "Authority must be independently verifiable.", confidence: 0.95, source_event_id: "backfill-n1", evidence_quote: "independently verifiable" },
+        ]),
+      ]),
+      reasoning: new FakeProvider([]),
+    });
+    const { userId, token } = await createTestUser(handler);
+    const authHeader = { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" };
+
+    const chatgptBatch = [
+      {
+        id: "hist_conv_1",
+        current_node: "backfill-n1",
+        mapping: {
+          "backfill-n1": {
+            id: "backfill-n1",
+            parent: null,
+            children: [],
+            message: {
+              id: "backfill-n1",
+              author: { role: "user" },
+              content: { content_type: "text", parts: ["Authority must be independently verifiable."] },
+              create_time: 1_723_000_000,
+            },
+          },
+        },
+      },
+    ];
+
+    const res = await handler(
+      new Request("http://x/v1/import", { method: "POST", headers: authHeader, body: JSON.stringify({ format: "chatgpt", conversations: chatgptBatch }) }),
+    );
+    expect(res.status).toBe(200);
+    const summary = (await res.json()) as { newCanonicalEvents: number; ideaCount: number };
+    expect(summary.newCanonicalEvents).toBe(1);
+    expect(summary.ideaCount).toBe(1);
+
+    // Re-sending the same batch is a no-op (idempotent).
+    const again = await handler(
+      new Request("http://x/v1/import", { method: "POST", headers: authHeader, body: JSON.stringify({ format: "chatgpt", conversations: chatgptBatch }) }),
+    );
+    expect(((await again.json()) as { newCanonicalEvents: number }).newCanonicalEvents).toBe(0);
+
+    // The imported idea is visible in the graph.
+    const state = (await (await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }))).json()) as { currentIdeas: { title: string }[] };
+    expect(state.currentIdeas.some((i) => i.title.includes("Authority"))).toBe(true);
+
+    // Bad shape and bad format are rejected; no auth is 401.
+    expect((await handler(new Request("http://x/v1/import", { method: "POST", headers: authHeader, body: JSON.stringify({ format: "chatgpt", conversations: "nope" }) }))).status).toBe(400);
+    expect((await handler(new Request("http://x/v1/import", { method: "POST", headers: authHeader, body: JSON.stringify({ format: "aol", conversations: [] }) }))).status).toBe(400);
+    expect((await handler(new Request("http://x/v1/import", { method: "POST", body: JSON.stringify({ format: "chatgpt", conversations: [] }) }))).status).toBe(401);
+  });
+
   test("one user cannot read another user's data even with a valid token for a different account", async () => {
     const handler = createRequestHandler({
       extraction: new FakeProvider([

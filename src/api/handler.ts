@@ -35,6 +35,11 @@ import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db
 import { getConversation, listConversations, loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { parsePastedConversation } from "../import/pasteParser";
+import { importIntoDb, parseExportFile } from "../import/run";
+
+/** Conversations per `/v1/import` batch. Each costs a model call in extraction, so keep it
+ *  small enough to finish inside a request; the client sends many batches with progress. */
+const IMPORT_BATCH_MAX = 25;
 import {
   buildContinuationPacket,
   getIdea,
@@ -373,7 +378,8 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       // Soft lock. Reads are never gated. No-op until Paddle is actually configured.
       // One DB open serves both the gate check and the request body below.
       const isCaptureRoute =
-        req.method === "POST" && (pathname === "/v1/conversations" || pathname === "/v1/paste");
+        req.method === "POST" &&
+        (pathname === "/v1/conversations" || pathname === "/v1/paste" || pathname === "/v1/import");
       if (isCaptureRoute && billingConfigured() && !canCapture(getAccount(userId), loadIdeas(db).length)) {
         return error(
           402,
@@ -425,6 +431,38 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
 
         const result = await ingestConversation(db, { conversationId, source: "paste", messages }, providers);
         return json({ conversationId, ...result });
+      }
+
+      // Historical backfill: one batch of an exported conversations.json array. The client
+      // ("Recover my thinking") slices the export into batches of ~20 and calls this repeatedly,
+      // showing progress. Each batch is bounded and idempotent -- re-sending a batch that was
+      // already imported does no work (importIntoDb dedupes on canonical event id). Extraction
+      // still costs a model call per conversation, so the batch is capped.
+      if (req.method === "POST" && pathname === "/v1/import") {
+        let body: { format?: string; conversations?: unknown };
+        try {
+          body = (await req.json()) as { format?: string; conversations?: unknown };
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        if (body.format !== "chatgpt" && body.format !== "claude") {
+          return error(400, 'format must be "chatgpt" or "claude"');
+        }
+        if (!Array.isArray(body.conversations)) {
+          return error(400, "conversations must be an array (a slice of the export's conversations.json)");
+        }
+        if (body.conversations.length === 0) return json({ newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: loadIdeas(db).length });
+        if (body.conversations.length > IMPORT_BATCH_MAX) {
+          return error(400, `Send at most ${IMPORT_BATCH_MAX} conversations per batch`);
+        }
+        let events;
+        try {
+          events = parseExportFile(body.format, body.conversations);
+        } catch (e) {
+          return error(400, e instanceof Error ? e.message : "Could not parse that export batch");
+        }
+        const summary = await importIntoDb(db, events, providers);
+        return json(summary);
       }
 
       if (req.method === "GET" && pathname === "/v1/ideas") {
