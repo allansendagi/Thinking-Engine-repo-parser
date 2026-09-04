@@ -1,6 +1,4 @@
-import { startCapture } from "./content/common/capture";
-import { attachResumeNudge } from "./content/common/resumeNudge";
+import { bootstrapContentScript } from "./content/common/bootstrap";
 import { claudeAdapter } from "./content/adapters/claude";
 
-startCapture(claudeAdapter, document);
-attachResumeNudge(claudeAdapter, document);
+bootstrapContentScript(claudeAdapter);
