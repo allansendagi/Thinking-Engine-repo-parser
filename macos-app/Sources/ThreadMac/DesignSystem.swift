@@ -49,6 +49,10 @@ enum Theme {
     /// "just now" / "24m ago" / "1h ago" / "3d ago" / "Aug 17".
     static func ago(_ iso: String) -> String {
         guard let d = parse(iso) else { return "" }
+        return ago(d)
+    }
+
+    static func ago(_ d: Date) -> String {
         let s = Date().timeIntervalSince(d)
         switch s {
         case ..<90: return "just now"

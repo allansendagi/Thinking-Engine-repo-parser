@@ -405,6 +405,19 @@ final class AppState: ObservableObject {
     /// loopback pairing server. Drives the footer's "capturing" indicator.
     @Published var lastExtensionHandshake: Date?
 
+    /// Whether a browser has ever completed the loopback handshake on this account. Persisted,
+    /// because the extension pulls credentials once and then works off its own copy -- so a live
+    /// handshake this session is the exception, not the rule. Settings shows this as the
+    /// connected / not-connected state; "Reconnect" is the escape hatch if it goes stale.
+    private let browserPairedKey = "thread.browserPaired"
+    @Published var browserEverPaired = UserDefaults.standard.bool(forKey: "thread.browserPaired")
+
+    /// True only while a handshake is fresh (< 5 min) -- a genuine "talking right now" pulse.
+    var browserActiveNow: Bool {
+        guard let last = lastExtensionHandshake else { return false }
+        return Date().timeIntervalSince(last) < 300
+    }
+
     /// Trial / subscription state. nil until first fetched.
     @Published var account: AccountStatus?
     @Published var billingBusy = false
@@ -436,6 +449,10 @@ final class AppState: ObservableObject {
 
     func noteExtensionHandshake() {
         lastExtensionHandshake = Date()
+        if !browserEverPaired {
+            browserEverPaired = true
+            UserDefaults.standard.set(true, forKey: browserPairedKey)
+        }
     }
 
     /// Footer's third slot: "Free · N/25" / "Pro" once billing is live, else "Cloud".
@@ -787,6 +804,9 @@ final class AppState: ObservableObject {
         thinkingState = nil
         searchResults = []
         reconnect = nil
+        lastExtensionHandshake = nil
+        browserEverPaired = false
+        UserDefaults.standard.removeObject(forKey: browserPairedKey)
         closeIdea()
     }
 
