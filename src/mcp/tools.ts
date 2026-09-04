@@ -1,8 +1,13 @@
 import type { Database } from "bun:sqlite";
 import type { CompletionProvider } from "../providers/types";
-import { loadIdeas, loadIdea as loadIdeaById, loadCognitiveEvents, loadCanonicalEvents } from "../db/queries";
+import {
+  loadIdeas,
+  loadIdea as loadIdeaById,
+  loadCognitiveEvents,
+  loadCanonicalEvents,
+} from "../db/queries";
 import { buildThinkingState } from "../state/thinkingState";
-import { lexicalOverlap } from "../identity/signals";
+import { lexicalOverlap, entityOverlap } from "../identity/signals";
 import type { IdeaNode, ThinkingState } from "../types";
 
 /**
@@ -20,7 +25,11 @@ export interface IdeaSummary {
   score: number;
 }
 
-export function searchIdeas(db: Database, query: string, limit = 10): IdeaSummary[] {
+export function searchIdeas(
+  db: Database,
+  query: string,
+  limit = 10,
+): IdeaSummary[] {
   const ideas = loadIdeas(db);
   return ideas
     .map((idea) => ({
@@ -88,15 +97,28 @@ export function getThreadState(db: Database, topic?: string): ThinkingState {
   const sourceByEventId = new Map(
     loadCanonicalEvents(db).map((e) => [e.id, e.source] as const),
   );
-  return buildThinkingState(loadIdeas(db), loadCognitiveEvents(db), { topic }, sourceByEventId);
+  return buildThinkingState(
+    loadIdeas(db),
+    loadCognitiveEvents(db),
+    { topic },
+    sourceByEventId,
+  );
 }
 
-export function getOpenLoops(db: Database, topic?: string): ThinkingState["openLoops"] {
+export function getOpenLoops(
+  db: Database,
+  topic?: string,
+): ThinkingState["openLoops"] {
   return getThreadState(db, topic).openLoops.filter((l) => !l.resolved);
 }
 
-export function getRecentChanges(db: Database, sinceDays = 14): ThinkingState["recentChanges"] {
-  return buildThinkingState(loadIdeas(db), loadCognitiveEvents(db), { recentWindowDays: sinceDays }).recentChanges;
+export function getRecentChanges(
+  db: Database,
+  sinceDays = 14,
+): ThinkingState["recentChanges"] {
+  return buildThinkingState(loadIdeas(db), loadCognitiveEvents(db), {
+    recentWindowDays: sinceDays,
+  }).recentChanges;
 }
 
 // --- Continuation packet -----------------------------------------------------------------------
@@ -119,10 +141,25 @@ function sourceLabel(s: string | null): string | null {
   return s ? (SOURCE_LABELS[s] ?? s) : null;
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 function shortDate(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  return Number.isNaN(d.getTime())
+    ? iso
+    : `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
 }
 
 /** Loops from a contradiction are stored prefixed; drop it for display. */
@@ -163,7 +200,11 @@ export function trajectoryChain(phrases: string[]): string {
  *  no-op, so this is safe against both the machine format and the older human render. */
 export function resolvePacketText(
   text: string,
-  opts: { nextStep: string; thinkingShift?: string | null; trajectory?: string[] | null },
+  opts: {
+    nextStep: string;
+    thinkingShift?: string | null;
+    trajectory?: string[] | null;
+  },
 ): string {
   return text
     .replace(CONTINUE_TOKEN, opts.nextStep)
@@ -222,6 +263,21 @@ export interface ContinuationPacket {
   /** Where + when the idea was last worked on, for the "Last explored" line. */
   lastExploredSource: string | null;
   lastExploredAt: string | null;
+  /** The Minto-style synthesis across this idea and any others it turned out to be part of one
+   *  argument with. Null whenever no candidate cluster passed the coherence check (no provider,
+   *  no candidates cleared the retrieval floor, or the model itself said they don't cohere) --
+   *  the packet is then unchanged from before this field existed. See buildGoverningThought. */
+  governingThought: GoverningThought | null;
+}
+
+export interface GoverningThought {
+  /** One sentence: what the idea + its members collectively amount to. */
+  statement: string;
+  /** Plural noun naming what the members ARE relative to the statement -- "reasons",
+   *  "objections", "consequences". Minto's rule-2 shortcut: a cluster that can't be named this
+   *  way isn't one coherent argument, so the model is required to produce it, not offered it. */
+  kind: string;
+  members: { id: string; title: string; currentFormulation: string }[];
 }
 
 const NEXT_STEP_PROMPT = `You are given a line of thinking a person developed with AI. Write ONE sentence they can paste into a new AI chat to pick it back up — an instruction in their own voice, grounded only in what's given. If there is an unresolved question, point at it; if not, push the current formulation forward, or resolve the conflict if it's contested. Always produce a usable sentence — never refuse, never mention being an AI or a model. No preamble, no "you should", one sentence.`;
@@ -232,8 +288,12 @@ function looksLikeRefusal(s: string): boolean {
   const t = s.toLowerCase().trim();
   if (!t) return true;
   return (
-    /^(i'm sorry|i am sorry|i cannot|i can't|i can not|i'm unable|i am unable|i'm not able|i apologize|as an ai|as a chatbot|as a language model|unfortunately, i|sorry, )/.test(t) ||
-    /as a chatbot|as an ai language model|created by (apple|openai|anthropic)|i cannot provide|i'?m unable to provide|cannot fulfil|against my guidelines|when none exists/.test(t)
+    /^(i'm sorry|i am sorry|i cannot|i can't|i can not|i'm unable|i am unable|i'm not able|i apologize|as an ai|as a chatbot|as a language model|unfortunately, i|sorry, )/.test(
+      t,
+    ) ||
+    /as a chatbot|as an ai language model|created by (apple|openai|anthropic)|i cannot provide|i'?m unable to provide|cannot fulfil|against my guidelines|when none exists/.test(
+      t,
+    )
   );
 }
 
@@ -253,7 +313,10 @@ function pickIdeaForTopic(db: Database, topic: string): IdeaNode | null {
   if (matches.length === 0) return null;
   // Best lexical match on title+formulation; tie-break toward the one most recently worked on.
   const best = matches
-    .map((i) => ({ id: i.id, score: lexicalOverlap(topic, `${i.title} ${i.currentFormulation}`) }))
+    .map((i) => ({
+      id: i.id,
+      score: lexicalOverlap(topic, `${i.title} ${i.currentFormulation}`),
+    }))
     .sort((a, b) => b.score - a.score)[0]!;
   return getIdea(db, best.id);
 }
@@ -262,10 +325,152 @@ function mostRelevantOpenLoop(idea: IdeaNode): string | null {
   const open = idea.openLoops.filter((l) => !l.resolved);
   if (open.length === 0) return null;
   if (idea.state === "contested") {
-    const contradiction = open.find((l) => /^Unresolved contradiction:/i.test(l.statement));
+    const contradiction = open.find((l) =>
+      /^Unresolved contradiction:/i.test(l.statement),
+    );
     if (contradiction) return contradiction.statement;
   }
-  return [...open].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!.statement;
+  return [...open].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
+    .statement;
+}
+
+// --- Governing thought: the Minto-style synthesis across a small cluster of related ideas ---
+//
+// Retrieval is deliberately loose (lexical + entity overlap -- the same non-model signal
+// identity resolution already ranks candidates with in identity/signals.ts; no embedding
+// provider is configured server-side, see providers/embeddings.ts, so this doesn't wait on that
+// decision). It only has to produce a plausible handful. The coherence check below, not
+// retrieval precision, is what decides whether a governing thought ever renders.
+
+const GOVERNING_THOUGHT_CANDIDATE_FLOOR = 0.2;
+/** At/above this, a candidate isn't a "supporting idea" -- it's a near-duplicate of the seed
+ *  (dedup's job, see state/dedup.ts). Real data surfaced exactly this: two garbage-titled ideas
+ *  with a 1.00 current-formulation overlap. Filtered out before the model ever sees them, not
+ *  left for the model to notice. */
+const GOVERNING_THOUGHT_NEAR_DUPLICATE_CEILING = 0.85;
+const GOVERNING_THOUGHT_MAX_CANDIDATES = 4;
+
+/** Up to 4 other ideas whose current formulation reads close to this one's, near-duplicates
+ *  excluded -- candidates only, not a claim that they form a real cluster. */
+function relatedCandidates(seed: IdeaNode, allIdeas: IdeaNode[]): IdeaNode[] {
+  return allIdeas
+    .filter((i) => i.id !== seed.id)
+    .map((idea) => ({
+      idea,
+      score:
+        0.6 * lexicalOverlap(seed.currentFormulation, idea.currentFormulation) +
+        0.4 * entityOverlap(seed.currentFormulation, idea.currentFormulation),
+    }))
+    .filter(
+      (c) =>
+        c.score >= GOVERNING_THOUGHT_CANDIDATE_FLOOR &&
+        c.score < GOVERNING_THOUGHT_NEAR_DUPLICATE_CEILING,
+    )
+    .sort((a, b) => b.score - a.score)
+    .slice(0, GOVERNING_THOUGHT_MAX_CANDIDATES)
+    .map((c) => c.idea);
+}
+
+const GOVERNING_THOUGHT_PROMPT = `You are given a person's current line of thinking, and up to 4 other ideas from their thinking graph (numbered 1-4) retrieved because they read similarly. Decide whether they genuinely form ONE coherent line of thinking -- not just shared vocabulary. Never invent a relationship the ideas themselves don't support.
+
+Reply with ONLY a JSON object, no other text:
+{"coherent": true or false,
+ "governingThought": "one sentence stating what the current thought and the SUPPORTING ideas collectively mean -- the synthesis, never a list or a restatement of the current thought alone. Required when coherent is true.",
+ "groupType": "a plural noun naming what the supporting ideas ARE in relation to the governing thought -- e.g. reasons, objections, consequences, examples, preconditions, constraints. At most a few words, no sentence. Required when coherent is true.",
+ "supportingIdeaIds": "the numbers (1-4) of ONLY the other ideas that actually belong to this governing thought -- drop any that don't fit rather than forcing them in. Required, non-empty, when coherent is true."}
+
+Say coherent:false whenever none of the other ideas genuinely build one argument with the current thought -- a wrong synthesis is worse than none. Never mention being an AI or a model.`;
+
+interface GoverningThoughtDecision {
+  statement: string;
+  kind: string;
+  supportingIndexes: number[];
+}
+
+/** Parses + validates the governing-thought response. Rejects (returns null) on anything that
+ *  isn't a clean coherent:true with every field present and well-formed -- an out-of-range
+ *  index, an empty subset, a `kind` too long to plausibly be a plural noun rather than a
+ *  sentence, or refusal-shaped text. The caller then shows nothing, exactly as if no candidates
+ *  had cleared retrieval at all. */
+function parseGoverningThoughtResponse(
+  raw: string,
+  candidateCount: number,
+): GoverningThoughtDecision | null {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  let obj: unknown;
+  try {
+    obj = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (typeof obj !== "object" || obj === null) return null;
+  const o = obj as {
+    coherent?: unknown;
+    governingThought?: unknown;
+    groupType?: unknown;
+    supportingIdeaIds?: unknown;
+  };
+  if (o.coherent !== true) return null;
+  const statement =
+    typeof o.governingThought === "string" ? o.governingThought.trim() : "";
+  const kind =
+    typeof o.groupType === "string" ? o.groupType.trim().toLowerCase() : "";
+  if (!statement || !kind) return null;
+  if (looksLikeRefusal(statement) || looksLikeRefusal(kind)) return null;
+  if (statement.length > 240) return null;
+  if (kind.split(/\s+/).length > 4 || kind.length > 40) return null;
+
+  const rawIds = Array.isArray(o.supportingIdeaIds) ? o.supportingIdeaIds : [];
+  const supportingIndexes = [...new Set(rawIds.map(Number))]
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= candidateCount)
+    .sort((a, b) => a - b);
+  if (supportingIndexes.length === 0) return null;
+
+  return { statement: firstSentence(statement), kind, supportingIndexes };
+}
+
+/** The full governing-thought pass for one idea: retrieve candidates, ask the model to
+ *  synthesize + name the shared kind + pick which candidates actually belong, validate. Null
+ *  whenever there's no provider, no candidates clear the retrieval floor, the call fails, or the
+ *  model itself says they don't cohere. */
+async function buildGoverningThought(
+  seed: IdeaNode,
+  allIdeas: IdeaNode[],
+  provider?: CompletionProvider,
+): Promise<GoverningThought | null> {
+  if (!provider) return null;
+  const candidates = relatedCandidates(seed, allIdeas);
+  if (candidates.length === 0) return null;
+
+  const facts = JSON.stringify(
+    {
+      currentThought: seed.currentFormulation,
+      otherIdeas: candidates.map((c, i) => ({
+        id: i + 1,
+        formulation: c.currentFormulation,
+      })),
+    },
+    null,
+    2,
+  );
+  try {
+    const raw = await provider.complete(GOVERNING_THOUGHT_PROMPT, facts, 260);
+    const decision = parseGoverningThoughtResponse(raw, candidates.length);
+    if (!decision) return null;
+    const members = decision.supportingIndexes.map((n) => {
+      const c = candidates[n - 1]!;
+      return {
+        id: c.id,
+        title: c.title,
+        currentFormulation: c.currentFormulation,
+      };
+    });
+    return { statement: decision.statement, kind: decision.kind, members };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -298,10 +503,14 @@ export async function buildContinuationPacket(
       sourceText: p.sourceText,
       sourceUrl: p.sourceUrl,
     }));
-  const evolutionUnverified = evolution.length === 0 && trace.provenance.length > 0;
+  const evolutionUnverified =
+    evolution.length === 0 && trace.provenance.length > 0;
 
   const unresolvedQuestion = mostRelevantOpenLoop(idea);
-  const decisions = idea.decisions.map((d) => ({ statement: d.statement, decidedAt: d.decidedAt }));
+  const decisions = idea.decisions.map((d) => ({
+    statement: d.statement,
+    decidedAt: d.decidedAt,
+  }));
 
   let suggestedNext = unresolvedQuestion
     ? `Help me work through: ${stripLoopPrefix(unresolvedQuestion)}`
@@ -334,9 +543,14 @@ export async function buildContinuationPacket(
     if (provider) {
       try {
         const s = (
-          await provider.complete(THINKING_SHIFT_PROMPT, JSON.stringify({ from: first, to: last }, null, 2), 160)
+          await provider.complete(
+            THINKING_SHIFT_PROMPT,
+            JSON.stringify({ from: first, to: last }, null, 2),
+            160,
+          )
         ).trim();
-        if (/^you moved from\b/i.test(s) && !looksLikeRefusal(s)) thinkingShift = firstSentence(s);
+        if (/^you moved from\b/i.test(s) && !looksLikeRefusal(s))
+          thinkingShift = firstSentence(s);
       } catch {
         // keep the literal template
       }
@@ -352,18 +566,32 @@ export async function buildContinuationPacket(
         const raw = (
           await provider.complete(
             THINKING_EVOLUTION_PROMPT,
-            JSON.stringify(evolution.map((e) => e.formulation), null, 2),
+            JSON.stringify(
+              evolution.map((e) => e.formulation),
+              null,
+              2,
+            ),
             240,
           )
         ).trim();
         const lines = raw
           .split("\n")
-          .map((l) => l.replace(/^[\s\-•*\d.)]+/, "").trim().replace(/[.,;:]+$/, ""))
+          .map((l) =>
+            l
+              .replace(/^[\s\-•*\d.)]+/, "")
+              .trim()
+              .replace(/[.,;:]+$/, ""),
+          )
           .filter(Boolean);
         // Take it only if it actually distilled — a weaker model sometimes echoes the input.
         const distilled =
           lines.length === evolution.length &&
-          lines.every((l) => l.split(/\s+/).length <= 7 && l.length <= 60 && !looksLikeRefusal(l));
+          lines.every(
+            (l) =>
+              l.split(/\s+/).length <= 7 &&
+              l.length <= 60 &&
+              !looksLikeRefusal(l),
+          );
         if (distilled) trajectory = lines;
       } catch {
         // keep the first-words template
@@ -379,12 +607,23 @@ export async function buildContinuationPacket(
     .map((l) => stripLoopPrefix(l.statement));
 
   // Last explored: newest verified step, else newest provenance of any kind.
-  const newestVerified = evolution.length ? evolution[evolution.length - 1]! : null;
+  const newestVerified = evolution.length
+    ? evolution[evolution.length - 1]!
+    : null;
   const newestAny = trace.provenance.length
-    ? [...trace.provenance].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1)!
+    ? [...trace.provenance]
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .at(-1)!
     : null;
   const lastExploredAt = newestVerified?.when ?? newestAny?.createdAt ?? null;
-  const lastExploredSource = newestVerified?.source ?? sourceLabel(newestAny?.source ?? null);
+  const lastExploredSource =
+    newestVerified?.source ?? sourceLabel(newestAny?.source ?? null);
+
+  const governingThought = await buildGoverningThought(
+    idea,
+    loadIdeas(db),
+    provider,
+  );
 
   const packet: ContinuationPacket = {
     idea: { id: idea.id, title: idea.title, state: idea.state },
@@ -400,6 +639,7 @@ export async function buildContinuationPacket(
     thinkingShift,
     lastExploredSource,
     lastExploredAt,
+    governingThought,
   };
   return { text: renderPacket(packet), packet };
 }
@@ -410,9 +650,29 @@ export async function buildContinuationPacket(
  * emitted as tokens, not baked in; `resolvePacketText` fills them (the MCP prose path, and the
  * Mac after any on-device upgrade). Every section is omitted when it has nothing to say.
  */
-export function renderPacket(p: ContinuationPacket, now: Date = new Date()): string {
-  const out: string[] = ["CURRENT IDEA", p.idea.title, "", "CURRENT FORMULATION", p.whereYouLeftOff];
-  if (p.contested) out.push("(contested — a later point conflicts with the above)");
+export function renderPacket(
+  p: ContinuationPacket,
+  now: Date = new Date(),
+): string {
+  const out: string[] = [];
+  if (p.governingThought) {
+    out.push("GOVERNING THOUGHT", p.governingThought.statement, "");
+  }
+  out.push(
+    "CURRENT IDEA",
+    p.idea.title,
+    "",
+    "CURRENT FORMULATION",
+    p.whereYouLeftOff,
+  );
+  if (p.contested)
+    out.push("(contested — a later point conflicts with the above)");
+
+  if (p.governingThought) {
+    out.push("", `RELATED THINKING (${p.governingThought.kind})`);
+    for (const m of p.governingThought.members)
+      out.push(`${m.title} — ${m.currentFormulation}`);
+  }
 
   if (p.decisions.length > 0) {
     out.push("", "ESTABLISHED");
@@ -422,7 +682,11 @@ export function renderPacket(p: ContinuationPacket, now: Date = new Date()): str
   if (p.trajectory.length > 0) {
     out.push("", "THINKING EVOLUTION", `  ${THINKING_EVOLUTION_TOKEN}`);
   } else if (p.evolutionUnverified) {
-    out.push("", "THINKING EVOLUTION", "(captured before source-role verification — earlier wording unavailable)");
+    out.push(
+      "",
+      "THINKING EVOLUTION",
+      "(captured before source-role verification — earlier wording unavailable)",
+    );
   }
 
   if (p.unresolvedQuestions.length > 0) {
@@ -449,7 +713,12 @@ export function renderPacket(p: ContinuationPacket, now: Date = new Date()): str
     "",
     CONTINUE_TOKEN,
   );
-  return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  return (
+    out
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trimEnd() + "\n"
+  );
 }
 
 /**
