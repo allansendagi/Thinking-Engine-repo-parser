@@ -264,6 +264,28 @@ final class AppState: ObservableObject {
     @Published var selectedIdeaId: String?
     @Published var selectedTrace: IdeaTrace?
 
+    /// The source conversation the user is currently viewing (tapped a source on an evolution
+    /// step). Presented as a sheet; nil when closed. `transcriptLoading` covers the fetch.
+    @Published var transcript: ConversationTranscript?
+    @Published var transcriptLoading = false
+    @Published var transcriptError: String?
+
+    func openConversation(_ conversationId: String) async {
+        transcriptError = nil
+        transcriptLoading = true
+        defer { transcriptLoading = false }
+        do {
+            transcript = try await client.getConversation(id: conversationId)
+        } catch {
+            transcriptError = "That conversation isn't available."
+        }
+    }
+
+    func closeConversation() {
+        transcript = nil
+        transcriptError = nil
+    }
+
     /// Which list row is highlighted blue. Lives here (not in MenuBarListView's local @State) so
     /// it survives the list⇄detail swap — click a row, open it, come back, and it's still the
     /// selected one, exactly like the design mock's persistent `state.sel`.

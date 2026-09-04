@@ -147,6 +147,11 @@ final class APIClient {
         try await request("/v1/ideas/\(Self.pathSegment(id))/trace")
     }
 
+    /// The captured messages of one source conversation -- the evidence behind an idea.
+    func getConversation(id: String) async throws -> ConversationTranscript {
+        try await request("/v1/conversations/\(Self.pathSegment(id))")
+    }
+
     func renameIdea(id: String, title: String) async throws -> IdeaDetail {
         let body = try JSONEncoder().encode(["title": title])
         return try await request("/v1/ideas/\(Self.pathSegment(id))", method: "PATCH", body: body)

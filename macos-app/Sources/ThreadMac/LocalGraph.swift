@@ -49,7 +49,8 @@ struct LocalGraph: Codable, Equatable {
             ),
             provenance: idea.evolution.map {
                 ProvenanceStep(formulation: $0.formulation, createdAt: Self.iso($0.at),
-                               sourceText: nil, sourceRole: "user", source: $0.source, sourceUrl: nil)
+                               sourceText: nil, sourceRole: "user", source: $0.source, sourceUrl: nil,
+                               conversationId: nil)
             }
         )
     }
