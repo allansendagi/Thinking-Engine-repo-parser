@@ -23,11 +23,15 @@ struct LocalSnapshot: Codable {
     /// ideaId → on-device semantic vector for its current text. Recomputed only when the text
     /// changes (see `EmbeddingEntry.contentHash`). Powers meaning-based recall + "Related".
     var embeddings: [String: EmbeddingEntry]
+    /// A "Recover my thinking" run that started but hasn't finished — persisted here (not
+    /// UserDefaults) so it's account-namespaced, and so quitting mid-import resumes rather than
+    /// restarts. Nil when no run is in flight. See `BackfillJob`.
+    var backfillJob: BackfillJob?
     var savedAt: Date
 
     static let empty = LocalSnapshot(
         thinkingState: nil, traces: [:], pendingCaptures: [], pendingEdits: [],
-        localGraph: .empty, embeddings: [:], savedAt: .distantPast
+        localGraph: .empty, embeddings: [:], backfillJob: nil, savedAt: .distantPast
     )
 
     // Hand-rolled so a snapshot written before these fields existed still decodes.
@@ -38,6 +42,7 @@ struct LocalSnapshot: Codable {
         pendingEdits: [PendingEdit],
         localGraph: LocalGraph,
         embeddings: [String: EmbeddingEntry],
+        backfillJob: BackfillJob? = nil,
         savedAt: Date
     ) {
         self.thinkingState = thinkingState
@@ -46,11 +51,12 @@ struct LocalSnapshot: Codable {
         self.pendingEdits = pendingEdits
         self.localGraph = localGraph
         self.embeddings = embeddings
+        self.backfillJob = backfillJob
         self.savedAt = savedAt
     }
 
     enum CodingKeys: String, CodingKey {
-        case thinkingState, traces, pendingCaptures, pendingEdits, localGraph, embeddings, savedAt
+        case thinkingState, traces, pendingCaptures, pendingEdits, localGraph, embeddings, backfillJob, savedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -61,7 +67,42 @@ struct LocalSnapshot: Codable {
         pendingEdits = try c.decodeIfPresent([PendingEdit].self, forKey: .pendingEdits) ?? []
         localGraph = try c.decodeIfPresent(LocalGraph.self, forKey: .localGraph) ?? .empty
         embeddings = try c.decodeIfPresent([String: EmbeddingEntry].self, forKey: .embeddings) ?? [:]
+        backfillJob = try c.decodeIfPresent(BackfillJob.self, forKey: .backfillJob)
         savedAt = try c.decodeIfPresent(Date.self, forKey: .savedAt) ?? .distantPast
+    }
+}
+
+/// A historical-backfill run kept on disk so an interrupted "Recover my thinking" resumes instead
+/// of starting over. File-export runs resume from `conversationsDone` (skip that many, dedup
+/// covers any overlap); a Cursor run re-reads its `ORDER BY key` history and skips that many.
+struct BackfillJob: Codable, Equatable {
+    enum Kind: String, Codable { case chatgpt, claude, cursor }
+
+    var kind: Kind
+    /// The export file. Nil for `.cursor` (read live from `state.vscdb`).
+    var sourcePath: String?
+    /// File identity — a re-downloaded export at the same path is a different file, so a resume
+    /// index from the old one doesn't apply. Compared loosely (mtime); a mismatch resumes from 0.
+    var sourceModified: Date?
+    /// 0 when not yet known (a Cursor run before its first read).
+    var conversationsTotal: Int
+    /// How many conversations are done — the resume index.
+    var conversationsDone: Int
+    /// Idea count when the run first started, so "N ideas recovered" spans the whole run, not
+    /// just the resumed tail.
+    var ideaCountAtStart: Int
+    var startedAt: Date
+    var updatedAt: Date
+
+    /// The `format` string `/v1/import` expects; nil for Cursor (which uses `/v1/conversations`).
+    var importFormat: String? { kind == .cursor ? nil : kind.rawValue }
+
+    var sourceLabel: String {
+        switch kind {
+        case .chatgpt: return "ChatGPT"
+        case .claude: return "Claude"
+        case .cursor: return "Cursor"
+        }
     }
 }
 

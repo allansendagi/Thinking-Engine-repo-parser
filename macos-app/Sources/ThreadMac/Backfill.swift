@@ -149,10 +149,15 @@ enum Backfill {
 
     /// Feed `export` to the backend in batches. `progress` fires after each batch (main queue).
     /// Returns the final summary. Stops early and returns what it got on a 402 (Free cap hit).
+    ///
+    /// `startingAt` resumes a run that was interrupted: the first N conversations are skipped
+    /// entirely (no request). Re-sending a batch that was already imported is cheap and correct --
+    /// `importIntoDb` dedupes on canonical event id -- so an approximate resume point is safe.
     static func run(
         _ export: DetectedExport,
         client: APIClient,
-        progress: @escaping (BackfillProgress) -> Void
+        progress: @escaping (BackfillProgress) -> Void,
+        startingAt: Int = 0
     ) async throws -> (summary: ImportSummary, cappedAt: Int?) {
         let jsonURL = try materializeConversationsJson(export.url)
         defer { if jsonURL != export.url { try? FileManager.default.removeItem(at: jsonURL.deletingLastPathComponent()) } }
@@ -161,10 +166,10 @@ enum Backfill {
         guard let all = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else { throw BackfillError.notAnExport }
         guard !all.isEmpty else { throw BackfillError.emptyExport }
 
-        var done = 0
+        var index = max(0, min(startingAt, all.count))
+        var done = index
         var latest = ImportSummary(newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: 0)
 
-        var index = 0
         while index < all.count {
             let batch = Array(all[index ..< min(index + batchSize, all.count)])
             do {
@@ -189,17 +194,21 @@ enum Backfill {
     /// Cursor keeps its history in a local `state.vscdb`, so its backfill needs no export -- read
     /// it and send each conversation to `/v1/conversations` (the backend dedupes on message id).
     /// Same progress + 402 handling as `run`.
+    ///
+    /// `startingAt` resumes an interrupted run. `readConversations()` reads in `ORDER BY key`, so
+    /// the sequence is stable across launches and skipping the first N lands in the same place.
     static func runCursor(
         client: APIClient,
-        progress: @escaping (BackfillProgress) -> Void
+        progress: @escaping (BackfillProgress) -> Void,
+        startingAt: Int = 0
     ) async throws -> (summary: ImportSummary, cappedAt: Int?) {
         let convs = CursorBackfill.readConversations()
         guard !convs.isEmpty else { throw BackfillError.emptyExport }
 
         let iso = ISO8601DateFormatter()
-        var done = 0
+        var done = max(0, min(startingAt, convs.count))
         var lastIdeaCount = 0
-        for c in convs {
+        for c in convs.dropFirst(done) {
             let base = Date()
             let messages = c.messages.enumerated().map { i, m in
                 (id: "\(c.id)::\(i)", role: m.role, text: m.text,

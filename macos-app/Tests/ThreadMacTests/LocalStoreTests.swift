@@ -86,6 +86,38 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertTrue(back.pendingCaptures.isEmpty)
         XCTAssertTrue(back.pendingEdits.isEmpty)
         XCTAssertTrue(back.traces.isEmpty)
+        XCTAssertNil(back.backfillJob)
+    }
+
+    // MARK: BackfillJob persistence
+
+    func testBackfillJobRoundTripsInSnapshot() throws {
+        let job = BackfillJob(
+            kind: .claude,
+            sourcePath: "/Users/x/Downloads/data.zip",
+            sourceModified: Date(timeIntervalSince1970: 1_700_000_050),
+            conversationsTotal: 120,
+            conversationsDone: 45,
+            ideaCountAtStart: 12,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_090)
+        )
+        var snap = LocalSnapshot.empty
+        snap.backfillJob = job
+        let back = try JSONDecoder().decode(LocalSnapshot.self, from: JSONEncoder().encode(snap))
+        XCTAssertEqual(back.backfillJob, job)
+        XCTAssertEqual(back.backfillJob?.importFormat, "claude")
+        XCTAssertEqual(back.backfillJob?.sourceLabel, "Claude")
+    }
+
+    func testCursorBackfillJobHasNoImportFormat() {
+        let job = BackfillJob(
+            kind: .cursor, sourcePath: nil, sourceModified: nil,
+            conversationsTotal: 0, conversationsDone: 0, ideaCountAtStart: 0,
+            startedAt: Date(), updatedAt: Date()
+        )
+        XCTAssertNil(job.importFormat)
+        XCTAssertEqual(job.sourceLabel, "Cursor")
     }
 
     // MARK: LocalIdeaDraft.parse

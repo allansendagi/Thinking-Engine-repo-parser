@@ -12,6 +12,8 @@ struct BackfillView: View {
                 EmptyView()
             case .offered(let exports):
                 offer(exports)
+            case .resumable(let job):
+                resumeOffer(job)
             case .running(let p):
                 running(p)
             case .finished(let summary, let capped):
@@ -66,6 +68,29 @@ struct BackfillView: View {
             .font(.caption2).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
 
         Button("Not now") { appState.dismissBackfillOffer() }
+            .controlSize(.small).foregroundColor(.secondary)
+    }
+
+    // MARK: resume — a run a previous launch didn't finish
+
+    @ViewBuilder
+    private func resumeOffer(_ job: BackfillJob) -> some View {
+        Text("Pick your recovery back up").font(.headline)
+        let progress = job.conversationsTotal > 0
+            ? "\(job.conversationsDone) of \(job.conversationsTotal) conversations"
+            : "\(job.conversationsDone) conversations"
+        Text("Thread was recovering your thinking from your \(job.sourceLabel) history and didn't finish — \(progress) so far. It picks up where it stopped.")
+            .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+
+        Button {
+            appState.resumeBackfill(job)
+        } label: {
+            Label("Resume recovering", systemImage: "arrow.clockwise")
+                .font(.system(size: 12, weight: .medium))
+        }
+        .buttonStyle(.borderedProminent)
+
+        Button("Start over") { appState.discardBackfill() }
             .controlSize(.small).foregroundColor(.secondary)
     }
 

@@ -493,6 +493,8 @@ final class AppState: ObservableObject {
         case idle
         /// One or more ChatGPT/Claude exports found on disk, ready to recover from.
         case offered([DetectedExport])
+        /// A run that started on a previous launch and didn't finish — offer to pick it back up.
+        case resumable(BackfillJob)
         case running(BackfillProgress)
         /// Whole export processed. `capped` = stopped at the Free 25-idea limit part-way.
         case finished(BackfillSummary, capped: Bool)
@@ -533,9 +535,22 @@ final class AppState: ObservableObject {
     /// Surface the "Recover my thinking" offer on first run. Does NOT touch the filesystem --
     /// scanning `~/Downloads` triggers a macOS permission prompt, so that waits for an explicit
     /// tap (`lookForExports()`).
+    ///
+    /// An unfinished run outranks the first-run offer and shows even after `backfillCompleted`:
+    /// the run stopped mid-way, so there is still thinking left to recover.
     func checkForBackfill() {
-        guard isPaired, reconnect == nil, !backfillCompleted, !onboardingDismissed else { return }
+        guard isPaired, reconnect == nil else { return }
+        if let job = snapshot.backfillJob {
+            if case .idle = backfill { backfill = .resumable(job) }
+            return
+        }
+        guard !backfillCompleted, !onboardingDismissed else { return }
         if case .idle = backfill { backfill = .offered([]) }
+    }
+
+    private func saveBackfillJob(_ job: BackfillJob?) {
+        snapshot.backfillJob = job
+        persistSnapshot()
     }
 
     /// Explicit "check my Downloads" -- scans Downloads + Desktop (this is what prompts for
@@ -561,12 +576,21 @@ final class AppState: ObservableObject {
         lookForExports()   // arm the Downloads watcher so the export is picked up when it lands
     }
 
-    /// "Not now" / "Done" -- close it for good (the run, if any, is already terminal here).
+    /// "Not now" / "Done" -- close the sheet. A terminal run is already done; an unfinished job
+    /// on disk is deliberately **kept** (next launch re-offers the resume), it just goes away for
+    /// this session. `discardBackfill()` is the explicit "stop, don't ask again".
     func dismissBackfillOffer() {
         downloadsWatch?.cancel()
         downloadsWatch = nil
         backfill = .idle
         backfillHidden = false
+    }
+
+    /// "Start over" / "Stop recovering" -- drop the unfinished job for good and don't nag again.
+    func discardBackfill() {
+        saveBackfillJob(nil)
+        UserDefaults.standard.set(true, forKey: backfillDoneKey)
+        dismissBackfillOffer()
     }
 
     /// "Hide" during a run -- keep importing, just get the sheet out of the way.
@@ -576,36 +600,96 @@ final class AppState: ObservableObject {
     var cursorBackfillAvailable: Bool { CursorBackfill.available }
 
     func runBackfill(_ export: DetectedExport) {
-        runBackfillTask(total: export.conversationCount) { client, progress in
-            try await Backfill.run(export, client: client, progress: progress)
+        let job = BackfillJob(
+            kind: export.kind == .chatgpt ? .chatgpt : .claude,
+            sourcePath: export.url.path,
+            sourceModified: export.modified,
+            conversationsTotal: export.conversationCount,
+            conversationsDone: 0,
+            ideaCountAtStart: thinkingState?.currentIdeas.count ?? 0,
+            startedAt: Date(), updatedAt: Date()
+        )
+        runBackfillTask(job) { client, progress, startAt in
+            try await Backfill.run(export, client: client, progress: progress, startingAt: startAt)
         }
     }
 
     func runCursorBackfill() {
-        runBackfillTask(total: 0) { client, progress in
-            try await Backfill.runCursor(client: client, progress: progress)
+        let job = BackfillJob(
+            kind: .cursor, sourcePath: nil, sourceModified: nil,
+            conversationsTotal: 0, conversationsDone: 0,
+            ideaCountAtStart: thinkingState?.currentIdeas.count ?? 0,
+            startedAt: Date(), updatedAt: Date()
+        )
+        runBackfillTask(job) { client, progress, startAt in
+            try await Backfill.runCursor(client: client, progress: progress, startingAt: startAt)
+        }
+    }
+
+    /// Pick a run left unfinished by a previous launch back up where it stopped.
+    func resumeBackfill(_ job: BackfillJob) {
+        switch job.kind {
+        case .cursor:
+            guard CursorBackfill.available else { saveBackfillJob(nil); backfill = .offered([]); return }
+            runBackfillTask(job) { client, progress, startAt in
+                try await Backfill.runCursor(client: client, progress: progress, startingAt: startAt)
+            }
+        case .chatgpt, .claude:
+            guard let path = job.sourcePath,
+                  let export = Backfill.inspect(URL(fileURLWithPath: path)),
+                  export.kind.rawValue == job.kind.rawValue else {
+                // The export was moved or deleted -- can't resume it. Fall back to the normal
+                // "find an export" offer and forget the stale job.
+                saveBackfillJob(nil)
+                lookForExports()
+                return
+            }
+            // A file re-downloaded to the same path is a different export; resume from the top.
+            let sameFile = job.sourceModified.map { abs(export.modified.timeIntervalSince($0)) < 2 } ?? false
+            var resumed = job
+            if !sameFile { resumed.conversationsDone = 0 }
+            resumed.conversationsTotal = export.conversationCount
+            runBackfillTask(resumed) { client, progress, startAt in
+                try await Backfill.run(export, client: client, progress: progress, startingAt: startAt)
+            }
         }
     }
 
     private func runBackfillTask(
-        total: Int,
-        _ work: @escaping (APIClient, @escaping (BackfillProgress) -> Void) async throws -> (summary: ImportSummary, cappedAt: Int?)
+        _ job: BackfillJob,
+        _ work: @escaping (APIClient, @escaping (BackfillProgress) -> Void, Int) async throws -> (summary: ImportSummary, cappedAt: Int?)
     ) {
         guard isPaired, reconnect == nil else { return }
-        let before = thinkingState?.currentIdeas.count ?? 0
-        backfill = .running(BackfillProgress(conversationsDone: 0, conversationsTotal: total, ideaCount: before))
+        let before = job.ideaCountAtStart
+        let startAt = job.conversationsDone
+        saveBackfillJob(job)
+        backfill = .running(BackfillProgress(conversationsDone: startAt, conversationsTotal: job.conversationsTotal, ideaCount: before))
         let c = client
         Task {
             do {
-                let (result, cappedAt) = try await work(c) { [weak self] p in self?.backfill = .running(p) }
+                let (result, cappedAt) = try await work(c, { [weak self] p in
+                    guard let self else { return }
+                    self.backfill = .running(p)
+                    if var j = self.snapshot.backfillJob {
+                        j.conversationsDone = p.conversationsDone
+                        j.conversationsTotal = max(j.conversationsTotal, p.conversationsTotal)
+                        j.updatedAt = Date()
+                        self.saveBackfillJob(j)
+                    }
+                }, startAt)
                 let added = max(result.ideaCount - before, 0)
-                if cappedAt == nil { UserDefaults.standard.set(true, forKey: backfillDoneKey) }
+                if cappedAt == nil {
+                    saveBackfillJob(nil)   // ran to the end -- nothing left to resume
+                    UserDefaults.standard.set(true, forKey: backfillDoneKey)
+                }
+                // On a cap the job is kept: upgrading to Pro and relaunching re-offers the resume.
                 downloadsWatch?.cancel(); downloadsWatch = nil
                 await refresh()
                 let summary = await buildBackfillSummary(newIdeas: added)
                 backfill = .finished(summary, capped: cappedAt != nil)
                 backfillHidden = false   // bring the sheet back for the result
             } catch {
+                // Keep the job on disk -- the next launch offers to resume it.
                 backfill = .failed((error as? LocalizedError)?.errorDescription ?? "That import didn't work.")
                 backfillHidden = false
             }
