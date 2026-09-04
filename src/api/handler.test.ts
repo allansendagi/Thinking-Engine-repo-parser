@@ -28,13 +28,18 @@ function extractionResponse(events: object[]): string {
 }
 
 async function createTestUser(handler: (req: Request) => Promise<Response>) {
-  const res = await handler(new Request("http://x/v1/users", { method: "POST" }));
+  const res = await handler(
+    new Request("http://x/v1/users", { method: "POST" }),
+  );
   return (await res.json()) as { userId: string; token: string };
 }
 
 describe("HTTP handler (fetch against the pure handler, no network port)", () => {
   test("health check needs no auth", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const res = await handler(new Request("http://x/v1/health"));
     expect(res.status).toBe(200);
     const health = (await res.json()) as { status: string; storage: string };
@@ -45,13 +50,18 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
   });
 
   test("protected routes reject missing or wrong credentials", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const noAuth = await handler(new Request("http://x/v1/thinking-state"));
     expect(noAuth.status).toBe(401);
 
     const { userId } = await createTestUser(handler);
     const wrongToken = await handler(
-      new Request("http://x/v1/thinking-state", { headers: { authorization: `Bearer ${userId}:${"0".repeat(64)}` } }),
+      new Request("http://x/v1/thinking-state", {
+        headers: { authorization: `Bearer ${userId}:${"0".repeat(64)}` },
+      }),
     );
     expect(wrongToken.status).toBe(401);
   });
@@ -60,7 +70,13 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     const handler = createRequestHandler({
       extraction: new FakeProvider([
         extractionResponse([
-          { type: "new_idea", statement: "Authority needs explicit boundaries.", confidence: 0.9, source_event_id: "m1", evidence_quote: "explicit boundaries" },
+          {
+            type: "new_idea",
+            statement: "Authority needs explicit boundaries.",
+            confidence: 0.9,
+            source_event_id: "m1",
+            evidence_quote: "explicit boundaries",
+          },
         ]),
       ]),
       reasoning: new FakeProvider([]),
@@ -76,7 +92,14 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
         body: JSON.stringify({
           conversationId: "conv_1",
           source: "fixture",
-          messages: [{ id: "m1", role: "user", text: "Authority needs explicit boundaries.", createdAt: "2026-08-17T00:00:00.000Z" }],
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              text: "Authority needs explicit boundaries.",
+              createdAt: "2026-08-17T00:00:00.000Z",
+            },
+          ],
         }),
       }),
     );
@@ -84,23 +107,39 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     const ingestBody = (await ingestRes.json()) as { ideaCount: number };
     expect(ingestBody.ideaCount).toBe(1);
 
-    const stateRes = await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }));
-    const state = (await stateRes.json()) as { currentIdeas: { title: string }[] };
+    const stateRes = await handler(
+      new Request("http://x/v1/thinking-state", { headers: authHeader }),
+    );
+    const state = (await stateRes.json()) as {
+      currentIdeas: { title: string }[];
+    };
     expect(state.currentIdeas).toHaveLength(1);
     expect(state.currentIdeas[0]?.title).toContain("Authority");
 
-    const searchRes = await handler(new Request("http://x/v1/ideas?q=authority%20boundaries", { headers: authHeader }));
+    const searchRes = await handler(
+      new Request("http://x/v1/ideas?q=authority%20boundaries", {
+        headers: authHeader,
+      }),
+    );
     const results = (await searchRes.json()) as { id: string }[];
     expect(results.length).toBeGreaterThan(0);
 
     // The source-conversation bridge: an idea's trace carries the conversation id, and
     // GET /v1/conversations/:id returns the captured messages.
     const ideaId = results[0]!.id;
-    const traceRes = await handler(new Request(`http://x/v1/ideas/${encodeURIComponent(ideaId)}/trace`, { headers: authHeader }));
-    const trace = (await traceRes.json()) as { provenance: { conversationId: string | null }[] };
+    const traceRes = await handler(
+      new Request(`http://x/v1/ideas/${encodeURIComponent(ideaId)}/trace`, {
+        headers: authHeader,
+      }),
+    );
+    const trace = (await traceRes.json()) as {
+      provenance: { conversationId: string | null }[];
+    };
     expect(trace.provenance[0]?.conversationId).toBe("conv_1");
 
-    const convRes = await handler(new Request("http://x/v1/conversations/conv_1", { headers: authHeader }));
+    const convRes = await handler(
+      new Request("http://x/v1/conversations/conv_1", { headers: authHeader }),
+    );
     expect(convRes.status).toBe(200);
     const conv = (await convRes.json()) as {
       conversationId: string;
@@ -109,19 +148,34 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     };
     expect(conv.conversationId).toBe("conv_1");
     expect(conv.source).toBe("fixture");
-    expect(conv.messages[0]).toMatchObject({ role: "user", text: "Authority needs explicit boundaries.", index: 0 });
+    expect(conv.messages[0]).toMatchObject({
+      role: "user",
+      text: "Authority needs explicit boundaries.",
+      index: 0,
+    });
 
-    const missing = await handler(new Request("http://x/v1/conversations/nope", { headers: authHeader }));
+    const missing = await handler(
+      new Request("http://x/v1/conversations/nope", { headers: authHeader }),
+    );
     expect(missing.status).toBe(404);
 
-    const noAuthConv = await handler(new Request("http://x/v1/conversations/conv_1"));
+    const noAuthConv = await handler(
+      new Request("http://x/v1/conversations/conv_1"),
+    );
     expect(noAuthConv.status).toBe(401);
 
     // Activity feed: the conversation is listed, with the idea it moved.
-    const listRes = await handler(new Request("http://x/v1/conversations", { headers: authHeader }));
+    const listRes = await handler(
+      new Request("http://x/v1/conversations", { headers: authHeader }),
+    );
     expect(listRes.status).toBe(200);
     const list = (await listRes.json()) as {
-      conversations: { conversationId: string; source: string; messageCount: number; ideas: { id: string; title: string }[] }[];
+      conversations: {
+        conversationId: string;
+        source: string;
+        messageCount: number;
+        ideas: { id: string; title: string }[];
+      }[];
     };
     const row = list.conversations.find((c) => c.conversationId === "conv_1");
     expect(row).toBeDefined();
@@ -133,13 +187,22 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     const handler = createRequestHandler({
       extraction: new FakeProvider([
         extractionResponse([
-          { type: "new_idea", statement: "Authority must be independently verifiable.", confidence: 0.95, source_event_id: "backfill-n1", evidence_quote: "independently verifiable" },
+          {
+            type: "new_idea",
+            statement: "Authority must be independently verifiable.",
+            confidence: 0.95,
+            source_event_id: "backfill-n1",
+            evidence_quote: "independently verifiable",
+          },
         ]),
       ]),
       reasoning: new FakeProvider([]),
     });
     const { userId, token } = await createTestUser(handler);
-    const authHeader = { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" };
+    const authHeader = {
+      authorization: `Bearer ${userId}:${token}`,
+      "content-type": "application/json",
+    };
 
     const chatgptBatch = [
       {
@@ -153,7 +216,10 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
             message: {
               id: "backfill-n1",
               author: { role: "user" },
-              content: { content_type: "text", parts: ["Authority must be independently verifiable."] },
+              content: {
+                content_type: "text",
+                parts: ["Authority must be independently verifiable."],
+              },
               create_time: 1_723_000_000,
             },
           },
@@ -162,34 +228,95 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     ];
 
     const res = await handler(
-      new Request("http://x/v1/import", { method: "POST", headers: authHeader, body: JSON.stringify({ format: "chatgpt", conversations: chatgptBatch }) }),
+      new Request("http://x/v1/import", {
+        method: "POST",
+        headers: authHeader,
+        body: JSON.stringify({
+          format: "chatgpt",
+          conversations: chatgptBatch,
+        }),
+      }),
     );
     expect(res.status).toBe(200);
-    const summary = (await res.json()) as { newCanonicalEvents: number; ideaCount: number };
+    const summary = (await res.json()) as {
+      newCanonicalEvents: number;
+      ideaCount: number;
+    };
     expect(summary.newCanonicalEvents).toBe(1);
     expect(summary.ideaCount).toBe(1);
 
     // Re-sending the same batch is a no-op (idempotent).
     const again = await handler(
-      new Request("http://x/v1/import", { method: "POST", headers: authHeader, body: JSON.stringify({ format: "chatgpt", conversations: chatgptBatch }) }),
+      new Request("http://x/v1/import", {
+        method: "POST",
+        headers: authHeader,
+        body: JSON.stringify({
+          format: "chatgpt",
+          conversations: chatgptBatch,
+        }),
+      }),
     );
-    expect(((await again.json()) as { newCanonicalEvents: number }).newCanonicalEvents).toBe(0);
+    expect(
+      ((await again.json()) as { newCanonicalEvents: number })
+        .newCanonicalEvents,
+    ).toBe(0);
 
     // The imported idea is visible in the graph.
-    const state = (await (await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }))).json()) as { currentIdeas: { title: string }[] };
-    expect(state.currentIdeas.some((i) => i.title.includes("Authority"))).toBe(true);
+    const state = (await (
+      await handler(
+        new Request("http://x/v1/thinking-state", { headers: authHeader }),
+      )
+    ).json()) as { currentIdeas: { title: string }[] };
+    expect(state.currentIdeas.some((i) => i.title.includes("Authority"))).toBe(
+      true,
+    );
 
     // Bad shape and bad format are rejected; no auth is 401.
-    expect((await handler(new Request("http://x/v1/import", { method: "POST", headers: authHeader, body: JSON.stringify({ format: "chatgpt", conversations: "nope" }) }))).status).toBe(400);
-    expect((await handler(new Request("http://x/v1/import", { method: "POST", headers: authHeader, body: JSON.stringify({ format: "aol", conversations: [] }) }))).status).toBe(400);
-    expect((await handler(new Request("http://x/v1/import", { method: "POST", body: JSON.stringify({ format: "chatgpt", conversations: [] }) }))).status).toBe(401);
+    expect(
+      (
+        await handler(
+          new Request("http://x/v1/import", {
+            method: "POST",
+            headers: authHeader,
+            body: JSON.stringify({ format: "chatgpt", conversations: "nope" }),
+          }),
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await handler(
+          new Request("http://x/v1/import", {
+            method: "POST",
+            headers: authHeader,
+            body: JSON.stringify({ format: "aol", conversations: [] }),
+          }),
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await handler(
+          new Request("http://x/v1/import", {
+            method: "POST",
+            body: JSON.stringify({ format: "chatgpt", conversations: [] }),
+          }),
+        )
+      ).status,
+    ).toBe(401);
   });
 
   test("one user cannot read another user's data even with a valid token for a different account", async () => {
     const handler = createRequestHandler({
       extraction: new FakeProvider([
         extractionResponse([
-          { type: "new_idea", statement: "User A's private idea.", confidence: 0.9, source_event_id: "m1", evidence_quote: "private idea" },
+          {
+            type: "new_idea",
+            statement: "User A's private idea.",
+            confidence: 0.9,
+            source_event_id: "m1",
+            evidence_quote: "private idea",
+          },
         ]),
       ]),
       reasoning: new FakeProvider([]),
@@ -199,18 +326,30 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     await handler(
       new Request("http://x/v1/conversations", {
         method: "POST",
-        headers: { authorization: `Bearer ${userA.userId}:${userA.token}`, "content-type": "application/json" },
+        headers: {
+          authorization: `Bearer ${userA.userId}:${userA.token}`,
+          "content-type": "application/json",
+        },
         body: JSON.stringify({
           conversationId: "conv_a",
           source: "fixture",
-          messages: [{ id: "m1", role: "user", text: "User A's private idea.", createdAt: "2026-08-17T00:00:00.000Z" }],
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              text: "User A's private idea.",
+              createdAt: "2026-08-17T00:00:00.000Z",
+            },
+          ],
         }),
       }),
     );
 
     const userB = await createTestUser(handler);
     const bReadsState = await handler(
-      new Request("http://x/v1/thinking-state", { headers: { authorization: `Bearer ${userB.userId}:${userB.token}` } }),
+      new Request("http://x/v1/thinking-state", {
+        headers: { authorization: `Bearer ${userB.userId}:${userB.token}` },
+      }),
     );
     const bState = (await bReadsState.json()) as { currentIdeas: unknown[] };
     expect(bState.currentIdeas).toHaveLength(0); // B's DB is separate; A's idea never appears
@@ -220,13 +359,22 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     const handler = createRequestHandler({
       extraction: new FakeProvider([
         extractionResponse([
-          { type: "new_idea", statement: "Authority needs explicit boundaries.", confidence: 0.9, source_event_id: "m1", evidence_quote: "explicit boundaries" },
+          {
+            type: "new_idea",
+            statement: "Authority needs explicit boundaries.",
+            confidence: 0.9,
+            source_event_id: "m1",
+            evidence_quote: "explicit boundaries",
+          },
         ]),
       ]),
       reasoning: new FakeProvider([]),
     });
     const { userId, token } = await createTestUser(handler);
-    const authHeader = { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" };
+    const authHeader = {
+      authorization: `Bearer ${userId}:${token}`,
+      "content-type": "application/json",
+    };
 
     await handler(
       new Request("http://x/v1/conversations", {
@@ -235,38 +383,79 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
         body: JSON.stringify({
           conversationId: "conv_1",
           source: "fixture",
-          messages: [{ id: "m1", role: "user", text: "Authority needs explicit boundaries.", createdAt: "2026-08-17T00:00:00.000Z" }],
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              text: "Authority needs explicit boundaries.",
+              createdAt: "2026-08-17T00:00:00.000Z",
+            },
+          ],
         }),
       }),
     );
-    const state = (await (await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }))).json()) as {
+    const state = (await (
+      await handler(
+        new Request("http://x/v1/thinking-state", { headers: authHeader }),
+      )
+    ).json()) as {
       currentIdeas: { id: string }[];
     };
     const ideaId = state.currentIdeas[0]?.id as string;
 
     const renameRes = await handler(
-      new Request(`http://x/v1/ideas/${ideaId}`, { method: "PATCH", headers: authHeader, body: JSON.stringify({ title: "Computable Authority" }) }),
+      new Request(`http://x/v1/ideas/${ideaId}`, {
+        method: "PATCH",
+        headers: authHeader,
+        body: JSON.stringify({ title: "Computable Authority" }),
+      }),
     );
     expect(renameRes.status).toBe(200);
-    expect(((await renameRes.json()) as { title: string }).title).toBe("Computable Authority");
+    expect(((await renameRes.json()) as { title: string }).title).toBe(
+      "Computable Authority",
+    );
 
     const rejectRes = await handler(
-      new Request(`http://x/v1/ideas/${ideaId}`, { method: "PATCH", headers: authHeader, body: JSON.stringify({ state: "rejected" }) }),
+      new Request(`http://x/v1/ideas/${ideaId}`, {
+        method: "PATCH",
+        headers: authHeader,
+        body: JSON.stringify({ state: "rejected" }),
+      }),
     );
-    expect(((await rejectRes.json()) as { state: string }).state).toBe("rejected");
+    expect(((await rejectRes.json()) as { state: string }).state).toBe(
+      "rejected",
+    );
 
     const badStateRes = await handler(
-      new Request(`http://x/v1/ideas/${ideaId}`, { method: "PATCH", headers: authHeader, body: JSON.stringify({ state: "not_a_state" }) }),
+      new Request(`http://x/v1/ideas/${ideaId}`, {
+        method: "PATCH",
+        headers: authHeader,
+        body: JSON.stringify({ state: "not_a_state" }),
+      }),
     );
     expect(badStateRes.status).toBe(400);
 
-    const deleteRes = await handler(new Request(`http://x/v1/ideas/${ideaId}`, { method: "DELETE", headers: authHeader }));
+    const deleteRes = await handler(
+      new Request(`http://x/v1/ideas/${ideaId}`, {
+        method: "DELETE",
+        headers: authHeader,
+      }),
+    );
     expect(deleteRes.status).toBe(200);
 
-    const deleteAgainRes = await handler(new Request(`http://x/v1/ideas/${ideaId}`, { method: "DELETE", headers: authHeader }));
+    const deleteAgainRes = await handler(
+      new Request(`http://x/v1/ideas/${ideaId}`, {
+        method: "DELETE",
+        headers: authHeader,
+      }),
+    );
     expect(deleteAgainRes.status).toBe(404);
 
-    const finalState = (await (await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }))).json()) as {
+    const finalState = (await (
+      await handler(
+        new Request("http://x/v1/thinking-state", { headers: authHeader }),
+      )
+    ).json()) as {
       currentIdeas: unknown[];
     };
     expect(finalState.currentIdeas).toHaveLength(0);
@@ -276,13 +465,22 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     const handler = createRequestHandler({
       extraction: new FakeProvider([
         extractionResponse([
-          { type: "new_idea", statement: "Authority needs explicit boundaries.", confidence: 0.9, source_event_id: "conv_paste::0", evidence_quote: "explicit boundaries" },
+          {
+            type: "new_idea",
+            statement: "Authority needs explicit boundaries.",
+            confidence: 0.9,
+            source_event_id: "conv_paste::0",
+            evidence_quote: "explicit boundaries",
+          },
         ]),
       ]),
       reasoning: new FakeProvider([]),
     });
     const { userId, token } = await createTestUser(handler);
-    const authHeader = { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" };
+    const authHeader = {
+      authorization: `Bearer ${userId}:${token}`,
+      "content-type": "application/json",
+    };
 
     const res = await handler(
       new Request("http://x/v1/paste", {
@@ -295,31 +493,48 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       }),
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ideaCount: number; conversationId: string };
+    const body = (await res.json()) as {
+      ideaCount: number;
+      conversationId: string;
+    };
     expect(body.ideaCount).toBe(1);
     expect(body.conversationId).toBe("conv_paste");
 
     // The idea id derives from a paste source id (`conv_paste::0`), so it contains `::` -- a
     // strict HTTP client (the Mac app) can only send that percent-encoded. The handler must
     // decode the path segment back before the lookup.
-    const state = (await (await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }))).json()) as {
+    const state = (await (
+      await handler(
+        new Request("http://x/v1/thinking-state", { headers: authHeader }),
+      )
+    ).json()) as {
       currentIdeas: { id: string }[];
     };
     const ideaId = state.currentIdeas[0]!.id;
     expect(ideaId).toContain("::");
     const encoded = encodeURIComponent(ideaId);
     expect(encoded).not.toBe(ideaId); // proves the id actually needs encoding
-    const trace = await handler(new Request(`http://x/v1/ideas/${encoded}/trace`, { headers: authHeader }));
+    const trace = await handler(
+      new Request(`http://x/v1/ideas/${encoded}/trace`, {
+        headers: authHeader,
+      }),
+    );
     expect(trace.status).toBe(200);
   });
 
   test("POST /v1/paste rejects empty text", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const { userId, token } = await createTestUser(handler);
     const res = await handler(
       new Request("http://x/v1/paste", {
         method: "POST",
-        headers: { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" },
+        headers: {
+          authorization: `Bearer ${userId}:${token}`,
+          "content-type": "application/json",
+        },
         body: JSON.stringify({ text: "   " }),
       }),
     );
@@ -327,19 +542,29 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
   });
 
   test("unknown route returns 404", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const { userId, token } = await createTestUser(handler);
     const res = await handler(
-      new Request("http://x/v1/nonexistent", { headers: { authorization: `Bearer ${userId}:${token}` } }),
+      new Request("http://x/v1/nonexistent", {
+        headers: { authorization: `Bearer ${userId}:${token}` },
+      }),
     );
     expect(res.status).toBe(404);
   });
 
   test("GET /v1/account reports a fresh user as Free, capture allowed", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const { userId, token } = await createTestUser(handler);
     const res = await handler(
-      new Request("http://x/v1/account", { headers: { authorization: `Bearer ${userId}:${token}` } }),
+      new Request("http://x/v1/account", {
+        headers: { authorization: `Bearer ${userId}:${token}` },
+      }),
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -359,7 +584,10 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
   });
 
   test("email sign-in: start -> verify returns a working bearer; same email is idempotent (per-device token, others stay live)", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const j = { "content-type": "application/json" };
     const email = `signin-${Date.now()}@example.com`;
 
@@ -371,7 +599,11 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
 
     // start (returns ok regardless of whether the account exists)
     const started = await handler(
-      new Request("http://x/v1/auth/start", { method: "POST", headers: j, body: JSON.stringify({ email }) }),
+      new Request("http://x/v1/auth/start", {
+        method: "POST",
+        headers: j,
+        body: JSON.stringify({ email }),
+      }),
     );
     expect(started.status).toBe(200);
 
@@ -398,7 +630,9 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(a.userId).toMatch(/^user_[a-f0-9]{24}$/);
 
     const acct = await handler(
-      new Request("http://x/v1/account", { headers: { authorization: `Bearer ${a.userId}:${a.token}` } }),
+      new Request("http://x/v1/account", {
+        headers: { authorization: `Bearer ${a.userId}:${a.token}` },
+      }),
     );
     expect(((await acct.json()) as { email: string }).email).toBe(email);
 
@@ -416,24 +650,40 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
 
     // ...and the first device's token is STILL valid -- tokens are per-device.
     const firstStillWorks = await handler(
-      new Request("http://x/v1/thinking-state", { headers: { authorization: `Bearer ${a.userId}:${a.token}` } }),
+      new Request("http://x/v1/thinking-state", {
+        headers: { authorization: `Bearer ${a.userId}:${a.token}` },
+      }),
     );
     expect(firstStillWorks.status).toBe(200);
     const secondWorks = await handler(
-      new Request("http://x/v1/thinking-state", { headers: { authorization: `Bearer ${b.userId}:${b.token}` } }),
+      new Request("http://x/v1/thinking-state", {
+        headers: { authorization: `Bearer ${b.userId}:${b.token}` },
+      }),
     );
     expect(secondWorks.status).toBe(200);
   });
 
   test("claim: an anonymous account attaches an email and keeps its data", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const { issueCode } = await import("./authCodes");
 
     const anon = await createTestUser(handler);
-    const auth = { authorization: `Bearer ${anon.userId}:${anon.token}`, "content-type": "application/json" };
+    const auth = {
+      authorization: `Bearer ${anon.userId}:${anon.token}`,
+      "content-type": "application/json",
+    };
     const email = `claim-${Date.now()}@example.com`;
 
-    await handler(new Request("http://x/v1/account/email", { method: "POST", headers: auth, body: JSON.stringify({ email }) }));
+    await handler(
+      new Request("http://x/v1/account/email", {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ email }),
+      }),
+    );
     const claimed = await handler(
       new Request("http://x/v1/account/email/verify", {
         method: "POST",
@@ -446,15 +696,27 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
   });
 
   test("claim: an email on an account that has ideas 409s; an email on an empty account is reclaimed", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const { issueCode } = await import("./authCodes");
     const { openUserDb } = await import("../db/tenancy");
     const hdr = (u: { userId: string; token: string }) => ({
       authorization: `Bearer ${u.userId}:${u.token}`,
       "content-type": "application/json",
     });
-    const claim = async (u: { userId: string; token: string }, email: string) => {
-      await handler(new Request("http://x/v1/account/email", { method: "POST", headers: hdr(u), body: JSON.stringify({ email }) }));
+    const claim = async (
+      u: { userId: string; token: string },
+      email: string,
+    ) => {
+      await handler(
+        new Request("http://x/v1/account/email", {
+          method: "POST",
+          headers: hdr(u),
+          body: JSON.stringify({ email }),
+        }),
+      );
       return handler(
         new Request("http://x/v1/account/email/verify", {
           method: "POST",
@@ -470,14 +732,18 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect((await claim(withData, emailA)).status).toBe(200);
     const seed = openUserDb(withData.userId);
     seed
-      .prepare("INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES (?, 't', 'developing', 'f', ?, ?)")
+      .prepare(
+        "INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES (?, 't', 'developing', 'f', ?, ?)",
+      )
       .run("idea_x", new Date().toISOString(), new Date().toISOString());
     seed.close();
 
     const rival = await createTestUser(handler);
     const blocked = await claim(rival, emailA);
     expect(blocked.status).toBe(409);
-    expect(((await blocked.json()) as { code: string }).code).toBe("email_in_use");
+    expect(((await blocked.json()) as { code: string }).code).toBe(
+      "email_in_use",
+    );
 
     // --- email held by an EMPTY account -> reclaimed, not blocked ---
     const strayWeb = await createTestUser(handler); // never captured anything
@@ -486,25 +752,40 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
 
     const macWithIdeas = await createTestUser(handler);
     openUserDb(macWithIdeas.userId)
-      .prepare("INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES (?, 't', 'developing', 'f', ?, ?)")
+      .prepare(
+        "INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES (?, 't', 'developing', 'f', ?, ?)",
+      )
       .run("idea_y", new Date().toISOString(), new Date().toISOString());
 
     const reclaimed = await claim(macWithIdeas, emailB);
     expect(reclaimed.status).toBe(200);
-    const body = (await reclaimed.json()) as { email: string; reclaimedFromEmptyAccount?: boolean };
+    const body = (await reclaimed.json()) as {
+      email: string;
+      reclaimedFromEmptyAccount?: boolean;
+    };
     expect(body.email).toBe(emailB);
     expect(body.reclaimedFromEmptyAccount).toBe(true);
 
     // the stray account no longer holds the email
-    const strayAcct = await handler(new Request("http://x/v1/account", { headers: hdr(strayWeb) }));
-    expect(((await strayAcct.json()) as { email: string | null }).email).toBeNull();
+    const strayAcct = await handler(
+      new Request("http://x/v1/account", { headers: hdr(strayWeb) }),
+    );
+    expect(
+      ((await strayAcct.json()) as { email: string | null }).email,
+    ).toBeNull();
   });
 
   test("capture gate: Free plan 402s at the 25-idea cap (only when billing configured); reads still work", async () => {
     const { setPlan } = await import("./auth");
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const { userId, token } = await createTestUser(handler);
-    const authHeader = { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" };
+    const authHeader = {
+      authorization: `Bearer ${userId}:${token}`,
+      "content-type": "application/json",
+    };
 
     // Seed 25 idea nodes directly in the user's DB.
     const { openUserDb } = await import("../db/tenancy");
@@ -513,7 +794,8 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       "INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES (?, ?, 'developing', ?, ?, ?)",
     );
     const nowIso = new Date().toISOString();
-    for (let i = 0; i < 25; i++) stmt.run(`idea_${i}`, `t${i}`, `f${i}`, nowIso, nowIso);
+    for (let i = 0; i < 25; i++)
+      stmt.run(`idea_${i}`, `t${i}`, `f${i}`, nowIso, nowIso);
     seed.close();
 
     const capture = () =>
@@ -521,7 +803,11 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
         new Request("http://x/v1/conversations", {
           method: "POST",
           headers: authHeader,
-          body: JSON.stringify({ conversationId: "c1", source: "chatgpt", messages: [] }),
+          body: JSON.stringify({
+            conversationId: "c1",
+            source: "chatgpt",
+            messages: [],
+          }),
         }),
       );
 
@@ -534,9 +820,13 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     try {
       const gated = await capture();
       expect(gated.status).toBe(402);
-      expect(((await gated.json()) as { code: string }).code).toBe("upgrade_required");
+      expect(((await gated.json()) as { code: string }).code).toBe(
+        "upgrade_required",
+      );
 
-      const read = await handler(new Request("http://x/v1/thinking-state", { headers: authHeader }));
+      const read = await handler(
+        new Request("http://x/v1/thinking-state", { headers: authHeader }),
+      );
       expect(read.status).toBe(200);
 
       // /v1/continue is NOT gated -- the continuation packet is free (deterministic from the
@@ -576,7 +866,14 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
         }),
       );
       expect(packetRes.status).toBe(200);
-      const cp = (await packetRes.json()) as { text: string; packet: { idea: { id: string }; whereYouLeftOff: string; suggestedNext: string } };
+      const cp = (await packetRes.json()) as {
+        text: string;
+        packet: {
+          idea: { id: string };
+          whereYouLeftOff: string;
+          suggestedNext: string;
+        };
+      };
       expect(cp.packet.idea.id).toBe("idea_0");
       expect(cp.packet.whereYouLeftOff).toBe("f0");
       expect(cp.text).toContain("CURRENT IDEA");
@@ -587,7 +884,11 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       expect(cp.text).not.toContain(cp.packet.suggestedNext);
 
       const missing = await handler(
-        new Request("http://x/v1/continue", { method: "POST", headers: authHeader, body: JSON.stringify({ ideaId: "idea_nope" }) }),
+        new Request("http://x/v1/continue", {
+          method: "POST",
+          headers: authHeader,
+          body: JSON.stringify({ ideaId: "idea_nope" }),
+        }),
       );
       expect(missing.status).toBe(404);
     } finally {
@@ -598,7 +899,10 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
   });
 
   test("download counter: public POST records; summary is admin-only", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const { issueCode } = await import("./authCodes");
 
     // Public, no auth: three downloads.
@@ -606,20 +910,41 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       const r = await handler(
         new Request("http://x/v1/events/download", {
           method: "POST",
-          headers: { "content-type": "application/json", "x-vercel-ip-country": "QA" },
-          body: JSON.stringify({ platform: "mac", version: "0.2.0", referrer: "https://threadnow.app/" }),
+          headers: {
+            "content-type": "application/json",
+            "x-vercel-ip-country": "QA",
+          },
+          body: JSON.stringify({
+            platform: "mac",
+            version: "0.2.0",
+            referrer: "https://threadnow.app/",
+          }),
         }),
       );
       expect(r.status).toBe(204);
     }
     // A malformed body still 204s (best-effort).
-    expect((await handler(new Request("http://x/v1/events/download", { method: "POST" }))).status).toBe(204);
+    expect(
+      (
+        await handler(
+          new Request("http://x/v1/events/download", { method: "POST" }),
+        )
+      ).status,
+    ).toBe(204);
 
     // Summary needs auth AND an admin email.
     const nonAdmin = await createTestUser(handler);
     const na = { authorization: `Bearer ${nonAdmin.userId}:${nonAdmin.token}` };
-    expect((await handler(new Request("http://x/v1/events/downloads"))).status).toBe(401);
-    expect((await handler(new Request("http://x/v1/events/downloads", { headers: na }))).status).toBe(403);
+    expect(
+      (await handler(new Request("http://x/v1/events/downloads"))).status,
+    ).toBe(401);
+    expect(
+      (
+        await handler(
+          new Request("http://x/v1/events/downloads", { headers: na }),
+        )
+      ).status,
+    ).toBe(403);
 
     const adminEmail = `admin-${Date.now()}@example.com`;
     process.env.THREAD_ADMIN_EMAILS = ` other@x.com , ${adminEmail} `;
@@ -628,12 +953,17 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
         new Request("http://x/v1/auth/verify", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email: adminEmail, code: await issueCode(adminEmail) }),
+          body: JSON.stringify({
+            email: adminEmail,
+            code: await issueCode(adminEmail),
+          }),
         }),
       );
       const admin = (await start.json()) as { userId: string; token: string };
       const res = await handler(
-        new Request("http://x/v1/events/downloads?days=7", { headers: { authorization: `Bearer ${admin.userId}:${admin.token}` } }),
+        new Request("http://x/v1/events/downloads?days=7", {
+          headers: { authorization: `Bearer ${admin.userId}:${admin.token}` },
+        }),
       );
       expect(res.status).toBe(200);
       const s = (await res.json()) as {
@@ -649,8 +979,96 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     }
   });
 
+  test("waitlist: public POST validates + dedupes; the actual list is admin-only", async () => {
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
+    const { issueCode } = await import("./authCodes");
+    const post = (body: unknown) =>
+      handler(
+        new Request("http://x/v1/waitlist", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-vercel-ip-country": "QA",
+          },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    // No auth needed. A bad email is rejected, not silently swallowed (unlike the download
+    // beacon) -- this is a real submission a person is waiting on.
+    expect((await post({ email: "not-an-email" })).status).toBe(400);
+    expect((await post({})).status).toBe(400);
+
+    const email = `waiter-${Date.now()}@example.com`;
+    const first = await post({
+      email,
+      name: "A. Waiter",
+      note: "Excited to try Continue.",
+    });
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ ok: true, alreadyJoined: false });
+
+    // Same email again (any case) -- idempotent, not an error, and says so.
+    const again = await post({ email: email.toUpperCase() });
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual({ ok: true, alreadyJoined: true });
+
+    // Reading the actual list needs auth AND an admin email -- same gate as downloads.
+    const nonAdmin = await createTestUser(handler);
+    const na = { authorization: `Bearer ${nonAdmin.userId}:${nonAdmin.token}` };
+    expect((await handler(new Request("http://x/v1/waitlist"))).status).toBe(
+      401,
+    );
+    expect(
+      (await handler(new Request("http://x/v1/waitlist", { headers: na })))
+        .status,
+    ).toBe(403);
+
+    const adminEmail = `admin-waitlist-${Date.now()}@example.com`;
+    process.env.THREAD_ADMIN_EMAILS = adminEmail;
+    try {
+      const start = await handler(
+        new Request("http://x/v1/auth/verify", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            email: adminEmail,
+            code: await issueCode(adminEmail),
+          }),
+        }),
+      );
+      const admin = (await start.json()) as { userId: string; token: string };
+      const res = await handler(
+        new Request("http://x/v1/waitlist", {
+          headers: { authorization: `Bearer ${admin.userId}:${admin.token}` },
+        }),
+      );
+      expect(res.status).toBe(200);
+      const s = (await res.json()) as {
+        total: number;
+        entries: { email: string; name: string | null; note: string | null }[];
+      };
+      const entry = s.entries.find((e) => e.email === email.toLowerCase());
+      expect(entry).toBeDefined();
+      expect(entry?.name).toBe("A. Waiter");
+      expect(entry?.note).toBe("Excited to try Continue.");
+      // Deduped: exactly one row for the two submissions of the same email above.
+      expect(
+        s.entries.filter((e) => e.email === email.toLowerCase()),
+      ).toHaveLength(1);
+    } finally {
+      delete process.env.THREAD_ADMIN_EMAILS;
+    }
+  });
+
   test("per-IP rate limiter guards the unauthenticated routes", async () => {
-    const handler = createRequestHandler({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
     const { __resetRateLimiter } = await import("./rateLimit");
     delete process.env.THREAD_RATE_LIMIT; // re-enable for this test only
     __resetRateLimiter();
@@ -676,7 +1094,10 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
 
       // A different IP is unaffected.
       const other = await handler(
-        new Request("http://x/v1/users", { method: "POST", headers: { "x-forwarded-for": "203.0.113.42" } }),
+        new Request("http://x/v1/users", {
+          method: "POST",
+          headers: { "x-forwarded-for": "203.0.113.42" },
+        }),
       );
       expect(other.status).toBe(201);
     } finally {
