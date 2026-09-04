@@ -36,7 +36,9 @@ enum CursorBackfill {
         defer { sqlite3_close(db) }
 
         var stmt: OpaquePointer?
-        let sql = "SELECT key, value FROM ItemTable WHERE key LIKE '%chat%' OR key LIKE '%composer%' OR key LIKE '%aichat%'"
+        // ORDER BY key so the sequence is deterministic across launches -- a resumed backfill
+        // (Backfill.runCursor's `startingAt`) skips the first N and must land in the same place.
+        let sql = "SELECT key, value FROM ItemTable WHERE key LIKE '%chat%' OR key LIKE '%composer%' OR key LIKE '%aichat%' ORDER BY key"
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(stmt) }
 
