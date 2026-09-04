@@ -24,6 +24,10 @@ enum Theme {
     static let hairline = Color.black.opacity(0.09)          // rgba(0,0,0,.09)
     static let fieldFill = Color.black.opacity(0.055)         // rgba(0,0,0,.055)
     static let hoverFill = Color.black.opacity(0.05)          // rgba(0,0,0,.05)
+    /// "Thread Idea Detail.dc.html": section-header row hover (quieter) vs. an actionable list
+    /// item's hover (more visible) — the mock deliberately uses two different values, not one.
+    static let rowHoverFill = Color.black.opacity(0.02)       // rgba(0,0,0,.02)
+    static let itemHoverFill = Color.black.opacity(0.04)      // rgba(0,0,0,.04)
     static let cardFill = Color.white.opacity(0.66)           // rgba(255,255,255,.66)
     static let cardStroke = Color.black.opacity(0.09)
     static let cardCorner: CGFloat = 9
