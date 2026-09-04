@@ -18,7 +18,14 @@ final class ContinuationPacketTests: XCTestCase {
           "trajectory": ["AI governance", "policy/execution gap", "authority must be executable"],
           "thinkingShift": "You moved from AI governance toward machine-executable institutional authority.",
           "lastExploredSource": "Claude",
-          "lastExploredAt": "2026-08-15T00:00:00.000Z"
+          "lastExploredAt": "2026-08-15T00:00:00.000Z",
+          "governingThought": {
+            "statement": "Authority must be both executable and independently verifiable.",
+            "kind": "reasons",
+            "members": [
+              { "id": "i2", "title": "Verification needs an independent party", "currentFormulation": "..." }
+            ]
+          }
         }
         """.data(using: .utf8)!
         let p = try JSONDecoder().decode(ContinuationPacket.self, from: json)
@@ -30,6 +37,9 @@ final class ContinuationPacketTests: XCTestCase {
             p.trajectoryChain,
             "AI governance\n  ↓\n  policy/execution gap\n  ↓\n  authority must be executable"
         )
+        XCTAssertEqual(p.governingThought?.statement, "Authority must be both executable and independently verifiable.")
+        XCTAssertEqual(p.governingThought?.kind, "reasons")
+        XCTAssertEqual(p.governingThought?.members.map(\.id), ["i2"])
     }
 
     /// A response from the currently-deployed server, before these fields shipped, must still decode.
@@ -52,6 +62,7 @@ final class ContinuationPacketTests: XCTestCase {
         XCTAssertNil(p.unresolvedQuestions)
         XCTAssertNil(p.lastExploredSource)
         XCTAssertEqual(p.trajectoryChain, "")
+        XCTAssertNil(p.governingThought)
     }
 
     func testRefusalAndMetaOutputAreCaught() {
