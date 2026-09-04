@@ -63,13 +63,25 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Label("Browser extension", systemImage: "puzzlepiece.extension")
                     .font(.subheadline).fontWeight(.medium)
-                Text("The extension connects automatically for a couple of minutes after Thread launches. If it drops, open a fresh window here or paste the pairing string.")
+                Text("The extension connects automatically for a couple of minutes after Thread launches, then captures on its own.")
                     .font(.caption).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                // Connected / not-connected state. `browserEverPaired` is persisted; "· active"
+                // shows only while a handshake is genuinely fresh.
                 HStack(spacing: 8) {
-                    Button("Connect a browser") { appState.openPairingWindow() }
-                        .font(.caption)
+                    if appState.browserEverPaired {
+                        Label(
+                            appState.browserActiveNow ? "Browser connected · active" : "Browser connected",
+                            systemImage: "checkmark.circle.fill"
+                        )
+                        .font(.caption).foregroundStyle(.green)
+                        Button("Reconnect") { appState.openPairingWindow() }
+                            .font(.caption2).buttonStyle(.plain).foregroundStyle(Theme.accent)
+                    } else {
+                        Button("Connect a browser") { appState.openPairingWindow() }
+                            .font(.caption)
+                    }
                     if appState.isPairingWindowOpen {
                         Label("Listening…", systemImage: "dot.radiowaves.left.and.right")
                             .font(.caption2).foregroundStyle(Theme.accent)
@@ -77,7 +89,14 @@ struct SettingsView: View {
                 }
                 .padding(.top, 2)
 
+                if !appState.browserEverPaired && !appState.isPairingWindowOpen {
+                    Text("No browser connected yet.")
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+
                 if let pairing = appState.pairingString {
+                    Text("Or paste this into the extension:")
+                        .font(.caption2).foregroundColor(.secondary).padding(.top, 4)
                     HStack {
                         Text(pairing)
                             .font(.system(.caption, design: .monospaced))
@@ -94,8 +113,6 @@ struct SettingsView: View {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
                         }
                     }
-                } else {
-                    Text("Not paired yet.").font(.caption).foregroundColor(.secondary)
                 }
             }
 
