@@ -316,8 +316,8 @@ struct ContinuationPacket: Codable {
 
 /// Mirrors the server's `GoverningThought` (src/mcp/tools.ts) — a synthesis this idea turned
 /// out to share with a small cluster of related ones, plus which ideas actually supported it.
-struct GoverningThought: Codable {
-    struct Member: Codable, Identifiable {
+struct GoverningThought: Codable, Equatable {
+    struct Member: Codable, Identifiable, Equatable {
         let id: String
         let title: String
         let currentFormulation: String

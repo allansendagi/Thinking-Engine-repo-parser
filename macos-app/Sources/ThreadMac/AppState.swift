@@ -133,6 +133,44 @@ final class AppState: ObservableObject {
         ).compactMap { byId[$0.id] }
     }
 
+    // MARK: - Structure (governing thought), fetched in the background per idea, cached in memory
+
+    /// `.found` once the server's synthesis (see GoverningThought, PR #29) has been fetched and
+    /// found a coherent cluster; `.none` once fetched and it found nothing; `.loading` mid-flight;
+    /// `.notFetched` is the default for an idea nothing has asked about yet this session.
+    enum StructureFetch: Equatable {
+        case notFetched, loading, found(GoverningThought), none
+    }
+
+    /// Session-only, per-idea. Deliberately not persisted to `snapshot` -- governing thought is
+    /// ephemeral by design (recomputed server-side each time, no evolution of its own), and a
+    /// stale cached synthesis surviving a relaunch would be worse than just refetching.
+    @Published private var structureCache: [String: StructureFetch] = [:]
+
+    func structure(for ideaId: String) -> StructureFetch {
+        structureCache[ideaId] ?? .notFetched
+    }
+
+    /// Background, non-blocking: `openIdea` calls this after showing the trace, never before.
+    /// Local-first reads mean opening an idea makes no network call today -- this is the one
+    /// enhancement that does, so it must never delay or block the page rendering, and it's
+    /// skipped entirely for an idea with no server relationship at all (never-synced account,
+    /// or a `local_`-prefixed id). Fetched once per idea per session; failures reset to
+    /// `.notFetched` so the next open can retry rather than sticking on a stale `.loading`.
+    func fetchStructureIfNeeded(for ideaId: String) {
+        guard !thinkingStateIsLocal, !ideaId.hasPrefix("local_") else { return }
+        guard structureCache[ideaId] == nil else { return }
+        structureCache[ideaId] = .loading
+        Task {
+            do {
+                let r = try await client.continueIdea(ideaId: ideaId)
+                structureCache[ideaId] = r.packet.governingThought.map(StructureFetch.found) ?? .none
+            } catch {
+                structureCache[ideaId] = nil
+            }
+        }
+    }
+
     // MARK: - On-device idea graph (the fallback when the backend hasn't provided state)
 
     /// The graph the on-device model builds from captures. Rendered only when `thinkingState`
@@ -1303,6 +1341,9 @@ final class AppState: ObservableObject {
         // then revalidate.
         let cached = snapshot.traces[id]
         if let cached { selectedTrace = applyAll(pendingEdits, to: cached) }
+
+        // Fire-and-forget, after the trace is already showing -- never delays this render.
+        fetchStructureIfNeeded(for: id)
 
         do {
             let fresh = try await client.traceIdea(id: id)
