@@ -22,19 +22,54 @@ function extractionResponse(events: object[]): string {
   return JSON.stringify({ events });
 }
 function identityResponse(matchedIdeaId: string | null): string {
-  return JSON.stringify({ matched_idea_id: matchedIdeaId, confidence: 0.9, reasoning: "scripted", also_related_idea_id: null });
+  return JSON.stringify({
+    matched_idea_id: matchedIdeaId,
+    confidence: 0.9,
+    reasoning: "scripted",
+    also_related_idea_id: null,
+  });
 }
 
 async function seedDb() {
   const events: CanonicalEvent[] = [
-    { id: "u1", conversationId: "conv_1", source: "fixture", role: "user", text: "Authority needs explicit boundaries.", createdAt: "2026-08-17T00:00:00.000Z", index: 0 },
-    { id: "u2", conversationId: "conv_2", source: "fixture", role: "user", text: "Authority boundaries need to be executable, per-agent.", createdAt: "2026-08-19T00:00:00.000Z", index: 0 },
+    {
+      id: "u1",
+      conversationId: "conv_1",
+      source: "fixture",
+      role: "user",
+      text: "Authority needs explicit boundaries.",
+      createdAt: "2026-08-17T00:00:00.000Z",
+      index: 0,
+    },
+    {
+      id: "u2",
+      conversationId: "conv_2",
+      source: "fixture",
+      role: "user",
+      text: "Authority boundaries need to be executable, per-agent.",
+      createdAt: "2026-08-19T00:00:00.000Z",
+      index: 0,
+    },
   ];
 
   const extraction = new FakeProvider([
-    extractionResponse([{ type: "new_idea", statement: "Authority needs explicit boundaries.", confidence: 0.9, source_event_id: "u1", evidence_quote: "explicit boundaries" }]),
     extractionResponse([
-      { type: "open_loop", statement: "Who enforces the boundaries?", confidence: 0.8, source_event_id: "u2", evidence_quote: "boundaries need to be executable" },
+      {
+        type: "new_idea",
+        statement: "Authority needs explicit boundaries.",
+        confidence: 0.9,
+        source_event_id: "u1",
+        evidence_quote: "explicit boundaries",
+      },
+    ]),
+    extractionResponse([
+      {
+        type: "open_loop",
+        statement: "Who enforces the boundaries?",
+        confidence: 0.8,
+        source_event_id: "u2",
+        evidence_quote: "boundaries need to be executable",
+      },
     ]),
   ]);
   const reasoning = new FakeProvider([identityResponse("idea_cog_u1_0")]);
@@ -69,8 +104,12 @@ describe("mcp/tools against a real persisted db", () => {
     // idea's articulation, per buildIdeaNode -- every confident match appends an evolution step
     // regardless of type, not just refinements).
     expect(trace?.provenance).toHaveLength(2);
-    expect(trace?.provenance[0]?.sourceText).toBe("Authority needs explicit boundaries.");
-    expect(trace?.provenance[1]?.sourceText).toBe("Authority boundaries need to be executable, per-agent.");
+    expect(trace?.provenance[0]?.sourceText).toBe(
+      "Authority needs explicit boundaries.",
+    );
+    expect(trace?.provenance[1]?.sourceText).toBe(
+      "Authority boundaries need to be executable, per-agent.",
+    );
     // Each step carries the tool it was captured from.
     expect(trace?.provenance[0]?.source).toBe("fixture");
     expect(trace?.provenance[1]?.source).toBe("fixture");
@@ -97,17 +136,79 @@ describe("mcp/tools against a real persisted db", () => {
 
 async function seedAuthorityThread() {
   const events: CanonicalEvent[] = [
-    { id: "u1", conversationId: "c1", source: "chatgpt", role: "user", text: "Authority needs explicit boundaries to mean anything.", createdAt: "2026-08-17T09:00:00.000Z", index: 0 },
-    { id: "u2", conversationId: "c2", source: "cursor", role: "user", text: "Those boundaries should be executable, not just written policy.", createdAt: "2026-08-19T14:00:00.000Z", index: 0 },
-    { id: "u3", conversationId: "c3", source: "claude", role: "user", text: "But who actually performs that verification, and why should we trust them?", createdAt: "2026-08-23T11:00:00.000Z", index: 0 },
-    { id: "u4", conversationId: "c3", source: "claude", role: "user", text: "Independent verification needs a trusted third party or a portable proof.", createdAt: "2026-08-23T11:30:00.000Z", index: 1 },
+    {
+      id: "u1",
+      conversationId: "c1",
+      source: "chatgpt",
+      role: "user",
+      text: "Authority needs explicit boundaries to mean anything.",
+      createdAt: "2026-08-17T09:00:00.000Z",
+      index: 0,
+    },
+    {
+      id: "u2",
+      conversationId: "c2",
+      source: "cursor",
+      role: "user",
+      text: "Those boundaries should be executable, not just written policy.",
+      createdAt: "2026-08-19T14:00:00.000Z",
+      index: 0,
+    },
+    {
+      id: "u3",
+      conversationId: "c3",
+      source: "claude",
+      role: "user",
+      text: "But who actually performs that verification, and why should we trust them?",
+      createdAt: "2026-08-23T11:00:00.000Z",
+      index: 0,
+    },
+    {
+      id: "u4",
+      conversationId: "c3",
+      source: "claude",
+      role: "user",
+      text: "Independent verification needs a trusted third party or a portable proof.",
+      createdAt: "2026-08-23T11:30:00.000Z",
+      index: 1,
+    },
   ];
   const extraction = new FakeProvider([
-    extractionResponse([{ type: "new_idea", statement: "Authority needs explicit boundaries.", confidence: 0.95, source_event_id: "u1", evidence_quote: "explicit boundaries" }]),
-    extractionResponse([{ type: "refinement", statement: "Authority boundaries must be executable, not just policy.", confidence: 0.9, source_event_id: "u2", evidence_quote: "executable" }]),
     extractionResponse([
-      { type: "open_loop", statement: "Who performs the independent verification, and why trust them?", confidence: 0.85, source_event_id: "u3", evidence_quote: "who actually performs that verification" },
-      { type: "refinement", statement: "Independent verification needs a trusted third party or a portable proof.", confidence: 0.9, source_event_id: "u4", evidence_quote: "trusted third party" },
+      {
+        type: "new_idea",
+        statement: "Authority needs explicit boundaries.",
+        confidence: 0.95,
+        source_event_id: "u1",
+        evidence_quote: "explicit boundaries",
+      },
+    ]),
+    extractionResponse([
+      {
+        type: "refinement",
+        statement: "Authority boundaries must be executable, not just policy.",
+        confidence: 0.9,
+        source_event_id: "u2",
+        evidence_quote: "executable",
+      },
+    ]),
+    extractionResponse([
+      {
+        type: "open_loop",
+        statement:
+          "Who performs the independent verification, and why trust them?",
+        confidence: 0.85,
+        source_event_id: "u3",
+        evidence_quote: "who actually performs that verification",
+      },
+      {
+        type: "refinement",
+        statement:
+          "Independent verification needs a trusted third party or a portable proof.",
+        confidence: 0.9,
+        source_event_id: "u4",
+        evidence_quote: "trusted third party",
+      },
     ]),
   ]);
   const reasoning = new FakeProvider([
@@ -130,14 +231,27 @@ describe("buildContinuationPacket", () => {
       "authority as policy\nauthority as executable\nexecution can diverge\nindependent verification needed",
     ]);
 
-    const r = await buildContinuationPacket(db, { ideaId: "idea_cog_u1_0" }, nextLine);
+    const r = await buildContinuationPacket(
+      db,
+      { ideaId: "idea_cog_u1_0" },
+      nextLine,
+    );
     expect(r).not.toBeNull();
     const { text, packet } = r!;
 
     expect(packet.idea.title).toContain("Authority");
-    expect(packet.whereYouLeftOff).toBe("Independent verification needs a trusted third party or a portable proof.");
-    expect(packet.evolution.map((e) => e.source)).toEqual(["ChatGPT", "Cursor", "Claude", "Claude"]);
-    expect(packet.unresolvedQuestion).toContain("Who performs the independent verification");
+    expect(packet.whereYouLeftOff).toBe(
+      "Independent verification needs a trusted third party or a portable proof.",
+    );
+    expect(packet.evolution.map((e) => e.source)).toEqual([
+      "ChatGPT",
+      "Cursor",
+      "Claude",
+      "Claude",
+    ]);
+    expect(packet.unresolvedQuestion).toContain(
+      "Who performs the independent verification",
+    );
     expect(packet.unresolvedQuestions.length).toBeGreaterThan(0);
     expect(packet.contested).toBe(false);
     expect(packet.suggestedNext).toContain("verification models");
@@ -171,12 +285,18 @@ describe("buildContinuationPacket", () => {
       trajectory: packet.trajectory,
     });
     expect(filled).toContain(packet.suggestedNext);
-    expect(filled).toContain("authority as policy\n  ↓\n  authority as executable");
+    expect(filled).toContain(
+      "authority as policy\n  ↓\n  authority as executable",
+    );
     expect(filled).not.toContain(CONTINUE_TOKEN);
     expect(filled).not.toContain("{{THINKING_EVOLUTION}}");
 
     // Eyeball the actual handoff -- fails nothing, but prints it so a human reads it once.
-    console.log("\n----- continuation packet text -----\n" + text + "------------------------------------");
+    console.log(
+      "\n----- continuation packet text -----\n" +
+        text +
+        "------------------------------------",
+    );
   });
 
   test("resolves a fuzzy topic to the single best-matching idea", async () => {
@@ -190,8 +310,12 @@ describe("buildContinuationPacket", () => {
 
   test("returns null for an unknown idea id and for a topic that matches nothing", async () => {
     const db = await seedAuthorityThread();
-    expect(await buildContinuationPacket(db, { ideaId: "idea_nope" })).toBeNull();
-    expect(await buildContinuationPacket(db, { topic: "photosynthesis rates" })).toBeNull();
+    expect(
+      await buildContinuationPacket(db, { ideaId: "idea_nope" }),
+    ).toBeNull();
+    expect(
+      await buildContinuationPacket(db, { topic: "photosynthesis rates" }),
+    ).toBeNull();
   });
 
   test("a resolved idea renders fine with no unresolved question", async () => {
@@ -223,8 +347,12 @@ describe("buildContinuationPacket", () => {
 
   test("carries each step's conversation URL as a structured field, never into the paste text", async () => {
     const db = await seedAuthorityThread();
-    db.query("UPDATE canonical_events SET source_url = ? WHERE conversation_id = 'c1'").run("https://chatgpt.com/c/c1");
-    db.query("UPDATE canonical_events SET source_url = ? WHERE conversation_id = 'c3'").run("https://claude.ai/chat/c3");
+    db.query(
+      "UPDATE canonical_events SET source_url = ? WHERE conversation_id = 'c1'",
+    ).run("https://chatgpt.com/c/c1");
+    db.query(
+      "UPDATE canonical_events SET source_url = ? WHERE conversation_id = 'c3'",
+    ).run("https://claude.ai/chat/c3");
 
     const trace = traceIdea(db, "idea_cog_u1_0")!;
     expect(trace.provenance[0]?.sourceUrl).toBe("https://chatgpt.com/c/c1");
@@ -240,12 +368,238 @@ describe("buildContinuationPacket", () => {
 
   test("a null source_url on a later capture never clears one already stored", async () => {
     const db = await seedAuthorityThread();
-    db.query("UPDATE canonical_events SET source_url = 'https://claude.ai/chat/c3' WHERE id = 'u3'").run();
+    db.query(
+      "UPDATE canonical_events SET source_url = 'https://claude.ai/chat/c3' WHERE id = 'u3'",
+    ).run();
     // A later flush re-persists the same row with no URL (mid-navigation). COALESCE must keep it.
-    const u3: CanonicalEvent = { id: "u3", conversationId: "c3", source: "claude", role: "user", text: "But who actually performs that verification, and why should we trust them?", createdAt: "2026-08-23T11:00:00.000Z", index: 0 };
-    persistPipelineResult(db, [u3], { ideas: new Map(), cognitiveEvents: [], discardedEvents: [], resolutions: [], rejectedExtractions: [] });
-    const row = db.query("SELECT source_url AS u FROM canonical_events WHERE id = 'u3'").get() as { u: string | null };
+    const u3: CanonicalEvent = {
+      id: "u3",
+      conversationId: "c3",
+      source: "claude",
+      role: "user",
+      text: "But who actually performs that verification, and why should we trust them?",
+      createdAt: "2026-08-23T11:00:00.000Z",
+      index: 0,
+    };
+    persistPipelineResult(db, [u3], {
+      ideas: new Map(),
+      cognitiveEvents: [],
+      discardedEvents: [],
+      resolutions: [],
+      rejectedExtractions: [],
+    });
+    const row = db
+      .query("SELECT source_url AS u FROM canonical_events WHERE id = 'u3'")
+      .get() as { u: string | null };
     expect(row.u).toBe("https://claude.ai/chat/c3");
+  });
+});
+
+function governingThoughtResponse(opts: {
+  statement: string;
+  kind: string;
+  supportingIdeaIds: number[];
+}): string {
+  return JSON.stringify({
+    coherent: true,
+    governingThought: opts.statement,
+    groupType: opts.kind,
+    supportingIdeaIds: opts.supportingIdeaIds,
+  });
+}
+const NOT_COHERENT_RESPONSE = JSON.stringify({ coherent: false });
+
+/**
+ * One idea per row, inserted directly (mirrors state/dedup.test.ts's insertIdea) so the retrieval
+ * signal (lexicalOverlap + entityOverlap on currentFormulation) lands where each test needs it --
+ * a pipeline fixture can't control that precisely.
+ */
+function insertIdea(
+  db: ReturnType<typeof openDb>,
+  o: { id: string; title: string; formulation: string; createdAt: string },
+): void {
+  db.prepare(
+    "INSERT INTO idea_nodes (id, title, state, current_formulation, why_it_matters, created_at, updated_at) VALUES (?, ?, 'developing', ?, NULL, ?, ?)",
+  ).run(o.id, o.title, o.formulation, o.createdAt, o.createdAt);
+  const canon = `canon_${o.id}`;
+  db.prepare(
+    "INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx) VALUES (?, 'c', 'fixture', 'user', ?, ?, 0)",
+  ).run(canon, o.formulation, o.createdAt);
+  db.prepare(
+    "INSERT INTO cognitive_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote) VALUES (?, 'new_idea', ?, 0.9, 'high', ?, 'q')",
+  ).run(`cog_${o.id}`, o.formulation, canon);
+  db.prepare(
+    "INSERT INTO evolution_steps (idea_id, cognitive_event_id, formulation, created_at, source_event_id) VALUES (?, ?, ?, ?, ?)",
+  ).run(o.id, `cog_${o.id}`, o.formulation, o.createdAt, canon);
+}
+
+/** A: the seed. B, F: read close enough to A to clear retrieval. C, D: unrelated. E: a near-
+ *  duplicate of A's wording -- should be excluded from candidates, not offered as "support". */
+function seedGoverningThoughtIdeas() {
+  const db = openDb(":memory:");
+  insertIdea(db, {
+    id: "A",
+    title: "Authority must be machine-executable",
+    formulation: "Institutional authority must become machine-executable.",
+    createdAt: "2026-08-01T00:00:00.000Z",
+  });
+  insertIdea(db, {
+    id: "B",
+    title: "Executable authority needs verification",
+    formulation:
+      "Machine-executable institutional authority still needs independent verification before agents trust it.",
+    createdAt: "2026-08-02T00:00:00.000Z",
+  });
+  insertIdea(db, {
+    id: "F",
+    title: "Authority needs a runtime boundary",
+    formulation:
+      "Institutional authority becomes machine-executable only with a runtime enforcement boundary.",
+    createdAt: "2026-08-03T00:00:00.000Z",
+  });
+  insertIdea(db, {
+    id: "C",
+    title: "Switch CI to bun",
+    formulation: "The CI runner should switch from node to bun for speed.",
+    createdAt: "2026-08-04T00:00:00.000Z",
+  });
+  insertIdea(db, {
+    id: "D",
+    title: "Sourdough hydration",
+    formulation: "A higher hydration dough needs a longer bulk ferment.",
+    createdAt: "2026-08-05T00:00:00.000Z",
+  });
+  // Near-VERBATIM reword of A (one word inserted) -- what the real 1.00 pairs on the prod
+  // account turned out to be: near-identical text, not a paraphrase. Must be excluded from
+  // candidates outright, at/above GOVERNING_THOUGHT_NEAR_DUPLICATE_CEILING -- never offered to
+  // the model at all. A genuine paraphrase (different words, same claim) scores well below this
+  // ceiling and is NOT caught here; see the prompt's explicit "drop a restatement" instruction.
+  insertIdea(db, {
+    id: "E",
+    title: "Authority becomes machine-executable",
+    formulation:
+      "Institutional authority must indeed become machine-executable.",
+    createdAt: "2026-08-06T00:00:00.000Z",
+  });
+  return db;
+}
+
+describe("buildContinuationPacket · governing thought", () => {
+  test("synthesizes a governing thought across the ideas retrieval + the model both accept", async () => {
+    const db = seedGoverningThoughtIdeas();
+    const provider = new FakeProvider([
+      "Help me take the next step on this.",
+      governingThoughtResponse({
+        statement:
+          "Institutional authority needs to become machine-executable and independently verifiable.",
+        kind: "reasons",
+        supportingIdeaIds: [1, 2], // both B and F, whichever order retrieval returned them
+      }),
+    ]);
+    const r = await buildContinuationPacket(db, { ideaId: "A" }, provider);
+    expect(r).not.toBeNull();
+    const gt = r!.packet.governingThought;
+    expect(gt).not.toBeNull();
+    expect(gt!.statement).toContain("machine-executable");
+    expect(gt!.kind).toBe("reasons");
+    expect(gt!.members.map((m) => m.id).sort()).toEqual(["B", "F"]);
+    // Near-duplicate E and unrelated C/D never became candidates in the first place.
+    expect(gt!.members.map((m) => m.id)).not.toContain("E");
+    expect(gt!.members.map((m) => m.id)).not.toContain("C");
+
+    expect(r!.text).toContain("GOVERNING THOUGHT");
+    expect(r!.text.indexOf("GOVERNING THOUGHT")).toBeLessThan(
+      r!.text.indexOf("CURRENT IDEA"),
+    );
+    expect(r!.text).toContain("RELATED THINKING (reasons)");
+    expect(r!.text).toContain("Executable authority needs verification");
+  });
+
+  test("the model can drop a retrieved candidate rather than force it in", async () => {
+    const db = seedGoverningThoughtIdeas();
+    const provider = new FakeProvider([
+      "Help me take the next step on this.",
+      governingThoughtResponse({
+        statement: "Authority needs to be machine-executable.",
+        kind: "reasons",
+        supportingIdeaIds: [1],
+      }),
+    ]);
+    const r = await buildContinuationPacket(db, { ideaId: "A" }, provider);
+    expect(r!.packet.governingThought!.members).toHaveLength(1);
+  });
+
+  test("the model saying the candidates don't cohere leaves the packet exactly as before this feature", async () => {
+    const db = seedGoverningThoughtIdeas();
+    const provider = new FakeProvider([
+      "Help me take the next step on this.",
+      NOT_COHERENT_RESPONSE,
+    ]);
+    const r = await buildContinuationPacket(db, { ideaId: "A" }, provider);
+    expect(r!.packet.governingThought).toBeNull();
+    expect(r!.text).not.toContain("GOVERNING THOUGHT");
+    expect(r!.text).not.toContain("RELATED THINKING");
+  });
+
+  test("an out-of-range supportingIdeaIds index is rejected, not silently clamped", async () => {
+    const db = seedGoverningThoughtIdeas();
+    const provider = new FakeProvider([
+      "Help me take the next step on this.",
+      governingThoughtResponse({
+        statement: "x",
+        kind: "reasons",
+        supportingIdeaIds: [99],
+      }),
+    ]);
+    const r = await buildContinuationPacket(db, { ideaId: "A" }, provider);
+    expect(r!.packet.governingThought).toBeNull();
+  });
+
+  test("no candidates clear the retrieval floor -> the model is never even called for it", async () => {
+    const db = openDb(":memory:");
+    insertIdea(db, {
+      id: "A",
+      title: "Authority must be machine-executable",
+      formulation: "Institutional authority must become machine-executable.",
+      createdAt: "2026-08-01T00:00:00.000Z",
+    });
+    insertIdea(db, {
+      id: "D",
+      title: "Sourdough hydration",
+      formulation: "A higher hydration dough needs a longer bulk ferment.",
+      createdAt: "2026-08-05T00:00:00.000Z",
+    });
+    // Scripted with exactly one response -- a second (unwanted) call throws and fails the test.
+    const provider = new FakeProvider(["Help me take the next step on this."]);
+    const r = await buildContinuationPacket(db, { ideaId: "A" }, provider);
+    expect(r!.packet.governingThought).toBeNull();
+  });
+
+  test("only a near-verbatim duplicate is nearby -> excluded as a candidate, not treated as support", async () => {
+    const db = openDb(":memory:");
+    insertIdea(db, {
+      id: "A",
+      title: "Authority must be machine-executable",
+      formulation: "Institutional authority must become machine-executable.",
+      createdAt: "2026-08-01T00:00:00.000Z",
+    });
+    insertIdea(db, {
+      id: "E",
+      title: "Authority becomes machine-executable",
+      formulation:
+        "Institutional authority must indeed become machine-executable.",
+      createdAt: "2026-08-06T00:00:00.000Z",
+    });
+    const provider = new FakeProvider(["Help me take the next step on this."]);
+    const r = await buildContinuationPacket(db, { ideaId: "A" }, provider);
+    expect(r!.packet.governingThought).toBeNull();
+  });
+
+  test("no provider -> no governing thought, same as today", async () => {
+    const db = seedGoverningThoughtIdeas();
+    const r = await buildContinuationPacket(db, { ideaId: "A" });
+    expect(r!.packet.governingThought).toBeNull();
+    expect(r!.text).not.toContain("GOVERNING THOUGHT");
   });
 });
 
@@ -257,7 +611,9 @@ describe("renderPacket", () => {
     sourceText: null,
     sourceUrl: null,
   });
-  const basePacket = (evolution: ContinuationPacket["evolution"]): ContinuationPacket => ({
+  const basePacket = (
+    evolution: ContinuationPacket["evolution"],
+  ): ContinuationPacket => ({
     idea: { id: "i", title: "T", state: "developing" },
     whereYouLeftOff: "here",
     contested: false,
@@ -271,31 +627,60 @@ describe("renderPacket", () => {
     thinkingShift: null,
     lastExploredSource: null,
     lastExploredAt: null,
+    governingThought: null,
   });
 
   test("the full machine handoff: labelled sections, trajectory as a token, a TASK directive", () => {
     const p: ContinuationPacket = {
       ...basePacket([1, 2].map(baseStep)),
       idea: { id: "i", title: "Computable Authority", state: "contested" },
-      whereYouLeftOff: "Institutional authority should be machine-executable and independently verified.",
+      whereYouLeftOff:
+        "Institutional authority should be machine-executable and independently verified.",
       contested: true,
-      decisions: [{ statement: "Frame NOMOS as a protocol, not infrastructure.", decidedAt: "x" }],
-      unresolvedQuestions: ["Who performs verification?", "Why trust that verifier?"],
-      trajectory: ["AI governance", "policy/execution gap", "authority must be executable"],
+      decisions: [
+        {
+          statement: "Frame NOMOS as a protocol, not infrastructure.",
+          decidedAt: "x",
+        },
+      ],
+      unresolvedQuestions: [
+        "Who performs verification?",
+        "Why trust that verifier?",
+      ],
+      trajectory: [
+        "AI governance",
+        "policy/execution gap",
+        "authority must be executable",
+      ],
     };
     const text = renderPacket(p);
     expect(text).toStartWith("CURRENT IDEA\nComputable Authority");
-    expect(text).toContain("CURRENT FORMULATION\nInstitutional authority should be machine-executable");
-    expect(text).toContain("(contested — a later point conflicts with the above)");
-    expect(text).toContain("ESTABLISHED\nFrame NOMOS as a protocol, not infrastructure.");
+    expect(text).toContain(
+      "CURRENT FORMULATION\nInstitutional authority should be machine-executable",
+    );
+    expect(text).toContain(
+      "(contested — a later point conflicts with the above)",
+    );
+    expect(text).toContain(
+      "ESTABLISHED\nFrame NOMOS as a protocol, not infrastructure.",
+    );
     expect(text).toContain(`THINKING EVOLUTION\n  ${"{{THINKING_EVOLUTION}}"}`);
-    expect(text).toContain("UNRESOLVED\nWho performs verification?\nWhy trust that verifier?");
+    expect(text).toContain(
+      "UNRESOLVED\nWho performs verification?\nWhy trust that verifier?",
+    );
     expect(text).toContain("RECENT EVIDENCE\nChatGPT — Aug 12"); // newest first, capped at 2
-    expect(text).toContain("TASK\nContinue the reasoning from this exact state. Do not restart the exploration.");
+    expect(text).toContain(
+      "TASK\nContinue the reasoning from this exact state. Do not restart the exploration.",
+    );
     expect(text.trimEnd()).toEndWith(CONTINUE_TOKEN);
 
-    const filled = resolvePacketText(text, { nextStep: p.suggestedNext, trajectory: p.trajectory });
-    expect(filled).toContain("  AI governance\n  ↓\n  policy/execution gap\n  ↓\n  authority must be executable");
+    const filled = resolvePacketText(text, {
+      nextStep: p.suggestedNext,
+      trajectory: p.trajectory,
+    });
+    expect(filled).toContain(
+      "  AI governance\n  ↓\n  policy/execution gap\n  ↓\n  authority must be executable",
+    );
     expect(filled).toContain("do the next thing");
     expect(filled).not.toContain("{{");
   });
@@ -310,7 +695,12 @@ describe("renderPacket", () => {
 
   test("every optional section is dropped when empty", () => {
     const text = renderPacket(basePacket([]));
-    for (const label of ["ESTABLISHED", "THINKING EVOLUTION", "UNRESOLVED", "RECENT EVIDENCE"]) {
+    for (const label of [
+      "ESTABLISHED",
+      "THINKING EVOLUTION",
+      "UNRESOLVED",
+      "RECENT EVIDENCE",
+    ]) {
       expect(text).not.toContain(label);
     }
     expect(text).toContain("CURRENT IDEA");
