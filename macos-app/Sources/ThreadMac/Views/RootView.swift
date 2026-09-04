@@ -66,6 +66,12 @@ struct RootView: View {
         .sheet(item: $appState.transcript) { t in
             ConversationView(transcript: t).environmentObject(appState)
         }
+        .sheet(isPresented: Binding(
+            get: { appState.showsBackfillSheet },
+            set: { if !$0 { appState.hideBackfillSheet() } }
+        )) {
+            BackfillView().environmentObject(appState)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .threadOpenSettings)) { _ in showSettings = true }
         .onReceive(NotificationCenter.default.publisher(for: .threadOpenMainWindow)) { _ in openWindow(id: "main") }
         .onExitCommand {

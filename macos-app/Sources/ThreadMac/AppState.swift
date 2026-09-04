@@ -487,6 +487,98 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(true, forKey: onboardingKey)
     }
 
+    // MARK: - Historical backfill ("Recover my thinking")
+
+    enum BackfillUIState: Equatable {
+        case idle
+        /// One or more ChatGPT/Claude exports found on disk, ready to recover from.
+        case offered([DetectedExport])
+        case running(BackfillProgress)
+        /// Whole export processed. `newIdeas` = ideas this backfill added.
+        case finished(ideaCount: Int, newIdeas: Int)
+        /// Stopped at the Free 25-idea cap partway through.
+        case partial(ideaCount: Int, newIdeas: Int)
+        case failed(String)
+    }
+
+    @Published var backfill: BackfillUIState = .idle
+    /// "Hide" during a run tucks the sheet away without stopping the import; a terminal state
+    /// brings it back so the result still lands.
+    @Published var backfillHidden = false
+    private var downloadsWatch: DispatchSourceFileSystemObject?
+    private let backfillDoneKey = "thread.backfillCompleted"
+    var backfillCompleted: Bool { UserDefaults.standard.bool(forKey: backfillDoneKey) }
+    var showsBackfillSheet: Bool { backfill != .idle && !backfillHidden }
+
+    /// Surface the "Recover my thinking" offer on first run. Does NOT touch the filesystem --
+    /// scanning `~/Downloads` triggers a macOS permission prompt, so that waits for an explicit
+    /// tap (`lookForExports()`).
+    func checkForBackfill() {
+        guard isPaired, reconnect == nil, !backfillCompleted, !onboardingDismissed else { return }
+        if case .idle = backfill { backfill = .offered([]) }
+    }
+
+    /// Explicit "check my Downloads" -- scans Downloads + Desktop (this is what prompts for
+    /// folder access) and starts watching Downloads for a fresh export.
+    func lookForExports() {
+        let existing = Backfill.scanForExistingExports()
+        if case .running = backfill {} else { backfill = .offered(existing) }
+        if downloadsWatch == nil {
+            downloadsWatch = Backfill.watchDownloads { [weak self] found in
+                guard let self else { return }
+                if case .running = self.backfill { return }
+                if case .offered(let list) = self.backfill, !list.contains(found) {
+                    self.backfill = .offered([found] + list)
+                } else if case .idle = self.backfill {
+                    self.backfill = .offered([found])
+                }
+            }
+        }
+    }
+
+    func openExportPage(_ kind: BackfillKind) {
+        NSWorkspace.shared.open(kind.exportPageURL)
+        lookForExports()   // arm the Downloads watcher so the export is picked up when it lands
+    }
+
+    /// "Not now" / "Done" -- close it for good (the run, if any, is already terminal here).
+    func dismissBackfillOffer() {
+        downloadsWatch?.cancel()
+        downloadsWatch = nil
+        backfill = .idle
+        backfillHidden = false
+    }
+
+    /// "Hide" during a run -- keep importing, just get the sheet out of the way.
+    func hideBackfillSheet() { backfillHidden = true }
+
+    func runBackfill(_ export: DetectedExport) {
+        guard isPaired, reconnect == nil else { return }
+        let before = thinkingState?.currentIdeas.count ?? 0
+        backfill = .running(BackfillProgress(conversationsDone: 0, conversationsTotal: export.conversationCount, ideaCount: before))
+        let c = client
+        Task {
+            do {
+                let (summary, cappedAt) = try await Backfill.run(export, client: c) { [weak self] p in
+                    self?.backfill = .running(p)
+                }
+                let added = max(summary.ideaCount - before, 0)
+                if cappedAt != nil {
+                    backfill = .partial(ideaCount: summary.ideaCount, newIdeas: added)
+                } else {
+                    UserDefaults.standard.set(true, forKey: backfillDoneKey)
+                    backfill = .finished(ideaCount: summary.ideaCount, newIdeas: added)
+                }
+                backfillHidden = false   // bring the sheet back for the result
+                downloadsWatch?.cancel(); downloadsWatch = nil
+                await refresh()
+            } catch {
+                backfill = .failed((error as? LocalizedError)?.errorDescription ?? "That import didn't work.")
+                backfillHidden = false
+            }
+        }
+    }
+
     var client: APIClient {
         APIClient(baseURL: apiBaseUrl, credentials: CredentialStore.credentials)
     }
@@ -737,6 +829,7 @@ final class AppState: ObservableObject {
                 await refresh()
                 await refreshAccount()
                 await persistAccountEmailIfKnown()
+                checkForBackfill()
             } catch let APIError.http(status, _) where status == 401 {
                 // The token is dead; the account and its ideas are not. Don't wipe anything,
                 // don't mint a new identity -- show the cached graph and offer one-tap reconnect.
@@ -822,6 +915,7 @@ final class AppState: ObservableObject {
             CredentialStore.save(userId: created.userId, token: created.token)
             userId = created.userId
             await refresh()
+            checkForBackfill()   // first run -- this is where "Recover my thinking" matters most
         } catch {
             errorMessage = error.localizedDescription
         }

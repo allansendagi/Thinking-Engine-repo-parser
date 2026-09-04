@@ -159,6 +159,14 @@ final class APIClient {
         return w.conversations
     }
 
+    /// Historical backfill: one batch of an exported `conversations.json` array. `conversations`
+    /// is the raw JSON objects, sliced by the caller into batches; the backend parses + ingests.
+    func importBatch(format: String, conversations: [Any]) async throws -> ImportSummary {
+        let payload: [String: Any] = ["format": format, "conversations": conversations]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await request("/v1/import", method: "POST", body: body)
+    }
+
     func renameIdea(id: String, title: String) async throws -> IdeaDetail {
         let body = try JSONEncoder().encode(["title": title])
         return try await request("/v1/ideas/\(Self.pathSegment(id))", method: "PATCH", body: body)
