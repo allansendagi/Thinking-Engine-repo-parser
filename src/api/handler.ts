@@ -32,7 +32,7 @@ import { openUserDb } from "../db/tenancy";
 import { storageMode } from "../db/durability";
 import { downloadSummary, isAdmin, recordDownload } from "./metrics";
 import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
-import { getConversation, loadCanonicalEvents, loadIdeas } from "../db/queries";
+import { getConversation, listConversations, loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { parsePastedConversation } from "../import/pasteParser";
 import {
@@ -430,6 +430,12 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       if (req.method === "GET" && pathname === "/v1/ideas") {
         const q = url.searchParams.get("q") ?? "";
         return json(searchIdeas(db, q));
+      }
+
+      // Activity feed: every conversation Thread has captured, newest first, with the ideas each
+      // one moved. The "All" tab's Activity mode reads this.
+      if (req.method === "GET" && pathname === "/v1/conversations") {
+        return json({ conversations: listConversations(db) });
       }
 
       // The captured messages behind an idea -- the "evidence" layer. `:id` is a conversation id

@@ -63,6 +63,9 @@ struct RootView: View {
         .task { if !appState.needsReconnect { await appState.refresh() } }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
+        .sheet(item: $appState.transcript) { t in
+            ConversationView(transcript: t).environmentObject(appState)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .threadOpenSettings)) { _ in showSettings = true }
         .onReceive(NotificationCenter.default.publisher(for: .threadOpenMainWindow)) { _ in openWindow(id: "main") }
         .onExitCommand {

@@ -170,6 +170,67 @@ export function loadCanonicalEvents(db: Database): CanonicalEvent[] {
   }));
 }
 
+export interface ConversationSummary {
+  conversationId: string;
+  source: string;
+  sourceUrl: string | null;
+  messageCount: number;
+  firstAt: string;
+  lastAt: string;
+  /** Ideas this conversation moved (via an evolution step or a decision). Newest-touched first. */
+  ideas: { id: string; title: string }[];
+}
+
+/** Every conversation Thread has captured, newest activity first -- the "Activity" feed. Two
+ *  queries: one groups canonical_events per conversation, one resolves which ideas each moved. */
+export function listConversations(db: Database): ConversationSummary[] {
+  const convs = db
+    .query(
+      `SELECT conversation_id AS cid, MIN(source) AS source, COUNT(*) AS n,
+              MIN(created_at) AS first_at, MAX(created_at) AS last_at, MAX(source_url) AS source_url
+       FROM canonical_events GROUP BY conversation_id ORDER BY last_at DESC`,
+    )
+    .all() as {
+    cid: string;
+    source: string;
+    n: number;
+    first_at: string;
+    last_at: string;
+    source_url: string | null;
+  }[];
+
+  const links = db
+    .query(
+      `SELECT ce.conversation_id AS cid, i.id AS idea_id, i.title AS title
+       FROM evolution_steps es
+       JOIN canonical_events ce ON ce.id = es.source_event_id
+       JOIN idea_nodes i ON i.id = es.idea_id
+       UNION
+       SELECT ce.conversation_id AS cid, i.id AS idea_id, i.title AS title
+       FROM decisions d
+       JOIN canonical_events ce ON ce.id = d.source_event_id
+       JOIN idea_nodes i ON i.id = d.idea_id`,
+    )
+    .all() as { cid: string; idea_id: string; title: string }[];
+
+  const ideasByConv = new Map<string, { id: string; title: string }[]>();
+  for (const l of links) {
+    const list = ideasByConv.get(l.cid) ?? [];
+    if (!list.some((x) => x.id === l.idea_id)) list.push({ id: l.idea_id, title: l.title });
+    ideasByConv.set(l.cid, list);
+  }
+
+  return convs.map((c) => ({
+    conversationId: c.cid,
+    source: c.source,
+    sourceUrl: c.source_url ?? null,
+    messageCount: c.n,
+    firstAt: c.first_at,
+    lastAt: c.last_at,
+    ideas: ideasByConv.get(c.cid) ?? [],
+  }));
+}
+
 export interface ConversationTranscript {
   conversationId: string;
   /** "chatgpt" | "claude" | "gemini" | "cursor" | "paste" */

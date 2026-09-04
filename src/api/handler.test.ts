@@ -116,6 +116,17 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
 
     const noAuthConv = await handler(new Request("http://x/v1/conversations/conv_1"));
     expect(noAuthConv.status).toBe(401);
+
+    // Activity feed: the conversation is listed, with the idea it moved.
+    const listRes = await handler(new Request("http://x/v1/conversations", { headers: authHeader }));
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as {
+      conversations: { conversationId: string; source: string; messageCount: number; ideas: { id: string; title: string }[] }[];
+    };
+    const row = list.conversations.find((c) => c.conversationId === "conv_1");
+    expect(row).toBeDefined();
+    expect(row!.messageCount).toBe(1);
+    expect(row!.ideas.map((i) => i.id)).toContain(ideaId);
   });
 
   test("one user cannot read another user's data even with a valid token for a different account", async () => {

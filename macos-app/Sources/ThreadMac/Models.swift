@@ -137,6 +137,24 @@ struct IdeaTrace: Codable {
     let provenance: [ProvenanceStep]
 }
 
+/// One row of the "Activity" feed: a conversation Thread captured and the ideas it moved.
+struct ConversationSummary: Codable, Identifiable {
+    struct IdeaRef: Codable, Identifiable {
+        let id: String
+        let title: String
+    }
+    let conversationId: String
+    let source: String
+    let sourceUrl: String?
+    let messageCount: Int
+    let firstAt: String
+    let lastAt: String
+    let ideas: [IdeaRef]
+
+    var id: String { conversationId }
+    var sourceLabel: String { displaySourceLabel(source) ?? source.capitalized }
+}
+
 /// The captured messages behind an idea -- the "evidence" layer. Fetched on demand when the
 /// user taps a source on an evolution step.
 struct ConversationTranscript: Codable, Identifiable {

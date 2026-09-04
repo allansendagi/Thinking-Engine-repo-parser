@@ -10,6 +10,13 @@ enum ListTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Sub-mode of the "All" tab only. Recent and Open loops are always ideas.
+/// `.ideas` = every idea; `.activity` = the chronological feed of captured conversations.
+enum AllMode: String, CaseIterable, Identifiable {
+    case ideas = "Ideas", activity = "Activity"
+    var id: String { rawValue }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     init() {
@@ -293,6 +300,23 @@ final class AppState: ObservableObject {
 
     /// Which of the panel's three segments is showing. See `ListTab`.
     @Published var listTab: ListTab = .recent
+
+    /// "All" tab sub-mode. Only meaningful when `listTab == .all`.
+    @Published var allMode: AllMode = .ideas {
+        didSet { if allMode == .activity, conversations.isEmpty { Task { await loadConversations() } } }
+    }
+
+    /// The Activity feed. Fetched when the "All → Activity" mode is first opened, refreshed on
+    /// each `refresh()` while it's showing.
+    @Published var conversations: [ConversationSummary] = []
+    @Published var conversationsLoading = false
+
+    func loadConversations() async {
+        guard isPaired, reconnect == nil else { return }
+        conversationsLoading = true
+        defer { conversationsLoading = false }
+        if let list = try? await client.listConversations() { conversations = list }
+    }
 
     /// Idea ids the user has pinned. Shown as a "Pinned" group at the top of the All tab.
     /// Local-only (no backend concept), persisted across launches.
@@ -882,6 +906,7 @@ final class AppState: ObservableObject {
         isLoading = false
         reconcileEmbeddings()
         await refreshAccount()
+        if listTab == .all, allMode == .activity { await loadConversations() }
     }
 
     func search() async {
