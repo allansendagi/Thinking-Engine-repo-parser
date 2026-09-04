@@ -494,11 +494,31 @@ final class AppState: ObservableObject {
         /// One or more ChatGPT/Claude exports found on disk, ready to recover from.
         case offered([DetectedExport])
         case running(BackfillProgress)
-        /// Whole export processed. `newIdeas` = ideas this backfill added.
-        case finished(ideaCount: Int, newIdeas: Int)
-        /// Stopped at the Free 25-idea cap partway through.
-        case partial(ideaCount: Int, newIdeas: Int)
+        /// Whole export processed. `capped` = stopped at the Free 25-idea limit part-way.
+        case finished(BackfillSummary, capped: Bool)
         case failed(String)
+    }
+
+    /// What the first-run "your thinking is taking shape" screen shows after a backfill: real
+    /// counts from the rebuilt graph, plus the single strongest reconstructed idea to lead with.
+    struct BackfillSummary: Equatable {
+        var newIdeas: Int
+        var totalIdeas: Int
+        var openLoops: Int
+        var decisions: Int
+        /// Ideas that appear in more than one captured conversation.
+        var evolvedAcrossChats: Int
+        var featured: Featured?
+
+        struct Featured: Equatable {
+            var ideaId: String
+            var title: String
+            var firstSeen: String        // ISO
+            var startedAs: String?       // earliest formulation
+            var nowThinks: String        // current formulation
+            var sources: [String]        // ["ChatGPT", "Claude", ...] in order first seen
+            var openQuestion: String?
+        }
     }
 
     @Published var backfill: BackfillUIState = .idle
@@ -577,22 +597,78 @@ final class AppState: ObservableObject {
         let c = client
         Task {
             do {
-                let (summary, cappedAt) = try await work(c) { [weak self] p in self?.backfill = .running(p) }
-                let added = max(summary.ideaCount - before, 0)
-                if cappedAt != nil {
-                    backfill = .partial(ideaCount: summary.ideaCount, newIdeas: added)
-                } else {
-                    UserDefaults.standard.set(true, forKey: backfillDoneKey)
-                    backfill = .finished(ideaCount: summary.ideaCount, newIdeas: added)
-                }
-                backfillHidden = false   // bring the sheet back for the result
+                let (result, cappedAt) = try await work(c) { [weak self] p in self?.backfill = .running(p) }
+                let added = max(result.ideaCount - before, 0)
+                if cappedAt == nil { UserDefaults.standard.set(true, forKey: backfillDoneKey) }
                 downloadsWatch?.cancel(); downloadsWatch = nil
                 await refresh()
+                let summary = await buildBackfillSummary(newIdeas: added)
+                backfill = .finished(summary, capped: cappedAt != nil)
+                backfillHidden = false   // bring the sheet back for the result
             } catch {
                 backfill = .failed((error as? LocalizedError)?.errorDescription ?? "That import didn't work.")
                 backfillHidden = false
             }
         }
+    }
+
+    /// Real counts from the rebuilt graph + the single strongest reconstructed idea to lead with.
+    private func buildBackfillSummary(newIdeas: Int) async -> BackfillSummary {
+        let ts = thinkingState
+        let ideas = ts?.currentIdeas ?? []
+        let openLoops = (ts?.openLoops ?? []).filter { !$0.resolved }
+
+        // "evolved across chats" -- ideas that appear in more than one captured conversation.
+        var evolved = 0
+        if let convs = try? await client.listConversations() {
+            var byIdea: [String: Set<String>] = [:]
+            for c in convs {
+                for i in c.ideas { byIdea[i.id, default: []].insert(c.conversationId) }
+            }
+            evolved = byIdea.values.filter { $0.count > 1 }.count
+        }
+
+        // Pick the lead idea: prefer one that's unresolved (has an open loop) and touched across
+        // multiple sources, then most-evolved, then most-recently-changed.
+        let loopIdeaIds = Set(openLoops.map(\.ideaId))
+        let changeCount = Dictionary(grouping: ts?.recentChanges ?? [], by: \.ideaId).mapValues(\.count)
+        let pickId = ideas
+            .sorted { a, b in
+                let aScore = (loopIdeaIds.contains(a.id) ? 2 : 0) + (changeCount[a.id] ?? 0)
+                let bScore = (loopIdeaIds.contains(b.id) ? 2 : 0) + (changeCount[b.id] ?? 0)
+                return aScore > bScore
+            }
+            .first?.id
+
+        var featured: BackfillSummary.Featured?
+        if let pickId, let trace = try? await client.traceIdea(id: pickId) {
+            let steps = trace.provenance            // oldest -> newest
+            let sources = orderedUnique(steps.compactMap { $0.sourceLabel })
+            featured = .init(
+                ideaId: trace.idea.id,
+                title: trace.idea.title,
+                firstSeen: trace.idea.createdAt,
+                startedAs: steps.first.map(\.formulation),
+                nowThinks: trace.idea.currentFormulation,
+                sources: sources,
+                openQuestion: trace.idea.openLoops.first(where: { !$0.resolved })?.statement
+            )
+        }
+
+        return BackfillSummary(
+            newIdeas: newIdeas,
+            totalIdeas: ideas.count,
+            openLoops: openLoops.count,
+            decisions: ts?.decisions.count ?? 0,
+            evolvedAcrossChats: evolved,
+            featured: featured
+        )
+    }
+
+    private func orderedUnique(_ xs: [String]) -> [String] {
+        var seen = Set<String>(); var out: [String] = []
+        for x in xs where !seen.contains(x) { seen.insert(x); out.append(x) }
+        return out
     }
 
     var client: APIClient {
