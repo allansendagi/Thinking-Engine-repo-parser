@@ -17,7 +17,9 @@ struct RootView: View {
             }
 
             Group {
-                if !appState.isPaired {
+                if appState.needsReconnect {
+                    ReconnectView()
+                } else if !appState.isPaired {
                     PairingView()
                 } else if inDetail {
                     IdeaDetailView()
@@ -27,7 +29,7 @@ struct RootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if let error = appState.errorMessage, appState.isPaired {
+            if let error = appState.errorMessage, appState.isPaired, !appState.needsReconnect {
                 Text(error)
                     .font(.system(size: 11))
                     .foregroundStyle(.red)
@@ -58,7 +60,7 @@ struct RootView: View {
                 .stroke(Color.black.opacity(0.22), lineWidth: 0.5)   // edge hairline
         )
         .preferredColorScheme(.light)  // the design is a light frosted panel, deliberately
-        .task { await appState.refresh() }
+        .task { if !appState.needsReconnect { await appState.refresh() } }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
         .onReceive(NotificationCenter.default.publisher(for: .threadOpenSettings)) { _ in showSettings = true }
@@ -95,7 +97,7 @@ struct RootView: View {
 
             Spacer(minLength: 0)
 
-            if appState.isPaired {
+            if appState.isPaired && !appState.needsReconnect {
                 HStack(spacing: 1) {
                     HeaderButton { Task { await appState.refresh() } } label: {
                         Glyph(kind: .refresh, size: 15)
@@ -141,6 +143,7 @@ struct RootView: View {
     }
 
     private var statusText: String {
+        if appState.needsReconnect { return "Reconnect to sync" }
         switch appState.captureStatus {
         case .capturing: return "Capturing"
         case .idle: return appState.lastExtensionHandshake == nil ? "Connected" : "Updated just now"

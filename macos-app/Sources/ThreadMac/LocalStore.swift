@@ -117,10 +117,15 @@ struct PendingCapture: Codable, Identifiable, Equatable {
 }
 
 enum LocalStore {
-    private static let dirURL: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("Thread", isDirectory: true)
-    }()
+    /// Test seam: when set, snapshots read/write here instead of `~/Library/Application
+    /// Support/Thread`. Always nil in the shipping app.
+    static var directoryOverride: URL?
+
+    private static var dirURL: URL {
+        directoryOverride
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Thread", isDirectory: true)
+    }
 
     /// Namespaced by account so signing in as a different user never surfaces the previous graph.
     private static func fileURL(for userId: String?) -> URL {
@@ -141,6 +146,42 @@ enum LocalStore {
 
     static func clear(userId: String?) {
         try? FileManager.default.removeItem(at: fileURL(for: userId))
+    }
+
+    /// The newest per-account snapshot on disk, whatever account it belongs to. Recovery needs
+    /// this: when the credential is gone the app no longer knows its own userId, but the last
+    /// graph it synced is still here and should stay on screen so a token loss never *looks*
+    /// like data loss. A snapshot that actually holds ideas wins over an empty one; among
+    /// equals, most recently written wins. Skips the anonymous (`snapshot-anon.json`) slot.
+    static func mostRecentSnapshot() -> (userId: String, snapshot: LocalSnapshot)? {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: dirURL, includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return nil }
+
+        func ideaCount(_ s: LocalSnapshot) -> Int {
+            (s.thinkingState?.currentIdeas.count ?? 0) + s.localGraph.ideas.count
+        }
+
+        var best: (userId: String, snapshot: LocalSnapshot, hasIdeas: Bool, mtime: Date)?
+        for url in entries {
+            let name = url.lastPathComponent
+            guard name.hasPrefix("snapshot-"), url.pathExtension == "json" else { continue }
+            let tag = String(name.dropFirst("snapshot-".count).dropLast(".json".count))
+            guard tag.hasPrefix("user_") else { continue }
+            guard let data = try? Data(contentsOf: url),
+                  let snap = try? JSONDecoder().decode(LocalSnapshot.self, from: data) else { continue }
+            let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            let hasIdeas = ideaCount(snap) > 0
+            if let b = best {
+                let better = (hasIdeas && !b.hasIdeas) || (hasIdeas == b.hasIdeas && mtime > b.mtime)
+                if better { best = (tag, snap, hasIdeas, mtime) }
+            } else {
+                best = (tag, snap, hasIdeas, mtime)
+            }
+        }
+        return best.map { ($0.userId, $0.snapshot) }
     }
 }
 

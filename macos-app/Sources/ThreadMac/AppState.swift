@@ -376,6 +376,31 @@ final class AppState: ObservableObject {
     @Published var errorMessage: String?
     @Published var isLoading = false
 
+    /// Non-nil when this Mac had an account but the credential is gone or was rejected. The app
+    /// shows `ReconnectView` (with the cached ideas still listed) instead of silently minting a
+    /// new empty account. See `bootstrap()`.
+    struct ReconnectInfo: Equatable {
+        var knownEmail: String?
+        var cachedIdeaCount: Int
+        var cachedTitles: [String]
+        /// True after a sign-in that landed on a *different* account than the one whose ideas
+        /// are cached here -- we keep the cached snapshot and say so rather than overwrite it.
+        var mismatch: Bool
+    }
+    @Published var reconnect: ReconnectInfo?
+    var needsReconnect: Bool { reconnect != nil }
+
+    /// Ideas currently reachable on this Mac -- used in the "you have no email, signing out
+    /// strands these" confirmation.
+    var reachableIdeaCount: Int { thinkingState?.currentIdeas.count ?? 0 }
+
+    /// Signing out now would leave ideas unreachable: no verified email on the account means no
+    /// way back to it. The UI confirms before `unpair()` in that case.
+    var signOutWouldStrandIdeas: Bool {
+        let email = account?.email ?? CredentialStore.credential?.email ?? CredentialStore.lastKnownEmail
+        return email == nil && reachableIdeaCount > 0
+    }
+
     /// Last time a client (the browser extension / desktop agent) pulled credentials from the
     /// loopback pairing server. Drives the footer's "capturing" indicator.
     @Published var lastExtensionHandshake: Date?
@@ -439,7 +464,7 @@ final class AppState: ObservableObject {
     @Published var authError: String?
 
     func refreshAccount() async {
-        guard isPaired else { return }
+        guard isPaired, reconnect == nil else { return }
         account = try? await client.getAccount()
     }
 
@@ -469,24 +494,70 @@ final class AppState: ObservableObject {
             try await APIClient.authStart(baseURL: apiBaseUrl, email: email)
             return true
         } catch {
-            authError = "Couldn't send the code. Check the address."
+            authError = Self.authErrorMessage(for: error, step: .sendCode)
             return false
         }
     }
 
     /// Signs this Mac in to the account for `email` (creates it if new). Replaces local credentials.
+    /// When we're reconnecting to a known local graph, a sign-in that lands on a *different*
+    /// account is surfaced as a mismatch -- the cached snapshot is left untouched.
     func signIn(email: String, code: String) async -> Bool {
         authBusy = true
         authError = nil
         defer { authBusy = false }
         do {
             let created = try await APIClient.authVerify(baseURL: apiBaseUrl, email: email, code: code)
-            useExistingCredentials(userId: created.userId, token: created.token)
+            if let rc = reconnect, rc.cachedIdeaCount > 0, let prior = userId, created.userId != prior {
+                reconnect = ReconnectInfo(
+                    knownEmail: email,
+                    cachedIdeaCount: rc.cachedIdeaCount,
+                    cachedTitles: rc.cachedTitles,
+                    mismatch: true
+                )
+                return false
+            }
+            CredentialStore.save(userId: created.userId, token: created.token, email: email)
+            userId = created.userId
+            reconnect = nil
+            isOffline = false
+            await refresh()
             await refreshAccount()
+            await persistAccountEmailIfKnown()
             return true
         } catch {
-            authError = "That code is wrong or expired."
+            authError = Self.authErrorMessage(for: error, step: .verify)
             return false
+        }
+    }
+
+    private enum AuthStep { case sendCode, verify }
+
+    /// One honest message per failure mode, instead of collapsing 429 / offline / server error /
+    /// bad code into "that code is wrong or expired".
+    private static func authErrorMessage(for error: Error, step: AuthStep) -> String {
+        switch error {
+        case APIError.network:
+            return "You're offline — can't reach Thread right now."
+        case APIError.http(let status, _):
+            switch status {
+            case 429:
+                return "Too many attempts. Wait a few minutes, then try again."
+            case 400 where step == .verify:
+                return "That code is wrong or expired."
+            case 400:
+                return "That doesn't look like a valid email address."
+            case 502, 503:
+                return step == .sendCode
+                    ? "We couldn't send the email just now. Try again in a moment."
+                    : "Thread is briefly unavailable. Try again in a moment."
+            default:
+                return "Something went wrong (\(status)). Try again."
+            }
+        default:
+            return step == .sendCode
+                ? "Couldn't send the code. Check the address and try again."
+                : "Couldn't verify that code. Try again."
         }
     }
 
@@ -566,31 +637,101 @@ final class AppState: ObservableObject {
         return try? JSONSerialization.data(withJSONObject: body)
     }
 
-    /// First-run bootstrap: make sure there's a *working* account so the app just works on launch
-    /// and the pairing server never serves dead credentials to the extension. Safe every launch.
+    /// Launch bootstrap. The one rule: a lost or rejected token is a **reconnect**, never a
+    /// **restart**. The app only ever auto-creates an account on a genuine first run (no
+    /// credential *and* no trace of a prior one). Every other failure keeps the cached graph on
+    /// screen and routes to `ReconnectView`. Safe every launch.
     func bootstrap() async {
-        if let cred = CredentialStore.credentials {
+        switch CredentialStore.load() {
+        case .ok(let cred):
             do {
-                _ = try await APIClient(baseURL: apiBaseUrl, credentials: cred).getThinkingState()
+                _ = try await APIClient(baseURL: apiBaseUrl, credentials: (cred.userId, cred.token))
+                    .getThinkingState()
                 userId = cred.userId
+                reconnect = nil
                 await refresh()
                 await refreshAccount()
-                return
+                await persistAccountEmailIfKnown()
             } catch let APIError.http(status, _) where status == 401 {
-                CredentialStore.clear() // stale account -- fall through and re-pair
+                // The token is dead; the account and its ideas are not. Don't wipe anything,
+                // don't mint a new identity -- show the cached graph and offer one-tap reconnect.
+                enterReconnect(knownEmail: cred.email ?? CredentialStore.lastKnownEmail)
             } catch {
                 // Backend unreachable: keep credentials, keep the cached graph on screen (init
                 // already hydrated it), just mark offline. The core loop still works.
                 userId = cred.userId
                 isOffline = true
-                return
+            }
+
+        case .unreadable:
+            // A credential file is there but we can't read it right now -- classically, launched
+            // at login before the Mac's first unlock. This is NEVER a new user; a relaunch after
+            // unlock usually recovers on its own (the `.bak` fallback), and meanwhile reconnect
+            // is one tap.
+            enterReconnect(knownEmail: CredentialStore.lastKnownEmail)
+
+        case .absent:
+            let hadAnAccount = LocalStore.mostRecentSnapshot() != nil || CredentialStore.lastKnownEmail != nil
+            if hadAnAccount && !CredentialStore.deliberatelySignedOut {
+                // This Mac had an account; the credential is simply gone. Reconnect, don't start over.
+                enterReconnect(knownEmail: CredentialStore.lastKnownEmail)
+            } else {
+                // Genuine first run, or a deliberate sign-out -- auto-create so capture works
+                // with zero setup.
+                await pairNewAccount()
             }
         }
+    }
+
+    /// Hydrate from the most recent snapshot on disk (whatever account it belonged to) and put
+    /// the app into the reconnect state. Nothing is deleted; the ideas stay visible.
+    private func enterReconnect(knownEmail: String?) {
+        CredentialStore.clearDeliberateSignOut()
+        if let (uid, snap) = LocalStore.mostRecentSnapshot() {
+            userId = uid
+            snapshot = snap
+            pendingCaptures = snap.pendingCaptures
+            pendingEdits = snap.pendingEdits
+            localGraph = snap.localGraph
+            embeddings = snap.embeddings
+            lastSyncedAt = snap.savedAt == .distantPast ? nil : snap.savedAt
+            if let server = snap.thinkingState {
+                thinkingState = applyAll(pendingEdits, to: server)
+                thinkingStateIsLocal = false
+            } else if !localGraph.ideas.isEmpty {
+                thinkingState = applyAll(pendingEdits, to: localGraph.asThinkingState())
+                thinkingStateIsLocal = true
+            }
+        }
+        let ideas = thinkingState?.currentIdeas ?? []
+        reconnect = ReconnectInfo(
+            knownEmail: knownEmail,
+            cachedIdeaCount: ideas.count,
+            cachedTitles: Array(ideas.prefix(4).map(\.title)),
+            mismatch: false
+        )
+        isOffline = true
+    }
+
+    /// "Start fresh instead" on the reconnect screen. Wipes only the dead/unreadable credential
+    /// and this account's in-memory state, then makes a new account. The old account's on-disk
+    /// snapshot is deliberately **kept** -- signing back in to that account still brings it back.
+    func startFresh() async {
+        CredentialStore.clear()
+        resetInMemoryState()
         await pairNewAccount()
+    }
+
+    /// Drop the pre-filled email on the reconnect screen so the user can type another.
+    func useAnotherEmailForReconnect() {
+        guard var r = reconnect else { return }
+        r.knownEmail = nil
+        reconnect = r
     }
 
     func pairNewAccount() async {
         errorMessage = nil
+        reconnect = nil
         do {
             let created = try await APIClient.createUser(baseURL: apiBaseUrl)
             CredentialStore.save(userId: created.userId, token: created.token)
@@ -599,6 +740,19 @@ final class AppState: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Fold the account's verified email into the stored credential (and the durable mirror) the
+    /// first time we see it, so a future credential loss can offer one-tap reconnect without
+    /// asking who this Mac belongs to.
+    private func persistAccountEmailIfKnown() async {
+        guard let email = account?.email,
+              let c = CredentialStore.credential,
+              c.email != email else {
+            CredentialStore.rememberEmail(account?.email)
+            return
+        }
+        CredentialStore.save(userId: c.userId, token: c.token, email: email)
     }
 
     func unpair() {
@@ -611,6 +765,16 @@ final class AppState: ObservableObject {
             }
         }
         LocalStore.clear(userId: CredentialStore.userId)
+        CredentialStore.clear()
+        resetInMemoryState()
+    }
+
+    /// Clear everything the current account left in memory. Shared by `unpair()` (which also
+    /// deletes the on-disk snapshot + revokes server-side) and `startFresh()` (which keeps the
+    /// snapshot on disk so the old account stays recoverable). Without this, a stale
+    /// `pendingCaptures` / `embeddings` from the old account would be persisted under the new
+    /// account's userId on the next `persistSnapshot()`.
+    private func resetInMemoryState() {
         snapshot = .empty
         pendingCaptures = []
         pendingEdits = []
@@ -619,10 +783,10 @@ final class AppState: ObservableObject {
         thinkingStateIsLocal = false
         lastSyncedAt = nil
         isOffline = false
-        CredentialStore.clear()
         userId = nil
         thinkingState = nil
         searchResults = []
+        reconnect = nil
         closeIdea()
     }
 
@@ -637,12 +801,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    func useExistingCredentials(userId: String, token: String) {
-        CredentialStore.save(userId: userId, token: token)
-        self.userId = userId
-        Task { await refresh() }
-    }
-
     func setApiBaseUrl(_ url: String) {
         let clean = CredentialStore.normalizeBaseURL(url)
         apiBaseUrl = clean
@@ -650,7 +808,7 @@ final class AppState: ObservableObject {
     }
 
     func refresh() async {
-        guard isPaired else { return }
+        guard isPaired, reconnect == nil else { return }
         isLoading = true
         do {
             let server = try await client.getThinkingState()
@@ -677,7 +835,7 @@ final class AppState: ObservableObject {
     }
 
     func search() async {
-        guard isPaired else { return }
+        guard isPaired, reconnect == nil else { return }
         let q = searchQuery.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else {
             searchResults = []

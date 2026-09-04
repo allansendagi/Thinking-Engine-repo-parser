@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var urlDraft = ""
     @State private var copied = false
     @State private var showAdvanced = false
+    @State private var confirmStrandedUnpair = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -114,10 +115,20 @@ struct SettingsView: View {
                             .textSelection(.enabled)
                     }
                     Button("Unpair this Mac", role: .destructive) {
-                        appState.unpair()
-                        dismiss()
+                        if appState.signOutWouldStrandIdeas { confirmStrandedUnpair = true }
+                        else { appState.unpair(); dismiss() }
                     }
                     .font(.caption)
+                    .confirmationDialog(
+                        "Unpair this Mac?",
+                        isPresented: $confirmStrandedUnpair,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Unpair Anyway", role: .destructive) { appState.unpair(); dismiss() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This account has no email attached, so there's no way back to it. \(appState.reachableIdeaCount) idea\(appState.reachableIdeaCount == 1 ? "" : "s") on this Mac will no longer be reachable. Add an email above first to keep them.")
+                    }
                 }
                 .padding(.top, 4)
             }
