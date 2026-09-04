@@ -31,8 +31,19 @@ import {
 import { openUserDb } from "../db/tenancy";
 import { storageMode } from "../db/durability";
 import { downloadSummary, isAdmin, recordDownload } from "./metrics";
-import { deleteIdea, renameIdea, setIdeaState, setOpenLoopResolved } from "../db/mutations";
-import { getConversation, listConversations, loadCanonicalEvents, loadIdeas } from "../db/queries";
+import { addToWaitlist, waitlistSummary } from "./waitlist";
+import {
+  deleteIdea,
+  renameIdea,
+  setIdeaState,
+  setOpenLoopResolved,
+} from "../db/mutations";
+import {
+  getConversation,
+  listConversations,
+  loadCanonicalEvents,
+  loadIdeas,
+} from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { parsePastedConversation } from "../import/pasteParser";
 import { importIntoDb, parseExportFile } from "../import/run";
@@ -52,7 +63,13 @@ import {
 import type { IdeaState } from "../types";
 import type { PipelineProviders } from "../state/pipeline";
 
-const VALID_IDEA_STATES: IdeaState[] = ["developing", "established", "rejected", "dormant", "contested"];
+const VALID_IDEA_STATES: IdeaState[] = [
+  "developing",
+  "established",
+  "rejected",
+  "dormant",
+  "contested",
+];
 
 /**
  * The whole API as a pure (Request) => Response function, deliberately separate from Bun.serve
@@ -61,7 +78,10 @@ const VALID_IDEA_STATES: IdeaState[] = ["developing", "established", "rejected",
  */
 
 function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function error(status: number, message: string, code?: string): Response {
@@ -101,8 +121,12 @@ function sanitizeSourceUrl(raw: unknown): string | null {
 }
 
 /** A device label from an explicit `deviceName` in the request body, else the User-Agent. */
-function deviceNameFrom(body: { deviceName?: unknown } | null, req: Request): string {
-  const given = typeof body?.deviceName === "string" ? body.deviceName : undefined;
+function deviceNameFrom(
+  body: { deviceName?: unknown } | null,
+  req: Request,
+): string {
+  const given =
+    typeof body?.deviceName === "string" ? body.deviceName : undefined;
   return deviceLabel(given, req.headers.get("user-agent"));
 }
 
@@ -131,7 +155,9 @@ function accountIsEmpty(userId: string): boolean {
  * hash identifies which device row made the request (for last-seen, the session list, and "sign
  * out this device"). On failure returns a 401 Response.
  */
-async function authenticate(req: Request): Promise<{ userId: string; tokenHash: string } | Response> {
+async function authenticate(
+  req: Request,
+): Promise<{ userId: string; tokenHash: string } | Response> {
   const header = req.headers.get("authorization") ?? "";
   const match = header.match(/^Bearer (user_[a-f0-9]{24}):([a-f0-9]{64})$/);
   if (!match) return error(401, "Missing or malformed Authorization header");
@@ -141,7 +167,9 @@ async function authenticate(req: Request): Promise<{ userId: string; tokenHash: 
   return { userId, tokenHash };
 }
 
-export function createRequestHandler(providers: PipelineProviders): (req: Request) => Promise<Response> {
+export function createRequestHandler(
+  providers: PipelineProviders,
+): (req: Request) => Promise<Response> {
   return async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const { pathname } = url;
@@ -153,8 +181,13 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     if (req.method === "POST" && pathname === "/v1/users") {
       // Anon account creation is unauthenticated by design (zero-setup first launch). Cap it per
       // IP so a loop can't fill the volume with `users` rows + a per-user SQLite file each.
-      if (!rateLimit(clientKey(req, "users"), { limit: 15, windowMs: 3_600_000 })) {
-        return error(429, "Too many accounts created from here. Try again later.");
+      if (
+        !rateLimit(clientKey(req, "users"), { limit: 15, windowMs: 3_600_000 })
+      ) {
+        return error(
+          429,
+          "Too many accounts created from here. Try again later.",
+        );
       }
       let uBody: { deviceName?: string } = {};
       try {
@@ -178,8 +211,16 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       if (!EMAIL_RE.test(email)) return error(400, "A valid email is required");
       // Per-IP ceiling on top of authCodes.ts's per-email limit -- one IP shouldn't be able to
       // spray sign-in codes at many different addresses.
-      if (!rateLimit(clientKey(req, "auth-start"), { limit: 20, windowMs: 3_600_000 })) {
-        return error(429, "Too many sign-in attempts from here. Try again later.");
+      if (
+        !rateLimit(clientKey(req, "auth-start"), {
+          limit: 20,
+          windowMs: 3_600_000,
+        })
+      ) {
+        return error(
+          429,
+          "Too many sign-in attempts from here. Try again later.",
+        );
       }
       try {
         const code = await issueCode(email);
@@ -195,14 +236,20 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     if (req.method === "POST" && pathname === "/v1/auth/verify") {
       let body: { email?: string; code?: string; deviceName?: string };
       try {
-        body = (await req.json()) as { email?: string; code?: string; deviceName?: string };
+        body = (await req.json()) as {
+          email?: string;
+          code?: string;
+          deviceName?: string;
+        };
       } catch {
         return error(400, "Invalid JSON body");
       }
       const email = (body.email ?? "").trim();
       const code = (body.code ?? "").trim();
-      if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return error(400, "Email and 6-digit code are required");
-      if (!(await consumeCode(email, code))) return error(400, "That code is wrong or expired", "bad_code");
+      if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code))
+        return error(400, "Email and 6-digit code are required");
+      if (!(await consumeCode(email, code)))
+        return error(400, "That code is wrong or expired", "bad_code");
 
       const label = deviceNameFrom(body, req);
       const existing = findAccountByEmail(email);
@@ -238,7 +285,12 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
     if (req.method === "POST" && pathname === "/v1/events/download") {
       // Public beacon: silently drop once an IP is over the ceiling so a loop can't inflate the
       // /admin numbers or grow the table without bound. Still a 204 -- it's fire-and-forget.
-      if (!rateLimit(clientKey(req, "download"), { limit: 40, windowMs: 3_600_000 })) {
+      if (
+        !rateLimit(clientKey(req, "download"), {
+          limit: 40,
+          windowMs: 3_600_000,
+        })
+      ) {
         return new Response(null, { status: 204 });
       }
       let body: Record<string, unknown> = {};
@@ -253,12 +305,51 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
           version: body.version,
           referrer: body.referrer,
           country: body.country ?? req.headers.get("x-vercel-ip-country"),
-          uaFamily: deviceLabel(null, (body.uaFamily as string) ?? req.headers.get("user-agent")),
+          uaFamily: deviceLabel(
+            null,
+            (body.uaFamily as string) ?? req.headers.get("user-agent"),
+          ),
         });
       } catch (e) {
         console.error("[Thread] download event failed:", e);
       }
       return new Response(null, { status: 204 });
+    }
+
+    // Waitlist signup -- public, no auth. The website's /waitlist page posts here while the Mac
+    // download is deactivated (see mind-stream-continuity's DOWNLOAD_LIVE flag). Unlike the
+    // download beacon this is a real capability being gathered, not a fire-and-forget metric, so
+    // it validates the email and returns a real status instead of always-204.
+    if (req.method === "POST" && pathname === "/v1/waitlist") {
+      if (
+        !rateLimit(clientKey(req, "waitlist"), {
+          limit: 10,
+          windowMs: 3_600_000,
+        })
+      ) {
+        return error(429, "Too many attempts from here. Try again later.");
+      }
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await req.json()) as Record<string, unknown>;
+      } catch {
+        return error(400, "Invalid JSON body");
+      }
+      const email = (typeof body.email === "string" ? body.email : "").trim();
+      if (!EMAIL_RE.test(email)) return error(400, "A valid email is required");
+      try {
+        const { alreadyJoined } = addToWaitlist({
+          email,
+          name: body.name,
+          note: body.note,
+          referrer: body.referrer ?? req.headers.get("referer"),
+          country: body.country ?? req.headers.get("x-vercel-ip-country"),
+        });
+        return json({ ok: true, alreadyJoined });
+      } catch (e) {
+        console.error("[Thread] waitlist signup failed:", e);
+        return error(502, "Could not save that just now");
+      }
     }
 
     // Every route below requires auth.
@@ -269,9 +360,21 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
 
     // Admin-only product metrics (THREAD_ADMIN_EMAILS). Downloads for now.
     if (req.method === "GET" && pathname === "/v1/events/downloads") {
-      if (!isAdmin(getAccount(userId)?.email)) return error(403, "Not authorized");
-      const days = Math.min(365, Math.max(1, Number(url.searchParams.get("days") ?? 30) || 30));
+      if (!isAdmin(getAccount(userId)?.email))
+        return error(403, "Not authorized");
+      const days = Math.min(
+        365,
+        Math.max(1, Number(url.searchParams.get("days") ?? 30) || 30),
+      );
       return json(downloadSummary(days));
+    }
+
+    // Admin-only: the actual waitlist -- who to onboard, not just a count. `bun src/cli.ts
+    // waitlist` reads this same data without needing a signed-in admin session.
+    if (req.method === "GET" && pathname === "/v1/waitlist") {
+      if (!isAdmin(getAccount(userId)?.email))
+        return error(403, "Not authorized");
+      return json(waitlistSummary());
     }
 
     // --- Device sessions (list / revoke) --------------------------------------------------
@@ -282,11 +385,16 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       // Sign out THIS device -- revoke exactly the token that made this request.
       return json({ revoked: revokeTokenHash(tokenHash) });
     }
-    if (req.method === "POST" && pathname === "/v1/auth/sessions/revoke-others") {
+    if (
+      req.method === "POST" &&
+      pathname === "/v1/auth/sessions/revoke-others"
+    ) {
       // Sign out everywhere else -- keep only the caller's token.
       return json({ revoked: revokeOtherSessions(userId, tokenHash) });
     }
-    const sessionMatch = pathname.match(/^\/v1\/auth\/sessions\/([a-f0-9]{16})$/);
+    const sessionMatch = pathname.match(
+      /^\/v1\/auth\/sessions\/([a-f0-9]{16})$/,
+    );
     if (req.method === "DELETE" && sessionMatch) {
       const n = revokeSession(userId, sessionMatch[1]!);
       return n > 0 ? json({ revoked: n }) : error(404, "No such session");
@@ -327,8 +435,10 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       }
       const email = (body.email ?? "").trim();
       const code = (body.code ?? "").trim();
-      if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) return error(400, "Email and 6-digit code are required");
-      if (!(await consumeCode(email, code))) return error(400, "That code is wrong or expired", "bad_code");
+      if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code))
+        return error(400, "Email and 6-digit code are required");
+      if (!(await consumeCode(email, code)))
+        return error(400, "That code is wrong or expired", "bad_code");
       try {
         attachEmail(userId, email);
       } catch (e) {
@@ -359,12 +469,16 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
         }
         throw e;
       }
-      return json({ userId, ...accountView(getAccount(userId)!, ideaCountFor(userId)) });
+      return json({
+        userId,
+        ...accountView(getAccount(userId)!, ideaCountFor(userId)),
+      });
     }
 
     if (req.method === "GET" && pathname === "/v1/billing/portal") {
       const account = getAccount(userId);
-      if (!account?.paddleCustomerId) return error(409, "No billing account yet -- subscribe first");
+      if (!account?.paddleCustomerId)
+        return error(409, "No billing account yet -- subscribe first");
       try {
         return json({ url: await createPortalLink(account) });
       } catch (e) {
@@ -379,8 +493,14 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       // One DB open serves both the gate check and the request body below.
       const isCaptureRoute =
         req.method === "POST" &&
-        (pathname === "/v1/conversations" || pathname === "/v1/paste" || pathname === "/v1/import");
-      if (isCaptureRoute && billingConfigured() && !canCapture(getAccount(userId), loadIdeas(db).length)) {
+        (pathname === "/v1/conversations" ||
+          pathname === "/v1/paste" ||
+          pathname === "/v1/import");
+      if (
+        isCaptureRoute &&
+        billingConfigured() &&
+        !canCapture(getAccount(userId), loadIdeas(db).length)
+      ) {
         return error(
           402,
           "You've hit the Free plan's 25-idea limit. Upgrade to Pro from your Thread account to keep capturing.",
@@ -408,14 +528,19 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       if (req.method === "POST" && pathname === "/v1/paste") {
         let body: { conversationId?: string; text?: string };
         try {
-          body = (await req.json()) as { conversationId?: string; text?: string };
+          body = (await req.json()) as {
+            conversationId?: string;
+            text?: string;
+          };
         } catch {
           return error(400, "Invalid JSON body");
         }
-        if (!body.text || body.text.trim().length === 0) return error(400, "text is required");
+        if (!body.text || body.text.trim().length === 0)
+          return error(400, "text is required");
 
         const parsed = parsePastedConversation(body.text);
-        if (parsed.length === 0) return error(400, "Nothing parseable in the pasted text");
+        if (parsed.length === 0)
+          return error(400, "Nothing parseable in the pasted text");
 
         const conversationId = body.conversationId ?? `paste_${randomUUID()}`;
         const baseTime = Date.now();
@@ -429,7 +554,11 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
           createdAt: new Date(baseTime + i * 1000).toISOString(),
         }));
 
-        const result = await ingestConversation(db, { conversationId, source: "paste", messages }, providers);
+        const result = await ingestConversation(
+          db,
+          { conversationId, source: "paste", messages },
+          providers,
+        );
         return json({ conversationId, ...result });
       }
 
@@ -441,7 +570,10 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
       if (req.method === "POST" && pathname === "/v1/import") {
         let body: { format?: string; conversations?: unknown };
         try {
-          body = (await req.json()) as { format?: string; conversations?: unknown };
+          body = (await req.json()) as {
+            format?: string;
+            conversations?: unknown;
+          };
         } catch {
           return error(400, "Invalid JSON body");
         }
@@ -449,17 +581,34 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
           return error(400, 'format must be "chatgpt" or "claude"');
         }
         if (!Array.isArray(body.conversations)) {
-          return error(400, "conversations must be an array (a slice of the export's conversations.json)");
+          return error(
+            400,
+            "conversations must be an array (a slice of the export's conversations.json)",
+          );
         }
-        if (body.conversations.length === 0) return json({ newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: loadIdeas(db).length });
+        if (body.conversations.length === 0)
+          return json({
+            newCanonicalEvents: 0,
+            newCognitiveEvents: 0,
+            rejectedExtractions: 0,
+            ideaCount: loadIdeas(db).length,
+          });
         if (body.conversations.length > IMPORT_BATCH_MAX) {
-          return error(400, `Send at most ${IMPORT_BATCH_MAX} conversations per batch`);
+          return error(
+            400,
+            `Send at most ${IMPORT_BATCH_MAX} conversations per batch`,
+          );
         }
         let events;
         try {
           events = parseExportFile(body.format, body.conversations);
         } catch (e) {
-          return error(400, e instanceof Error ? e.message : "Could not parse that export batch");
+          return error(
+            400,
+            e instanceof Error
+              ? e.message
+              : "Could not parse that export batch",
+          );
         }
         const summary = await importIntoDb(db, events, providers);
         return json(summary);
@@ -511,13 +660,18 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
         }
         if (body.state !== undefined) {
           if (!VALID_IDEA_STATES.includes(body.state as IdeaState)) {
-            return error(400, `state must be one of: ${VALID_IDEA_STATES.join(", ")}`);
+            return error(
+              400,
+              `state must be one of: ${VALID_IDEA_STATES.join(", ")}`,
+            );
           }
-          if (!setIdeaState(db, ideaId, body.state as IdeaState)) return error(404, "Idea not found");
+          if (!setIdeaState(db, ideaId, body.state as IdeaState))
+            return error(404, "Idea not found");
         }
         if (body.title !== undefined) {
           try {
-            if (!renameIdea(db, ideaId, body.title)) return error(404, "Idea not found");
+            if (!renameIdea(db, ideaId, body.title))
+              return error(404, "Idea not found");
           } catch (e) {
             return error(400, e instanceof Error ? e.message : "Invalid title");
           }
@@ -535,9 +689,12 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
         } catch {
           return error(400, "Invalid JSON body");
         }
-        if (typeof body.resolved !== "boolean") return error(400, "resolved (boolean) is required");
+        if (typeof body.resolved !== "boolean")
+          return error(400, "resolved (boolean) is required");
         const updated = setOpenLoopResolved(db, loopId, body.resolved);
-        return updated ? json({ updated: true }) : error(404, "Open loop not found");
+        return updated
+          ? json({ updated: true })
+          : error(404, "Open loop not found");
       }
 
       if (req.method === "GET" && pathname === "/v1/thinking-state") {
@@ -563,7 +720,8 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
         } catch {
           return error(400, "Invalid JSON body");
         }
-        if (!body.topic && !body.ideaId) return error(400, "topic or ideaId is required");
+        if (!body.topic && !body.ideaId)
+          return error(400, "topic or ideaId is required");
         // Returns { text, packet, tier }. `text` is the paste-ready render with a CONTINUE_TOKEN
         // where the "Continue from here" line goes -- a client fills it with packet.suggestedNext
         // or the user's edit (see resolveContinueToken) so the field stays editable offline.
@@ -580,7 +738,11 @@ export function createRequestHandler(providers: PipelineProviders): (req: Reques
           { ideaId: body.ideaId, topic: body.topic },
           proTier ? providers.reasoning : undefined,
         );
-        if (!result) return error(404, body.ideaId ? "Idea not found" : "No matching ideas");
+        if (!result)
+          return error(
+            404,
+            body.ideaId ? "Idea not found" : "No matching ideas",
+          );
         return json({ ...result, tier: proTier ? "pro" : "free" });
       }
 

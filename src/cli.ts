@@ -141,6 +141,24 @@ switch (command) {
     );
     break;
   }
+  case "waitlist": {
+    const { waitlistSummary } = await import("./api/waitlist");
+    const s = waitlistSummary();
+    console.log(`\nWaitlist\n========`);
+    console.log(`  total    : ${s.total}`);
+    console.log(`  today    : ${s.today}`);
+    console.log(`  last 7d  : ${s.last7}\n`);
+    if (s.entries.length) {
+      console.log("Signups (newest first)");
+      for (const e of s.entries) {
+        const who = e.name ? `${e.email}  (${e.name})` : e.email;
+        console.log(`  ${e.createdAt}  ${who}`);
+        if (e.note) console.log(`    “${e.note}”`);
+      }
+      console.log("");
+    }
+    break;
+  }
   case "dedup": {
     // Retroactively collapse near-identical duplicate idea nodes -- the ones that predate
     // buildIdeaNode's in-pipeline lexical backstop. Dry-run by default; --apply writes, and only
@@ -241,6 +259,8 @@ Commands:
                                            score it (micro-averaged). Needs ANTHROPIC_API_KEY.
   downloads [days]                         Print the self-hosted app-download counter (all-time,
                                            today, 7d/30d, per-day bars, by version/country).
+  waitlist                                 Print the /waitlist signups -- total, today, last 7d,
+                                           and every entry (email, name, note) newest first.
   grant --email=<addr>|--user=<id> [--plan=pro|free] [--status=active]
                                            Set an account's plan directly in registry.db (no
                                            Paddle checkout). For founder / support accounts.
