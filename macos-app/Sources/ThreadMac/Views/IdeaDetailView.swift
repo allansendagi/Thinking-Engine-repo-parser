@@ -1,7 +1,16 @@
 import SwiftUI
 
-/// Idea detail, per the "Premium macOS" redesign: source·state eyebrow, big title, a first-seen /
-/// last-touched line, a Continue / Copy / ⋯ action row, then an Evolution card with a timeline.
+/// Idea detail. Layout: eyebrow (source·state) + title + first-seen/last-touched, then the
+/// current thought itself (governing-thought synthesis when Structure found one, else the
+/// idea's own current formulation -- no label either way, weight alone carries that it's the
+/// headline), then three collapsed disclosures (Structure, Evolution, Still unresolved) plus
+/// Sources, then "Continue thinking" as the page's one dominant action at the bottom.
+///
+/// Structure fetches in the background (`AppState.fetchStructureIfNeeded`, called from
+/// `openIdea`) and is session-cached per idea -- opening an idea never blocks on the network
+/// (local-first reads stay true), Structure just fills in a beat later if there's something
+/// there. When there's nothing (no coherent cluster, or not fetched yet), that same slot falls
+/// back to the existing on-device "Related thinking" rather than showing two separate lists.
 struct IdeaDetailView: View {
     @EnvironmentObject var appState: AppState
     @State private var titleDraft = ""
@@ -14,12 +23,19 @@ struct IdeaDetailView: View {
         ScrollView {
             if let trace = appState.selectedTrace {
                 VStack(alignment: .leading, spacing: 0) {
-                    headBlock(trace)
+                    headerBlock(trace)
+                    thoughtBlock(trace)
+                    structureBlock(trace)
                     evolutionBlock(trace)
-                    if !trace.idea.openLoops.isEmpty { loopsBlock(trace) }
-                    relatedBlock(trace)
+                    if !trace.idea.openLoops.isEmpty { unresolvedBlock(trace) }
+                    sourcesBlock(trace)
+                    continueBlock(trace)
                 }
-                .padding(.top, 2).padding(.bottom, 10)
+                .padding(.top, 2).padding(.bottom, 16)
+                // A fresh identity per idea: each disclosure's collapsed/expanded @State (below)
+                // must not leak from one idea to the next when this view is reused across a
+                // selection change rather than recreated.
+                .id(trace.idea.id)
             } else {
                 // No cached trace yet (first open of this idea, offline). A quiet skeleton, not
                 // a spinner — the panel never blocks on the network.
@@ -33,61 +49,22 @@ struct IdeaDetailView: View {
         }
     }
 
-    // MARK: head
+    // MARK: header
 
-    private func headBlock(_ trace: IdeaTrace) -> some View {
+    private func headerBlock(_ trace: IdeaTrace) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 5) {
-                Text("\(latestSource(trace)) ·")
-                Image(systemName: IdeaStatus.symbol(trace.idea.state))
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(trace.idea.state == "contested" ? Theme.stateColor("contested") : Theme.ink(0.4))
-                Text(trace.idea.state.capitalized)
-            }
-            .font(.system(size: 11, weight: .semibold)).textCase(.uppercase).kerning(0.55)
-            .foregroundStyle(Theme.ink(0.4))
-
-            if editingTitle {
-                HStack {
-                    TextField("Title", text: $titleDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { commitTitle() }
-                    Button("Done") { commitTitle() }
+            HStack(spacing: 8) {
+                HStack(spacing: 5) {
+                    Text("\(latestSource(trace)) ·")
+                    Image(systemName: IdeaStatus.symbol(trace.idea.state))
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundStyle(trace.idea.state == "contested" ? Theme.stateColor("contested") : Theme.ink(0.4))
+                    Text(trace.idea.state.capitalized)
                 }
-                .padding(.top, 7)
-            } else {
-                Text(trace.idea.title)
-                    .font(.system(size: 19, weight: .semibold)).kerning(-0.4)
-                    .lineSpacing(2)
-                    .foregroundStyle(Theme.ink(0.88))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 7)
-            }
+                .font(.system(size: 11, weight: .semibold)).textCase(.uppercase).kerning(0.55)
+                .foregroundStyle(Theme.ink(0.4))
 
-            HStack(spacing: 6) {
-                Glyph(kind: .clock, size: 13)
-                Text("First seen \(Theme.ago(trace.idea.createdAt)) · last touched \(Theme.ago(trace.idea.updatedAt))")
-                    .font(.system(size: 11.5))
-            }
-            .foregroundStyle(Theme.ink(0.45))
-            .padding(.top, 9)
-
-            HStack(spacing: 7) {
-                // Primary — a plain solid-accent button, no split-button chevron (the design
-                // shows a flat pill). White label goes on the Text, not the Button, so the
-                // menu/button style can't re-resolve it to the control's default ink.
-                Button {
-                    Task { await appState.continueThinking(sendTo: appState.preferredTool) }
-                } label: {
-                    Text("Continue this idea")
-                        .font(.system(size: 12, weight: .medium)).kerning(-0.03)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 11).frame(height: 26)
-                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.1), lineWidth: 0.5))
-                        .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
-                }
-                .buttonStyle(.plain)
+                Spacer(minLength: 0)
 
                 Button {
                     appState.copyIdeaContext()
@@ -97,11 +74,10 @@ struct IdeaDetailView: View {
                     }
                 } label: {
                     Text(justCopied ? "Copied" : "Copy")
-                        .font(.system(size: 12)).foregroundStyle(Theme.ink(justCopied ? 0.45 : 0.7))
-                        .padding(.horizontal, 9).frame(height: 26)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.ink(justCopied ? 0.4 : 0.55))
                 }
                 .buttonStyle(.plain)
-                .raisedControl()
                 .help("Copy this idea as text — formulation, how it developed, open questions")
 
                 Menu {
@@ -131,47 +107,124 @@ struct IdeaDetailView: View {
                     Divider()
                     Button("Delete idea", role: .destructive) { Task { await appState.deleteSelected() } }
                 } label: {
-                    Glyph(kind: .ellipsis, size: 14).foregroundStyle(Theme.ink(0.6))
-                        .frame(width: 26, height: 26)
+                    Glyph(kind: .ellipsis, size: 14).foregroundStyle(Theme.ink(0.55))
+                        .frame(width: 20, height: 20)
                         .contentShape(Rectangle())
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .raisedControl()
-
-                Spacer(minLength: 0)
             }
-            .padding(.top, 13)
 
-            if let packet = appState.continuationPacket {
-                ContinuationPreview(packet: packet).padding(.top, 12)
-            } else if appState.continueResult != nil {
-                Text("Building your handoff…").font(.system(size: 12)).foregroundStyle(.secondary)
-                    .padding(.top, 12)
+            if editingTitle {
+                HStack {
+                    TextField("Title", text: $titleDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { commitTitle() }
+                    Button("Done") { commitTitle() }
+                }
+                .padding(.top, 7)
+            } else {
+                Text(trace.idea.title)
+                    .font(.system(size: 19, weight: .semibold)).kerning(-0.4)
+                    .lineSpacing(2)
+                    .foregroundStyle(Theme.ink(0.88))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 7)
             }
+
+            HStack(spacing: 6) {
+                Glyph(kind: .clock, size: 13)
+                Text("First seen \(Theme.ago(trace.idea.createdAt)) · last touched \(Theme.ago(trace.idea.updatedAt))")
+                    .font(.system(size: 11.5))
+            }
+            .foregroundStyle(Theme.ink(0.45))
+            .padding(.top, 9)
         }
         .padding(.horizontal, 16)
     }
 
+    // MARK: the current thought
+
+    /// The headline is already the title above (unlabeled by design, per direct product
+    /// direction: no "Governing thought" annotation, no mention of how it was produced). This is
+    /// just the sentence under it — Structure's synthesis once found, else what's true today
+    /// regardless: the idea's own current formulation. Same slot either way, so nothing about
+    /// this line tells the user which one they're looking at.
+    private func thoughtBlock(_ trace: IdeaTrace) -> some View {
+        let statement: String = {
+            if case .found(let governing) = appState.structure(for: trace.idea.id) { return governing.statement }
+            return trace.idea.currentFormulation
+        }()
+        return Text(statement)
+            .font(.system(size: 14, weight: .regular)).lineSpacing(3)
+            .foregroundStyle(Theme.ink(0.75))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 16).padding(.top, 8)
+    }
+
+    // MARK: structure (governing thought's supporting ideas, or the on-device fallback)
+
+    /// "Why this thinking holds" when Structure found a coherent cluster; the existing on-device
+    /// "Related thinking" when it didn't (or hasn't been fetched yet) -- one slot, never both, so
+    /// this never shows two differently-sourced "other ideas" lists on the same page.
+    @ViewBuilder
+    private func structureBlock(_ trace: IdeaTrace) -> some View {
+        if case .found(let governing) = appState.structure(for: trace.idea.id), !governing.members.isEmpty {
+            disclosureBlock(
+                title: "Why this thinking holds",
+                summary: "\(governing.members.count) idea\(governing.members.count == 1 ? "" : "s")"
+            ) {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(governing.members) { member in
+                        relatedRow(title: member.title, fallback: member.currentFormulation, ideaId: member.id)
+                    }
+                }
+            }
+        } else {
+            let related = appState.relatedIdeas(to: trace.idea.id)
+            if !related.isEmpty {
+                disclosureBlock(
+                    title: "Related thinking",
+                    summary: "\(related.count) idea\(related.count == 1 ? "" : "s")"
+                ) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(related) { idea in
+                            relatedRow(title: idea.title, fallback: idea.currentFormulation, ideaId: idea.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func relatedRow(title: String, fallback: String, ideaId: String) -> some View {
+        Button {
+            Task { await appState.openIdea(ideaId) }
+        } label: {
+            Text(cleanIdeaTitle(title, fallback: fallback))
+                .font(.system(size: 12)).foregroundStyle(Theme.ink(0.68))
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering in
+            if isHovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+    }
+
     // MARK: evolution
 
-    /// Evolution card — an exact port of `Thread - macOS Panel v2.dc.html` (Claude Design
-    /// cf5ae711). Newest step at the top with the accent dot + bold text + the source quote;
-    /// one continuous rail; older steps trail below.
+    /// Collapsed by default: a short date chain ("Aug 17 → Aug 22 → ... → Now") standing in for
+    /// the full timeline below. Reuses `Theme.ago` rather than a separate calendar-date
+    /// formatter, so a young account's steps read as "3d ago" here rather than "Aug 17" — a
+    /// minor, accepted variance from a literal mockup match, not a new date convention.
     private func evolutionBlock(_ trace: IdeaTrace) -> some View {
         let total = trace.provenance.count
         let rows = Array(trace.provenance.enumerated().reversed())  // newest first
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text("Evolution").font(.system(size: 12, weight: .semibold)).kerning(-0.12)
-                    .foregroundStyle(Theme.ink(0.85))
-                Text("\(total) step\(total == 1 ? "" : "s")")
-                    .font(.system(size: 11.5)).foregroundStyle(Theme.ink(0.36))
-            }
-            .padding(.horizontal, 16).padding(.top, 22).padding(.bottom, 7)
-
+        return disclosureBlock(title: "How your thinking changed", summary: evolutionSummary(trace)) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { shown, pair in
                     let step = pair.element
@@ -189,8 +242,19 @@ struct IdeaDetailView: View {
             .background(Theme.cardFill)
             .clipShape(RoundedRectangle(cornerRadius: Theme.cardCorner))
             .overlay(RoundedRectangle(cornerRadius: Theme.cardCorner).stroke(Theme.cardStroke, lineWidth: 0.5))
-            .padding(.horizontal, 12).padding(.bottom, 14)
+            .padding(.top, 2)
         }
+        .accessibilityHint("\(total) step\(total == 1 ? "" : "s")")
+    }
+
+    /// A short date chain for the collapsed row: every step but the last as `Theme.ago`, the
+    /// latest always literally "Now". Capped so a long history doesn't produce an absurd row.
+    private func evolutionSummary(_ trace: IdeaTrace) -> String {
+        let dates = trace.provenance.map { Theme.ago($0.createdAt) }.filter { !$0.isEmpty }
+        guard var parts = dates.isEmpty ? nil : Array(dates.dropLast()) else { return "" }
+        parts.append("Now")
+        if parts.count > 4 { parts = [parts.first!, "…", parts[parts.count - 2], "Now"] }
+        return parts.joined(separator: "  →  ")
     }
 
     /// The source message a step was grounded in, tidied for the one-line-ish quote under the
@@ -205,56 +269,114 @@ struct IdeaDetailView: View {
         return "“\(cut)”"
     }
 
-    // MARK: open loops
+    // MARK: still unresolved
 
-    /// "Related" — other ideas whose *meaning* is close to this one, found on-device. Quiet:
-    /// nothing shows unless there's a genuinely near match.
-    @ViewBuilder
-    private func relatedBlock(_ trace: IdeaTrace) -> some View {
-        let related = appState.relatedIdeas(to: trace.idea.id)
-        if !related.isEmpty {
-            VStack(alignment: .leading, spacing: 7) {
-                Text("Related thinking").font(.system(size: 12, weight: .semibold)).kerning(-0.1)
-                    .foregroundStyle(Theme.ink(0.85))
-                ForEach(related) { idea in
-                    Button {
-                        Task { await appState.openIdea(idea.id) }
-                    } label: {
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: IdeaStatus.symbol(idea.state))
-                                .font(.system(size: 8.5, weight: .regular))
-                                .foregroundStyle(idea.state == "contested" ? Theme.stateColor("contested") : Theme.ink(0.35))
-                                .padding(.top, 3)
-                            Text(cleanIdeaTitle(idea.title, fallback: idea.currentFormulation))
-                                .font(.system(size: 12)).foregroundStyle(Theme.ink(0.7))
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 0)
-                        }
+    /// Collapsed summary counts only the still-open loops ("Still unresolved" shouldn't include
+    /// a resolved one) but the expanded content keeps showing every loop, resolved included with
+    /// its strikethrough — same as before this redesign, so resolving something and then
+    /// wanting to look back at it isn't a capability this page lost.
+    private func unresolvedBlock(_ trace: IdeaTrace) -> some View {
+        let open = trace.idea.openLoops.filter { !$0.resolved }
+        return disclosureBlock(
+            title: "Still unresolved",
+            summary: open.isEmpty ? "All resolved" : "\(open.count) question\(open.count == 1 ? "" : "s")"
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(trace.idea.openLoops) { loop in
+                    Toggle(isOn: Binding(
+                        get: { loop.resolved },
+                        set: { v in Task { await appState.toggleLoop(loop.id, resolved: v) } }
+                    )) {
+                        Text(loop.statement).font(.system(size: 12)).strikethrough(loop.resolved)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .buttonStyle(.plain)
+                    .toggleStyle(.checkbox)
                 }
             }
-            .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
         }
     }
 
-    private func loopsBlock(_ trace: IdeaTrace) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Open loops").font(.system(size: 12, weight: .semibold)).kerning(-0.1)
-                .foregroundStyle(Theme.ink(0.85))
-            ForEach(trace.idea.openLoops) { loop in
-                Toggle(isOn: Binding(
-                    get: { loop.resolved },
-                    set: { v in Task { await appState.toggleLoop(loop.id, resolved: v) } }
-                )) {
-                    Text(loop.statement).font(.system(size: 12)).strikethrough(loop.resolved)
-                        .fixedSize(horizontal: false, vertical: true)
+    // MARK: sources
+
+    private struct SourceEntry: Identifiable {
+        let id: String
+        let label: String
+        let createdAt: String
+        let conversationId: String?
+    }
+
+    /// Deduped by conversation (falling back to sourceUrl, then the step itself, for older data
+    /// with no conversationId), newest first. Pure local data — no network call.
+    private func sources(_ trace: IdeaTrace) -> [SourceEntry] {
+        var seen = Set<String>()
+        var out: [SourceEntry] = []
+        for step in trace.provenance.sorted(by: { $0.createdAt > $1.createdAt }) {
+            let key = step.conversationId ?? step.sourceUrl ?? step.id
+            guard seen.insert(key).inserted else { continue }
+            out.append(SourceEntry(id: key, label: step.sourceLabel ?? "Thread",
+                                    createdAt: step.createdAt, conversationId: step.conversationId))
+        }
+        return out
+    }
+
+    @ViewBuilder
+    private func sourcesBlock(_ trace: IdeaTrace) -> some View {
+        let list = sources(trace)
+        if !list.isEmpty {
+            disclosureBlock(title: "Sources", summary: "\(list.count) conversation\(list.count == 1 ? "" : "s")") {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(list) { entry in
+                        let canOpen = entry.conversationId != nil
+                        Button {
+                            if let cid = entry.conversationId { Task { await appState.openConversation(cid) } }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(entry.label).font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(canOpen ? Theme.accent : Theme.ink(0.6))
+                                Text("· \(Theme.ago(entry.createdAt))")
+                                    .font(.system(size: 11)).foregroundStyle(Theme.ink(0.4))
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canOpen)
+                        .onHover { isHovering in
+                            guard canOpen else { return }
+                            if isHovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                        }
+                    }
                 }
-                .toggleStyle(.checkbox)
             }
         }
-        .padding(.horizontal, 16).padding(.bottom, 8)
+    }
+
+    // MARK: continue — the page's one dominant action
+
+    private func continueBlock(_ trace: IdeaTrace) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let packet = appState.continuationPacket {
+                ContinuationPreview(packet: packet).padding(.horizontal, 16).padding(.top, 20)
+            } else if appState.continueResult != nil {
+                Text("Building your handoff…").font(.system(size: 12)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16).padding(.top, 20)
+            } else {
+                ContinueThinkingButton {
+                    Task { await appState.continueThinking(sendTo: appState.preferredTool) }
+                }
+                .padding(.horizontal, 16).padding(.top, 22)
+            }
+        }
+    }
+
+    // MARK: shared disclosure
+
+    /// The one collapsed-row-that-expands pattern, shared by Structure, Evolution, Still
+    /// unresolved, and Sources. Collapsed by default, always — "Structure should initially be
+    /// collapsed" was explicit product direction, not a per-section judgment call.
+    private func disclosureBlock<Content: View>(
+        title: String, summary: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        DisclosureRow(title: title, summary: summary, content: content())
     }
 
     // MARK: helpers
@@ -266,6 +388,69 @@ struct IdeaDetailView: View {
     private func commitTitle() {
         Task { await appState.renameSelected(to: titleDraft) }
         editingTitle = false
+    }
+}
+
+/// Collapsed by default: a title, a quiet one-line summary, a chevron. Tap anywhere on the row
+/// to expand. Its own `@State` (not the parent view's) so each disclosure keeps its own
+/// expanded/collapsed state independent of the others.
+private struct DisclosureRow<Content: View>: View {
+    let title: String
+    let summary: String
+    let content: Content
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.ink(0.85))
+                    Spacer(minLength: 0)
+                    Text(summary).font(.system(size: 11.5)).foregroundStyle(Theme.ink(0.36))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.ink(0.3))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovering in
+                if isHovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+
+            if expanded {
+                content
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.horizontal, 16).padding(.top, 18)
+    }
+}
+
+/// The page's one dominant action. A quiet hover dim + pointing-hand cursor — the native
+/// feedback `.buttonStyle(.plain)` alone doesn't give a custom-drawn button on macOS.
+private struct ContinueThinkingButton: View {
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("Continue thinking")
+                .font(.system(size: 13, weight: .medium)).kerning(-0.03)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 34)
+                .background(Theme.accent.opacity(hover ? 0.92 : 1), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.1), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
+        }
+        .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.1), value: hover)
+        .onHover { isHovering in
+            hover = isHovering
+            if isHovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
     }
 }
 

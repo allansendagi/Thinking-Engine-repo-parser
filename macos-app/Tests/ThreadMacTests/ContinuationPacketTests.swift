@@ -84,6 +84,19 @@ final class ContinuationPacketTests: XCTestCase {
         }
     }
 
+    /// `fetchStructureIfNeeded` must never fire a network call for an idea with no server
+    /// relationship at all -- a `local_`-prefixed id (never-synced account, on-device graph
+    /// only). No mock client exists to assert "no request was made" directly (matching the
+    /// existing untested boundary around every other AppState network call, e.g.
+    /// `continueThinking`), so this checks the guard's one observable effect: the cache never
+    /// leaves `.notFetched`, which it would if the guard let a fetch start.
+    @MainActor
+    func testStructureFetchIsSkippedForALocalOnlyIdea() {
+        let state = AppState()
+        state.fetchStructureIfNeeded(for: "local_abc123")
+        XCTAssertEqual(state.structure(for: "local_abc123"), .notFetched)
+    }
+
     @MainActor
     func testCopyTextSwapsInSafeLineForARefusal() {
         let state = AppState()
