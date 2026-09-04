@@ -90,7 +90,7 @@ struct BackfillView: View {
         }
         .buttonStyle(.borderedProminent)
 
-        Button("Start over") { appState.discardBackfill() }
+        Button("Stop recovering") { appState.discardBackfill() }
             .controlSize(.small).foregroundColor(.secondary)
     }
 
@@ -185,11 +185,13 @@ struct BackfillView: View {
 
         if capped {
             Divider()
-            Text("You've hit the Free plan's 25-idea limit. Pro recovers the rest of your history.")
+            Text("You've hit the Free plan's 25-idea limit. Pro recovers the rest — upgrade and Thread picks up where it stopped.")
                 .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("Upgrade to Pro") { appState.openUpgradePage() }.buttonStyle(.borderedProminent)
-                Button("Done") { appState.dismissBackfillOffer() }
+                // The run isn't discarded here -- the job stays on disk so a later upgrade + relaunch
+                // re-offers the resume. "Later", not "Done".
+                Button("Later") { appState.dismissBackfillOffer() }
             }
         } else {
             Button("Done") { appState.dismissBackfillOffer() }

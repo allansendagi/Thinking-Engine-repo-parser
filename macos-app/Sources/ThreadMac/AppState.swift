@@ -670,6 +670,9 @@ final class AppState: ObservableObject {
                 let (result, cappedAt) = try await work(c, { [weak self] p in
                     guard let self else { return }
                     self.backfill = .running(p)
+                    // Persist the resume point after each batch. `saveBackfillJob` re-encodes the
+                    // whole snapshot on the main actor -- fine here: batches are 15 conversations
+                    // with a server round-trip between them, so this runs a few times a minute.
                     if var j = self.snapshot.backfillJob {
                         j.conversationsDone = p.conversationsDone
                         j.conversationsTotal = max(j.conversationsTotal, p.conversationsTotal)
