@@ -91,6 +91,8 @@ async function usePairingString(): Promise<void> {
 
 function init(): void {
   void refresh();
+  // Opening the popup is a good moment to tell the Mac we're here.
+  void chrome.runtime.sendMessage({ type: "thread:announce" });
   $("connect").addEventListener("click", () => void connect());
   $("reconnect").addEventListener("click", () => void connect());
   $("usePairingString").addEventListener("click", () => void usePairingString());
