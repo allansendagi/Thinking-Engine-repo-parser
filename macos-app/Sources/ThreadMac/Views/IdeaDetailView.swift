@@ -409,6 +409,10 @@ private struct ContinuationPreview: View {
                 }
             }
 
+            if let governing = packet.governingThought {
+                governingThoughtBlock(governing)
+            }
+
             if let at = packet.lastExploredAt, !Theme.ago(at).isEmpty {
                 Text("Last explored: \(packet.lastExploredSource.map { "\($0) · " } ?? "")\(Theme.ago(at))")
                     .font(.system(size: 10.5)).foregroundStyle(Theme.ink(0.36))
@@ -502,6 +506,38 @@ private struct ContinuationPreview: View {
         VStack(alignment: .leading, spacing: 4) {
             eyebrow(label)
             content()
+        }
+    }
+
+    /// This idea turned out to be part of one argument with a few others — the Minto-style
+    /// synthesis (see GoverningThought). Leads the card, ahead of "Where you left off", matching
+    /// the server's own `text` render order — it's the wider claim the rest sits inside of.
+    /// No background tint: everything else in this card is plain text on the card's own fill,
+    /// and a nested-card treatment here is unverified, so it stays consistent with its siblings.
+    private func governingThoughtBlock(_ governing: GoverningThought) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            eyebrow("Governing thought")
+            Text(governing.statement)
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.ink(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+            if !governing.members.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(governing.kind.capitalized)
+                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.ink(0.4))
+                    ForEach(governing.members) { member in
+                        Button {
+                            Task { await appState.openIdea(member.id) }
+                        } label: {
+                            Text(cleanIdeaTitle(member.title, fallback: member.currentFormulation))
+                                .font(.system(size: 11.5)).foregroundStyle(Theme.accent)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.top, 2)
+            }
         }
     }
 }

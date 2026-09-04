@@ -276,6 +276,31 @@ struct ContinuationPacket: Codable {
     /// Where + when this was last worked on, for the "Last explored" line. Absent on older servers.
     var lastExploredSource: String?
     var lastExploredAt: String?
+    /// The Minto-style synthesis across this idea and any others it turned out to be part of one
+    /// argument with. Nil whenever no candidate cluster passed the server's coherence check, or
+    /// on older servers — the preview is then unchanged from before this field existed.
+    let governingThought: GoverningThought?
+
+    init(idea: Idea, whereYouLeftOff: String, contested: Bool, evolution: [EvolutionStep],
+         evolutionUnverified: Bool, decisions: [PacketDecision], unresolvedQuestion: String?,
+         unresolvedQuestions: [String]? = nil, suggestedNext: String, trajectory: [String]? = nil,
+         thinkingShift: String? = nil, lastExploredSource: String? = nil, lastExploredAt: String? = nil,
+         governingThought: GoverningThought? = nil) {
+        self.idea = idea
+        self.whereYouLeftOff = whereYouLeftOff
+        self.contested = contested
+        self.evolution = evolution
+        self.evolutionUnverified = evolutionUnverified
+        self.decisions = decisions
+        self.unresolvedQuestion = unresolvedQuestion
+        self.unresolvedQuestions = unresolvedQuestions
+        self.suggestedNext = suggestedNext
+        self.trajectory = trajectory
+        self.thinkingShift = thinkingShift
+        self.lastExploredSource = lastExploredSource
+        self.lastExploredAt = lastExploredAt
+        self.governingThought = governingThought
+    }
 
     /// The backend's rendered `text` carries these where the model-written lines go. Fill each
     /// with one literal replace — no client-side re-rendering of the packet.
@@ -287,6 +312,23 @@ struct ContinuationPacket: Codable {
     var trajectoryChain: String {
         (trajectory ?? []).filter { !$0.isEmpty }.joined(separator: "\n  ↓\n  ")
     }
+}
+
+/// Mirrors the server's `GoverningThought` (src/mcp/tools.ts) — a synthesis this idea turned
+/// out to share with a small cluster of related ones, plus which ideas actually supported it.
+struct GoverningThought: Codable {
+    struct Member: Codable, Identifiable {
+        let id: String
+        let title: String
+        let currentFormulation: String
+    }
+    /// One sentence: what this idea + its members collectively amount to.
+    let statement: String
+    /// Plural noun naming what the members ARE relative to the statement — "reasons",
+    /// "objections", "consequences" — the server requires the model to produce this rather
+    /// than offer it, so it's never empty when `statement` is present.
+    let kind: String
+    let members: [Member]
 }
 
 struct APIErrorBody: Codable {
