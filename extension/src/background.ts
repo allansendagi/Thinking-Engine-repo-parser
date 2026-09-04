@@ -25,10 +25,29 @@ import type { CaptureMessage, PairingState } from "./lib/types";
 
 const RETRY_ALARM = "thread:pair-retry";
 
-/** Reconcile the current pairing status. Returns true when the extension ends up paired. */
-async function ensurePaired(trigger: string): Promise<boolean> {
+/**
+ * Reconcile the current pairing status. Returns true when the extension ends up paired.
+ *
+ * `force` (an explicit "Reconnect" from the popup) re-pulls from the Mac's loopback even when the
+ * current credentials still verify -- the only way to move the extension onto a different account,
+ * e.g. after Thread for Mac recovered a stranded one. It also lets the Mac register the handshake
+ * so its Settings shows "Browser connected". Automatic triggers keep the verify-first shortcut so
+ * a working extension is never disturbed.
+ */
+async function ensurePaired(trigger: string, opts: { force?: boolean } = {}): Promise<boolean> {
   const nowIso = new Date().toISOString();
   const { credentials } = await getSettings();
+
+  if (opts.force) {
+    const forced = await fetchDesktopPairing().catch(() => null);
+    if (forced) {
+      await setApiBaseUrl(forced.apiBaseUrl);
+      await setCredentials(forced.credentials);
+      await markPaired(forced.credentials.userId, `Reconnected to Thread for Mac (${trigger}).`);
+      return true;
+    }
+    // Mac not reachable / pairing window closed -- fall through and keep whatever works.
+  }
 
   if (credentials) {
     try {
@@ -94,7 +113,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   if (isPairNowMessage(message)) {
-    ensurePaired("popup")
+    // The popup button is an explicit user act -- force a fresh pull from the Mac.
+    ensurePaired("popup", { force: true })
       .then(() => getPairingState())
       .then((state) => sendResponse({ ok: true, state }))
       .catch((err) => sendResponse({ ok: false, error: String(err) }));
