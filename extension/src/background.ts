@@ -11,7 +11,7 @@ import {
   setResumeSnooze,
 } from "./lib/storage";
 import { ApiError, getThinkingState, ingestConversation, isPaymentRequired, isUnauthorized, verifyCredentials } from "./lib/api";
-import { fetchDesktopPairing } from "./lib/pairing";
+import { fetchDesktopPairing, PAIRING_PORT } from "./lib/pairing";
 import { suggestionFromState, type ResumeSuggestion } from "./lib/resume";
 import type { CaptureMessage, PairingState } from "./lib/types";
 
@@ -93,7 +93,25 @@ async function ensurePaired(trigger: string, opts: { force?: boolean } = {}): Pr
 
 async function markPaired(userId: string, detail: string): Promise<PairingState> {
   await setBadge(false);
+  void pingDesktop(userId);
   return setPairingState({ status: "paired", userId, lastAttemptAt: new Date().toISOString(), detail });
+}
+
+/**
+ * Tell Thread for Mac "this browser is connected as <userId>". The Mac shows "Browser connected"
+ * off this ping -- it's the only way it learns about a pairing that happened via a pasted code
+ * (which never hits the loopback). Best-effort: the app isn't always running. `PAIRING_PORT` /
+ * host permission for 127.0.0.1 are already in the manifest.
+ */
+async function pingDesktop(userId: string): Promise<void> {
+  try {
+    await fetch(`http://127.0.0.1:${PAIRING_PORT}/thread/hello?userId=${encodeURIComponent(userId)}`, {
+      method: "GET",
+      cache: "no-store",
+    });
+  } catch {
+    // Mac app not running / not listening -- nothing to do.
+  }
 }
 
 async function setBadge(needsAttention: boolean): Promise<void> {
@@ -107,8 +125,14 @@ chrome.runtime.onStartup.addListener(() => void ensurePaired("startup"));
 chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== RETRY_ALARM) return;
-  const { status } = await getPairingState();
-  if (status !== "paired") await ensurePaired("retry");
+  const state = await getPairingState();
+  if (state.status !== "paired") {
+    await ensurePaired("retry");
+  } else if (state.userId) {
+    // Paired already -- keep the Mac's "Browser connected" indicator fresh (covers a pairing
+    // done by pasted code, and a Mac app that started after the extension).
+    void pingDesktop(state.userId);
+  }
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
@@ -118,6 +142,15 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
       .then(() => getPairingState())
       .then((state) => sendResponse({ ok: true, state }))
       .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
+  if (isAnnounceMessage(message)) {
+    // Popup pasted a pairing string -- tell the Mac right away so it shows "Browser connected".
+    getSettings()
+      .then(({ credentials }) => (credentials ? pingDesktop(credentials.userId) : undefined))
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
     return true;
   }
 
@@ -221,6 +254,10 @@ function isCaptureMessage(message: unknown): message is CaptureMessage {
 
 function isPairNowMessage(message: unknown): message is { type: "thread:pair-now" } {
   return typeof message === "object" && message !== null && (message as { type?: unknown }).type === "thread:pair-now";
+}
+
+function isAnnounceMessage(message: unknown): message is { type: "thread:announce" } {
+  return typeof message === "object" && message !== null && (message as { type?: unknown }).type === "thread:announce";
 }
 
 function isResumeCheckMessage(message: unknown): message is { type: "thread:resume-check" } {

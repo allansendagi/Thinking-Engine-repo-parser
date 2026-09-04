@@ -61,7 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let server = PairingServer(
             // Only serve the token while a pairing window is open (see AppState.openPairingWindow).
             payloadProvider: { state.isPairingWindowOpen ? state.pairingPayload() : nil },
-            onServed: { Task { @MainActor in state.noteExtensionHandshake() } }
+            onServed: { Task { @MainActor in state.noteExtensionHandshake() } },
+            onHello: { uid in Task { @MainActor in state.noteExtensionPing(userId: uid) } }
         )
         server.start()
         pairingServer = server

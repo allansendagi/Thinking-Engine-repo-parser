@@ -30,9 +30,19 @@ final class PairingServer {
     ///   - payloadProvider: the JSON body to serve, or nil to answer 404 (app not paired yet).
     ///   - onServed: called after credentials are successfully handed to a client -- used to
     ///     surface "browser connected" in the UI. Invoked on an arbitrary queue.
-    init(payloadProvider: @escaping () -> Data?, onServed: @escaping () -> Void = {}) {
+    ///   - onHello: called when the extension pings `GET /thread/hello?userId=…` to announce it
+    ///     is connected (it does this after adopting credentials by *any* path, including a
+    ///     pasted code, which never touches `/thread/pair`). The argument is the userId it
+    ///     claims; the app ignores a ping for a different account. Invoked on an arbitrary queue.
+    private var onHello: (String?) -> Void
+    init(
+        payloadProvider: @escaping () -> Data?,
+        onServed: @escaping () -> Void = {},
+        onHello: @escaping (String?) -> Void = { _ in }
+    ) {
         self.payloadProvider = payloadProvider
         self.onServed = onServed
+        self.onHello = onHello
     }
 
     func start() {
@@ -78,11 +88,31 @@ final class PairingServer {
         let method = parts.first.map(String.init) ?? ""
         let path = parts.count > 1 ? String(parts[1]) : ""
 
+        // Liveness ping -- no token in or out. Answered any time (no pairing window needed) so a
+        // browser that paired via a pasted code can still register as connected.
+        if method == "GET", path.hasPrefix("/thread/hello") {
+            onHello(Self.queryValue("userId", in: path))
+            return Self.raw(status: "200 OK", body: Data(#"{"ok":true}"#.utf8))
+        }
+
         guard method == "GET", path == "/thread/pair", let body = payloadProvider() else {
             return Self.raw(status: "404 Not Found", body: Data(#"{"error":"not pairing"}"#.utf8))
         }
         onServed()
         return Self.raw(status: "200 OK", body: body)
+    }
+
+    /// Pull `?key=value` out of a request path. Minimal -- enough for the one param `/thread/hello`
+    /// carries. Percent-decodes the value.
+    private static func queryValue(_ key: String, in path: String) -> String? {
+        guard let q = path.split(separator: "?").dropFirst().first else { return nil }
+        for pair in q.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            if kv.first.map(String.init) == key {
+                return kv.count > 1 ? String(kv[1]).removingPercentEncoding ?? String(kv[1]) : ""
+            }
+        }
+        return nil
     }
 
     private static func raw(status: String, body: Data?) -> Data {
