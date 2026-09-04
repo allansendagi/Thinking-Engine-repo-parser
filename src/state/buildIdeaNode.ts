@@ -1,15 +1,51 @@
 import type { CognitiveEvent, IdeaNode, IdentityResolution } from "../types";
 import { IDENTITY_RESOLUTION_MERGE_THRESHOLD } from "../types";
+import { lexicalOverlap } from "../identity/signals";
 
-/** Third-person narration the extractor still sometimes emits; strip it so the title is the thought. */
+/**
+ * Jaccard token overlap at/above which two statements are treated as the SAME idea even when
+ * identity resolution didn't return a confident match. Deliberately near word-for-word (~0.9):
+ * at this bar a wrong merge is very unlikely, and it stops obvious twins ("I think I do have
+ * something here." captured twice) from each becoming a node. A lower bar would risk the exact
+ * corruption the merge-vs-new logic is careful to avoid.
+ */
+const LEXICAL_DUPLICATE_THRESHOLD = 0.9;
+
+/**
+ * Third-person narration the extractor still sometimes emits instead of the thought itself
+ * ("The user is asking why...", "The human decides to..."). Strip the framing so the title
+ * reads as the idea. Requires a "that / whether / why / their / ..." pivot after the verb so it
+ * only fires on real narration, not a sentence that merely opens with "The user".
+ */
 const NARRATION_PREFIX =
-  /^(the (user|human|person) (is )?(asking|questioning|seeking|proposing|claiming|wondering|considering|deciding)( (why|whether|what|how|if|for|about|to))?|the (user|human) (decides|wants|claims|believes|proposes|is)( to)?)\s+/i;
+  /^\s*(the\s+(user|human|person|author|speaker|reader)|they|he|she|we)\s+(is\s+|are\s+)?(asking|questioning|seeking|wondering|considering|pondering|exploring|proposing|suggesting|claiming|arguing|positing|believing|deciding|realizing|realising|noting|observing|stating|wants?|decides?|thinks?|feels?|explores?|questions?|proposes?|is|are)\b[^.?!]*?\b(that|whether|why|how|what|which|if|to|about|for)\s+(their\s+|his\s+|her\s+|our\s+|the\s+)?/i;
 
-function deriveTitle(statement: string): string {
-  let s = statement.trim().replace(NARRATION_PREFIX, "");
-  if (s.length > 0) s = s[0]!.toUpperCase() + s.slice(1);
-  const words = s.split(/\s+/).slice(0, 7).join(" ");
-  return words.length < s.length ? `${words}…` : words;
+/** A title that talks *about the person* rather than naming an idea -- never acceptable. */
+const PERSON_SUBJECT = /^\s*(the\s+)?(user|human|person|author|speaker|reader|they|he|she|we)\b/i;
+
+function stripNarration(s: string): string {
+  const cleaned = s.replace(NARRATION_PREFIX, "").trim();
+  // Only accept the strip if it left a substantive phrase, not a stray word or two.
+  return cleaned.split(/\s+/).length >= 3 ? cleaned : s.trim();
+}
+
+/**
+ * A short, noun-phrase-ish title for an idea. Prefers the extractor's own `title` when it gave a
+ * usable one; otherwise carves one out of `statement` -- narration stripped, ~8 words, no
+ * trailing punctuation.
+ */
+export function deriveTitle(statement: string, modelTitle?: string): string {
+  const cap = (x: string) => (x.length > 0 ? x[0]!.toUpperCase() + x.slice(1) : x);
+
+  if (modelTitle) {
+    const t = stripNarration(modelTitle.trim()).replace(/[\s.?!,;:]+$/, "");
+    if (t.length >= 3 && t.length <= 80 && !PERSON_SUBJECT.test(t)) return cap(t);
+  }
+
+  const s = cap(stripNarration(statement.trim()));
+  const words = s.split(/\s+/);
+  if (words.length <= 8) return s.replace(/[.?!]+$/, "");
+  return `${words.slice(0, 8).join(" ").replace(/[,;:]+$/, "")}…`;
 }
 
 function linkRelated(a: IdeaNode, b: IdeaNode): void {
@@ -54,6 +90,22 @@ export function isConfidentExistingMatch(
   );
 }
 
+/** An existing idea whose current formulation (or title) is near word-for-word identical to this
+ *  event -- the deterministic backstop for when identity resolution misses an obvious twin. */
+function lexicalDuplicateOf(event: CognitiveEvent, ideas: Map<string, IdeaNode>): IdeaNode | undefined {
+  const stmt = event.statement;
+  const evTitle = deriveTitle(event.statement, event.title);
+  for (const idea of ideas.values()) {
+    if (
+      lexicalOverlap(stmt, idea.currentFormulation) >= LEXICAL_DUPLICATE_THRESHOLD ||
+      lexicalOverlap(evTitle, idea.title) >= LEXICAL_DUPLICATE_THRESHOLD
+    ) {
+      return idea;
+    }
+  }
+  return undefined;
+}
+
 export function applyCognitiveEvent(
   ideas: Map<string, IdeaNode>,
   event: CognitiveEvent,
@@ -62,12 +114,12 @@ export function applyCognitiveEvent(
 ): IdeaNode {
   const confidentMatch = isConfidentExistingMatch(resolution, ideas)
     ? ideas.get(resolution.matchedIdeaId as string)
-    : undefined;
+    : (lexicalDuplicateOf(event, ideas) ?? undefined);
 
   if (!confidentMatch) {
     const idea: IdeaNode = {
       id: `idea_${event.id}`,
-      title: deriveTitle(event.statement),
+      title: deriveTitle(event.statement, event.title),
       state: "developing",
       currentFormulation: event.statement,
       whyItMatters: event.whyItMatters,

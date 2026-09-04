@@ -95,6 +95,7 @@ export async function extractCognitiveEvents(
       id: `cog_${candidate.source_event_id}_${i}`,
       type: candidate.type,
       statement: candidate.statement,
+      title: candidate.title ?? undefined,
       confidence: candidate.confidence,
       persistence: candidate.persistence,
       persistenceReason: candidate.persistence_reason ?? undefined,

@@ -62,11 +62,23 @@ Rules:
   low persistence. Score both. Still omit anything that isn't a real cognitive event at all.
 - Do not invent events not grounded in the transcript. When in doubt, omit. A conversation with
   no substantive events at all is a perfectly valid, common result -- return {"events": []}.
-- Write "statement" in the human's own voice as a direct declarative sentence or a direct
-  question -- NOT as third-person narration about them. Good: "Computable authority must be
-  independently verifiable." / "Who performs the independent verification?" Bad: "The user is
-  asking whether computable authority needs verification." / "The human is questioning their
-  approach." It is the source of the idea's title, so it must read as the thought itself.
+- Write "statement" in the human's OWN VOICE as a direct declarative sentence or a direct
+  question -- first person or imperative, exactly as the thought would be phrased. NEVER as
+  third-person narration about them.
+    Good: "Computable authority must be independently verifiable." /
+          "Who performs the independent verification?" /
+          "Backfill should extract only the ideas that matter, not import every conversation."
+    Bad:  "The user is asking whether computable authority needs verification." /
+          "The human is questioning their approach." /
+          "The user decides to request the export flow." /
+          "The user is seeking the assistant's opinion on X."
+  Any statement that begins "The user...", "The human...", "They are asking...", etc. is WRONG --
+  rewrite it as the thought itself before emitting the event.
+- For new_idea events, ALSO include "title": a 2-6 word NOUN PHRASE naming the idea -- how you'd
+  file it, not a sentence and not narration.
+    Good: "Computable authority" / "Historical backfill boundary" / "Independent verification of authority"
+    Bad:  "The user wants backfill" / "Should we import everything?" / "An idea about authority"
+  Omit "title" for event types other than new_idea.
 - For new_idea events, optionally include why_it_matters: one sentence on why this idea matters,
   grounded in the transcript. Omit it if it isn't clear.
 - If other messages earlier in this transcript contributed context to an event (without being the
@@ -75,7 +87,7 @@ Rules:
   it for genuine contributing context, not as a way to attach more evidence.
 
 Respond with JSON matching this shape exactly, and nothing else -- no commentary before or after:
-{"events": [{"type": "...", "statement": "...", "confidence": 0.0-1.0, "persistence": "high|medium|low", "persistence_reason": "...", "source_event_id": "...", "evidence_quote": "...", "why_it_matters": "... (optional)", "additional_source_event_ids": ["... (optional)"]}]}`;
+{"events": [{"type": "...", "statement": "...", "title": "... (new_idea only, optional)", "confidence": 0.0-1.0, "persistence": "high|medium|low", "persistence_reason": "...", "source_event_id": "...", "evidence_quote": "...", "why_it_matters": "... (optional)", "additional_source_event_ids": ["... (optional)"]}]}`;
 
 /**
  * `newEventIds` marks which of `events` should actually be extracted from -- the rest are

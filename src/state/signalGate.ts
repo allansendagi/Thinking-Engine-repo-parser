@@ -11,11 +11,12 @@ import { SIGNAL_GATE_STRONG_MATCH_SCORE } from "../types";
  *   - persistence "high"  -> persist
  *   - persistence "low"   -> discard
  *   - persistence "medium":
- *       structural types (new_idea / decision / rejection / resolution / connection /
- *         contradiction / open_loop) -> persist -- structurally valuable even when minor
- *       leaky types (claim / question / refinement) -> "needs-match": persist ONLY if the event
- *         attaches to an idea the user is already developing (the pipeline checks the top
- *         candidate-rank score against strongMatchScore())
+ *       state/fact types (decision / rejection / resolution / connection / contradiction /
+ *         open_loop) -> persist -- structurally valuable even when minor
+ *       new_idea + leaky types (claim / question / refinement) -> "needs-match": persist ONLY if
+ *         the event attaches to an idea the user is already developing (the pipeline checks the
+ *         top candidate-rank score against strongMatchScore()). A medium new_idea with no such
+ *         match is stored, not persisted -- it's a tentative early thought, replayable later.
  *
  * Error asymmetry is deliberate and the OPPOSITE of a spam filter: a missed-persist is silent
  * and can't be fixed in place, a false-persist is a prunable list entry -- so the gate leans
@@ -28,8 +29,15 @@ import { SIGNAL_GATE_STRONG_MATCH_SCORE } from "../types";
  * never mutate process-global state -- bun runs test files concurrently in one process.
  */
 
+/**
+ * Types that persist even at `medium` in lenient mode -- each changes an idea's state or records
+ * a fact, so it's worth keeping even when minor. `new_idea` is deliberately NOT here (SIGNAL_GATE
+ * v2): a medium new_idea is, by the rubric's own words, "a tentative early thought", and spawning
+ * a fresh node for every one of those is what clutters a backfilled graph. It still gets its
+ * chance -- it routes to needs-match, so it persists if it attaches to an idea already being
+ * developed and is stored (replayable) if it doesn't.
+ */
 const STRUCTURAL_TYPES: ReadonlySet<CognitiveEventType> = new Set<CognitiveEventType>([
-  "new_idea",
   "decision",
   "rejection",
   "resolution",

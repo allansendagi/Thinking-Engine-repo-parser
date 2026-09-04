@@ -29,10 +29,14 @@ describe("quickGate", () => {
     if (g.decision === "discard") expect(g.reason).toContain("persistence=low");
   });
 
-  test("medium + structural type persists in lenient mode", () => {
-    for (const t of ["new_idea", "decision", "rejection", "resolution", "connection", "contradiction", "open_loop"] as const) {
+  test("medium + a state/fact type persists in lenient mode", () => {
+    for (const t of ["decision", "rejection", "resolution", "connection", "contradiction", "open_loop"] as const) {
       expect(quickGate(ev("medium", t), "lenient").decision).toBe("persist");
     }
+  });
+
+  test("v2: medium + new_idea needs a match (a tentative idea doesn't auto-spawn a node)", () => {
+    expect(quickGate(ev("medium", "new_idea"), "lenient").decision).toBe("needs-match");
   });
 
   test("medium + leaky type (claim/question/refinement) needs a match", () => {
