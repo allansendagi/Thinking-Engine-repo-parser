@@ -122,6 +122,13 @@ async function setBadge(needsAttention: boolean): Promise<void> {
 chrome.runtime.onInstalled.addListener(() => void ensurePaired("install"));
 chrome.runtime.onStartup.addListener(() => void ensurePaired("startup"));
 
+// On every service-worker start (including a manual reload), tell the Mac right away if we're
+// already paired -- so "Browser connected" appears without waiting for the 1-minute alarm.
+void (async () => {
+  const { userId, status } = await getPairingState();
+  if (status === "paired" && userId) void pingDesktop(userId);
+})();
+
 chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== RETRY_ALARM) return;

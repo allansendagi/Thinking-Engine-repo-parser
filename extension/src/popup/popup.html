@@ -80,6 +80,19 @@
         width: 100%;
         justify-content: center;
       }
+      button.textbtn {
+        border: none;
+        background: none;
+        color: var(--muted);
+        padding: 4px 2px;
+        font-size: 12px;
+      }
+      button.textbtn:hover {
+        color: var(--text);
+      }
+      [hidden] {
+        display: none !important;
+      }
       .foot {
         margin-top: 14px;
         padding-top: 10px;
@@ -111,15 +124,17 @@
         <div id="statusDetail" class="hint" style="margin-bottom: 0"></div>
       </div>
 
+      <!-- Prominent only when NOT connected. When connected, JS swaps in the quiet #reconnect link. -->
       <button id="connect" class="primary block" style="margin-top: 10px">Connect to Thread for Mac</button>
+      <button id="reconnect" class="textbtn" hidden style="margin-top: 6px">Reconnect</button>
 
-      <details>
+      <details id="codeSection">
         <summary>Pair with a code instead</summary>
         <p class="hint">
-          In Thread for Mac → Settings, copy the pairing string and paste it here. Format:
-          <code>user_…:…</code>
+          In Thread for Mac → Settings, click <strong>Copy</strong> next to the pairing string, then
+          paste it here.
         </p>
-        <input id="pairingString" type="text" placeholder="user_xxxxxxxx…:xxxxxxxx…" />
+        <input id="pairingString" type="text" placeholder="Paste the copied string" autocomplete="off" spellcheck="false" />
         <div class="row" style="margin-top: 8px">
           <button id="usePairingString" class="primary">Use this pairing string</button>
         </div>
@@ -127,9 +142,9 @@
 
       <details>
         <summary>Advanced</summary>
-        <label for="apiBaseUrl">API base URL</label>
+        <label for="apiBaseUrl">Backend URL — leave blank for the default</label>
         <div class="row">
-          <input id="apiBaseUrl" type="text" placeholder="https://…" />
+          <input id="apiBaseUrl" type="text" placeholder="Default" autocomplete="off" spellcheck="false" />
           <button id="saveUrl">Save</button>
         </div>
       </details>
