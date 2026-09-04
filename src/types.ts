@@ -148,7 +148,10 @@ export const IDENTITY_RESOLUTION_MERGE_THRESHOLD = 0.75;
  * stored discard can be traced to the ruleset that produced it and a threshold change is
  * replayable. Not a probability -- a schema version.
  */
-export const SIGNAL_GATE_VERSION = 1;
+// v2: a medium-persistence `new_idea` no longer auto-persists in lenient mode -- it routes to
+// needs-match like the leaky types, so a tentative early idea with nothing to attach to is
+// stored (replayable), not spawned as a thin node.
+export const SIGNAL_GATE_VERSION = 2;
 
 /**
  * A ranked candidate at or above this score counts as "this event attaches to an idea the user
