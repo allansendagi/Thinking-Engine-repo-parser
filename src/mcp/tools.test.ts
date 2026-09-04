@@ -5,6 +5,7 @@ import { FakeProvider } from "../providers/fake";
 import {
   buildContinuationPacket,
   CONTINUE_TOKEN,
+  distinctOpenLoops,
   getIdea,
   getOpenLoops,
   getRecentChanges,
@@ -13,6 +14,7 @@ import {
   resolveContinueToken,
   resolvePacketText,
   searchIdeas,
+  templateTrajectory,
   traceIdea,
   type ContinuationPacket,
 } from "./tools";
@@ -297,6 +299,28 @@ describe("buildContinuationPacket", () => {
         text +
         "------------------------------------",
     );
+  });
+
+  test("a genuinely compressed trajectory (fewer lines than steps) is accepted, not rejected for count mismatch", async () => {
+    // The bug this fixes: the old acceptance check required lines.length === evolution.length
+    // exactly, so a model that correctly compressed 4 steps into 2 real moves got its answer
+    // thrown away in favor of the one-per-step template. seedAuthorityThread() has 4 verified
+    // steps; this scripts a 2-line response and asserts it's kept.
+    const db = await seedAuthorityThread();
+    const provider = new FakeProvider([
+      "Continue developing the verification model.",
+      "You moved from wanting authority to be executable toward needing that execution independently verified.",
+      "authority must be executable\nexecution needs independent verification",
+    ]);
+    const r = await buildContinuationPacket(
+      db,
+      { ideaId: "idea_cog_u1_0" },
+      provider,
+    );
+    expect(r!.packet.trajectory).toEqual([
+      "authority must be executable",
+      "execution needs independent verification",
+    ]);
   });
 
   test("resolves a fuzzy topic to the single best-matching idea", async () => {
@@ -711,5 +735,104 @@ describe("renderPacket", () => {
     const text = renderPacket({ ...basePacket([]), evolutionUnverified: true });
     expect(text).toContain("THINKING EVOLUTION");
     expect(text).toContain("captured before source-role verification");
+  });
+});
+
+describe("distinctOpenLoops", () => {
+  const idea = (
+    openLoops: Parameters<typeof distinctOpenLoops>[0]["openLoops"],
+  ) => ({
+    id: "idea_1",
+    title: "T",
+    state: "developing" as const,
+    currentFormulation: "The idea is durable; the conversation is evidence.",
+    evolution: [],
+    openLoops,
+    decisions: [],
+    relatedIdeaIds: [],
+    createdAt: "2026-08-17T00:00:00.000Z",
+    updatedAt: "2026-09-04T00:00:00.000Z",
+  });
+  const loop = (
+    id: string,
+    statement: string,
+    createdAt: string,
+    resolved = false,
+  ) => ({
+    id,
+    statement,
+    createdAt,
+    resolved,
+  });
+
+  test("near-duplicate restatements of the same question collapse to one, the newest", () => {
+    const loops = distinctOpenLoops(
+      idea([
+        loop(
+          "l1",
+          "Should a continuity layer treat the idea or the raw conversation as the primary durable object?",
+          "2026-09-01T00:00:00.000Z",
+        ),
+        loop(
+          "l2",
+          "Does treating the idea as the durable object hold as a valid architectural principle?",
+          "2026-09-02T00:00:00.000Z",
+        ),
+        loop(
+          "l3",
+          "Should a continuity layer treat the idea or the raw conversation as its primary durable object?",
+          "2026-09-03T00:00:00.000Z",
+        ),
+      ]),
+    );
+    // l1 and l3 are near-verbatim restatements of the same question -- only the newest (l3)
+    // survives. l2 is genuinely different wording/substance and stays.
+    expect(loops.map((l) => l.id)).toEqual(["l3", "l2"]);
+  });
+
+  test("resolved loops never appear", () => {
+    const loops = distinctOpenLoops(
+      idea([loop("l1", "Already handled.", "2026-09-01T00:00:00.000Z", true)]),
+    );
+    expect(loops).toHaveLength(0);
+  });
+
+  test("distinct questions with no overlap all survive, newest first", () => {
+    const loops = distinctOpenLoops(
+      idea([
+        loop(
+          "l1",
+          "Who performs the independent verification, and why trust them?",
+          "2026-08-20T00:00:00.000Z",
+        ),
+        loop(
+          "l2",
+          "What's the minimum context needed for resuming to feel seamless?",
+          "2026-08-22T00:00:00.000Z",
+        ),
+      ]),
+    );
+    expect(loops.map((l) => l.id)).toEqual(["l2", "l1"]);
+  });
+});
+
+describe("templateTrajectory", () => {
+  test("one phrase per step, unchanged, below the cap", () => {
+    const evolution = [
+      { formulation: "AI governance needs better policies." },
+      { formulation: "Policies need to become executable." },
+      { formulation: "The problem is authority." },
+    ];
+    expect(templateTrajectory(evolution)).toHaveLength(3);
+  });
+
+  test("thinned to the cap above it, keeping the first and last step", () => {
+    const evolution = Array.from({ length: 11 }, (_, i) => ({
+      formulation: `Step ${i} formulation of the idea, in some detail.`,
+    }));
+    const trajectory = templateTrajectory(evolution);
+    expect(trajectory).toHaveLength(5);
+    expect(trajectory[0]).toContain("Step 0");
+    expect(trajectory[trajectory.length - 1]).toContain("Step 10");
   });
 });
