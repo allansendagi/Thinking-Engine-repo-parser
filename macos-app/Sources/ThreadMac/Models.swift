@@ -151,14 +151,18 @@ struct AccountStatus: Codable {
     let plan: String            // "free" | "pro"
     let status: String          // free | active | past_due | canceled | incomplete
     let isPro: Bool
+    /// Operator of this deployment (THREAD_ADMIN_EMAILS) — captures with no cap. Optional so an
+    /// older server that doesn't send the field still decodes.
+    let isAdmin: Bool?
     let canCapture: Bool        // may this account still capture (Free cap not hit / Pro active)?
     let ideaCount: Int
-    let ideaCap: Int
+    let ideaCap: Int            // -1 = no cap (admin)
     let currentPeriodEnd: String?
     let email: String?
     let billingEnabled: Bool     // is Paddle configured on the backend at all?
 
     var footerLabel: String {
+        if isAdmin == true { return "Admin" }
         if !billingEnabled { return "Cloud" }
         if isPro { return status == "canceled" ? "Pro (ending)" : "Pro" }
         return "Free · \(ideaCount)/\(ideaCap)"

@@ -129,20 +129,6 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
   }
 }
 
-/** The parsed `THREAD_ADMIN_EMAILS` list (lowercased, deduped). Empty if unset. */
-export function adminEmails(): string[] {
-  return [
-    ...new Set(
-      (process.env.THREAD_ADMIN_EMAILS ?? "")
-        .split(",")
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ];
-}
-
-/** Comma-separated `THREAD_ADMIN_EMAILS`. Nobody is admin if it's unset. */
-export function isAdmin(email: string | null | undefined): boolean {
-  if (!email) return false;
-  return adminEmails().includes(email.toLowerCase());
-}
+// Admin identity moved to ./admin (also used by the capture gate). Re-exported so existing
+// importers of "./metrics" keep working.
+export { adminEmails, isAdmin } from "./admin";

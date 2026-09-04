@@ -455,6 +455,14 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The extension pinged `/thread/hello` to say it's connected. Count it only when it's for
+    /// *this* account (or the ping didn't say) -- a stray ping for some other account shouldn't
+    /// light up "Browser connected" here.
+    func noteExtensionPing(userId: String?) {
+        guard userId == nil || userId?.isEmpty == true || userId == CredentialStore.userId else { return }
+        noteExtensionHandshake()
+    }
+
     /// Footer's third slot: "Free · N/25" / "Pro" once billing is live, else "Cloud".
     var planLabel: String { account?.footerLabel ?? "Cloud" }
 

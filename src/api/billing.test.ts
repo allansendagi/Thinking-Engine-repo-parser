@@ -60,6 +60,38 @@ describe("canCapture", () => {
   });
 });
 
+describe("admin capture bypass (THREAD_ADMIN_EMAILS)", () => {
+  const prev = process.env.THREAD_ADMIN_EMAILS;
+  beforeEach(() => {
+    process.env.THREAD_ADMIN_EMAILS = "allansendagi@gmail.com";
+  });
+  afterAll(() => {
+    if (prev === undefined) delete process.env.THREAD_ADMIN_EMAILS;
+    else process.env.THREAD_ADMIN_EMAILS = prev;
+  });
+
+  test("a listed email captures past the Free cap", () => {
+    expect(canCapture({ ...base, email: "allansendagi@gmail.com" }, FREE_IDEA_CAP + 500)).toBe(true);
+  });
+  test("case-insensitive on the email", () => {
+    expect(canCapture({ ...base, email: "AllanSendagi@Gmail.com" }, FREE_IDEA_CAP + 1)).toBe(true);
+  });
+  test("a non-listed email is still capped", () => {
+    expect(canCapture({ ...base, email: "sendagiallan87@gmail.com" }, FREE_IDEA_CAP)).toBe(false);
+  });
+  test("accountView marks the admin and reports no cap (-1)", () => {
+    expect(accountView({ ...base, email: "allansendagi@gmail.com" }, FREE_IDEA_CAP + 5)).toMatchObject({
+      isAdmin: true,
+      canCapture: true,
+      ideaCap: -1,
+    });
+    expect(accountView({ ...base, email: "someone@else.com" }, 3)).toMatchObject({
+      isAdmin: false,
+      ideaCap: FREE_IDEA_CAP,
+    });
+  });
+});
+
 describe("accountView", () => {
   test("free account shape", () => {
     const v = accountView(base, 18);

@@ -6,6 +6,7 @@ import {
   type Plan,
   type SubscriptionStatus,
 } from "./auth";
+import { isAdmin } from "./admin";
 
 /**
  * Paddle billing (Merchant of Record), done with plain `fetch` + manual webhook-signature
@@ -49,6 +50,9 @@ export function isProActive(account: Account | null, now: Date = new Date()): bo
 /** The capture gate. `ideaCount` is this user's current idea-node count. */
 export function canCapture(account: Account | null, ideaCount: number, now: Date = new Date()): boolean {
   if (isProActive(account, now)) return true;
+  // Operators of this deployment (THREAD_ADMIN_EMAILS) capture without the Free cap -- for
+  // dogfooding / support, not a plan the UI sells.
+  if (isAdmin(account?.email)) return true;
   return ideaCount < FREE_IDEA_CAP;
 }
 
@@ -57,6 +61,7 @@ export function accountView(account: Account, ideaCount: number, now: Date = new
   plan: Plan;
   status: SubscriptionStatus;
   isPro: boolean;
+  isAdmin: boolean;
   canCapture: boolean;
   ideaCount: number;
   ideaCap: number;
@@ -64,13 +69,16 @@ export function accountView(account: Account, ideaCount: number, now: Date = new
   email: string | null;
   billingEnabled: boolean;
 } {
+  const admin = isAdmin(account.email);
   return {
     plan: account.plan,
     status: account.status,
     isPro: isProActive(account, now),
+    isAdmin: admin,
     canCapture: canCapture(account, ideaCount, now),
     ideaCount,
-    ideaCap: FREE_IDEA_CAP,
+    // -1 = no cap (admin / operator). The clients render this as "no limit" rather than a number.
+    ideaCap: admin ? -1 : FREE_IDEA_CAP,
     currentPeriodEnd: account.currentPeriodEnd,
     email: account.email,
     billingEnabled: billingConfigured(),

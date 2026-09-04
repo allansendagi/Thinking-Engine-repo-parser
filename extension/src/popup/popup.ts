@@ -67,6 +67,8 @@ async function usePairingString(): Promise<void> {
     lastAttemptAt: new Date().toISOString(),
     detail: "Paired with a code.",
   });
+  // Tell Thread for Mac right away so its Settings flips to "Browser connected".
+  void chrome.runtime.sendMessage({ type: "thread:announce" });
   input("pairingString").value = "";
   await refresh();
 }
