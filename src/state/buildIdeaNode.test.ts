@@ -56,6 +56,49 @@ describe("applyCognitiveEvent", () => {
     expect(ideas.size).toBe(2); // stayed a duplicate, did not merge
   });
 
+  test("lexical backstop: a near word-for-word twin merges even with no confident identity match", () => {
+    const ideas = new Map<string, IdeaNode>();
+    applyCognitiveEvent(
+      ideas,
+      makeEvent({ statement: "Institutional authority must be independently verifiable and machine-executable." }),
+      { cognitiveEventId: "cog_1", matchedIdeaId: null, confidence: 1, reasoning: "seed" },
+      T,
+    );
+    applyCognitiveEvent(
+      ideas,
+      makeEvent({
+        id: "cog_2",
+        sourceEventId: "src_2",
+        statement: "Institutional authority must be independently verifiable and machine executable.",
+      }),
+      { cognitiveEventId: "cog_2", matchedIdeaId: null, confidence: 1, reasoning: "no match" },
+      "2026-08-20T00:00:00.000Z",
+    );
+    expect(ideas.size).toBe(1);
+    expect([...ideas.values()][0]!.evolution).toHaveLength(2);
+  });
+
+  test("lexical backstop does NOT fire for merely related statements", () => {
+    const ideas = new Map<string, IdeaNode>();
+    applyCognitiveEvent(
+      ideas,
+      makeEvent({ statement: "Authority needs explicit boundaries." }),
+      { cognitiveEventId: "cog_1", matchedIdeaId: null, confidence: 1, reasoning: "seed" },
+      T,
+    );
+    applyCognitiveEvent(
+      ideas,
+      makeEvent({
+        id: "cog_2",
+        sourceEventId: "src_2",
+        statement: "Verification should be performed by an independent third party.",
+      }),
+      { cognitiveEventId: "cog_2", matchedIdeaId: null, confidence: 1, reasoning: "no match" },
+      T,
+    );
+    expect(ideas.size).toBe(2);
+  });
+
   test("merges at or above the threshold and appends an evolution step", () => {
     const ideas = new Map<string, IdeaNode>();
     applyCognitiveEvent(

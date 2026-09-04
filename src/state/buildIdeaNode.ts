@@ -1,5 +1,15 @@
 import type { CognitiveEvent, IdeaNode, IdentityResolution } from "../types";
 import { IDENTITY_RESOLUTION_MERGE_THRESHOLD } from "../types";
+import { lexicalOverlap } from "../identity/signals";
+
+/**
+ * Jaccard token overlap at/above which two statements are treated as the SAME idea even when
+ * identity resolution didn't return a confident match. Deliberately near word-for-word (~0.9):
+ * at this bar a wrong merge is very unlikely, and it stops obvious twins ("I think I do have
+ * something here." captured twice) from each becoming a node. A lower bar would risk the exact
+ * corruption the merge-vs-new logic is careful to avoid.
+ */
+const LEXICAL_DUPLICATE_THRESHOLD = 0.9;
 
 /**
  * Third-person narration the extractor still sometimes emits instead of the thought itself
@@ -80,6 +90,22 @@ export function isConfidentExistingMatch(
   );
 }
 
+/** An existing idea whose current formulation (or title) is near word-for-word identical to this
+ *  event -- the deterministic backstop for when identity resolution misses an obvious twin. */
+function lexicalDuplicateOf(event: CognitiveEvent, ideas: Map<string, IdeaNode>): IdeaNode | undefined {
+  const stmt = event.statement;
+  const evTitle = deriveTitle(event.statement, event.title);
+  for (const idea of ideas.values()) {
+    if (
+      lexicalOverlap(stmt, idea.currentFormulation) >= LEXICAL_DUPLICATE_THRESHOLD ||
+      lexicalOverlap(evTitle, idea.title) >= LEXICAL_DUPLICATE_THRESHOLD
+    ) {
+      return idea;
+    }
+  }
+  return undefined;
+}
+
 export function applyCognitiveEvent(
   ideas: Map<string, IdeaNode>,
   event: CognitiveEvent,
@@ -88,7 +114,7 @@ export function applyCognitiveEvent(
 ): IdeaNode {
   const confidentMatch = isConfidentExistingMatch(resolution, ideas)
     ? ideas.get(resolution.matchedIdeaId as string)
-    : undefined;
+    : (lexicalDuplicateOf(event, ideas) ?? undefined);
 
   if (!confidentMatch) {
     const idea: IdeaNode = {
