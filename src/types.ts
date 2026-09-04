@@ -56,6 +56,8 @@ export interface CognitiveEvent {
   type: CognitiveEventType;
   /** The candidate statement, in the extractor's words grounded in the source text. */
   statement: string;
+  /** Only for new_idea: a short noun-phrase name for the idea, when the extractor supplied one. */
+  title?: string;
   confidence: number; // 0..1
   /** Worth-remembering judgment. See PersistenceLevel. Treated as "high" for pre-gate data. */
   persistence: PersistenceLevel;

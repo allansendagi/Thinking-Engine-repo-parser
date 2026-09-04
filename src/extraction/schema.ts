@@ -18,6 +18,13 @@ export const persistenceLevelSchema = z.enum(["high", "medium", "low"]);
 export const extractedEventSchema = z.object({
   type: cognitiveEventTypeSchema,
   statement: z.string().min(1),
+  /**
+   * Only meaningful for new_idea: a 2-6 word NOUN PHRASE naming the idea (not a sentence, not
+   * third-person narration). Used as the idea's title verbatim when present and clean;
+   * buildIdeaNode derives one from `statement` otherwise. Optional -- older transcripts and
+   * responses without it keep working.
+   */
+  title: z.string().min(1).max(80).nullable().optional(),
   confidence: z.number().min(0).max(1),
   /**
    * Worth-remembering judgment, separate from `confidence`. Defaulted to "high" so transcripts
