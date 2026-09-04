@@ -147,12 +147,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quickRecallPanel?.show()
         NotificationCenter.default.post(name: .threadOpenSettings, object: nil)
     }
-    @objc private func signOutFromMenu() { appState.unpair() }
+    @objc private func signOutFromMenu() {
+        if appState.signOutWouldStrandIdeas {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Sign out of Thread?"
+            let n = appState.reachableIdeaCount
+            alert.informativeText = """
+            This account has no email attached, so there's no way to sign back in to it. \
+            \(n) idea\(n == 1 ? "" : "s") on this Mac will no longer be reachable.
+
+            Add an email from Settings first to keep them.
+            """
+            alert.addButton(withTitle: "Sign Out Anyway")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        appState.unpair()
+    }
     @objc private func quitFromMenu() { NSApp.terminate(nil) }
 
-    /// Sign Out only makes sense while there's an account attached to this Mac.
+    /// Sign Out only makes sense while there's an account attached to this Mac -- or a reconnect
+    /// pending (so "Start fresh" is reachable from the menu too).
     func menuNeedsUpdate(_ menu: NSMenu) {
-        signOutMenuItem?.isEnabled = appState.isPaired
+        signOutMenuItem?.isEnabled = appState.isPaired || appState.needsReconnect
     }
 
     /// `statusItem.menu` is set so right-click reliably drops the menu. But a plain LEFT click
