@@ -138,6 +138,15 @@ struct IdeaTrace: Codable {
 }
 
 /// One row of the "Activity" feed: a conversation Thread captured and the ideas it moved.
+/// Result of one `/v1/import` batch. Accumulated across batches during "Recover my thinking".
+struct ImportSummary: Codable {
+    let newCanonicalEvents: Int
+    let newCognitiveEvents: Int
+    let rejectedExtractions: Int
+    /// The user's total idea count *after* this batch.
+    let ideaCount: Int
+}
+
 struct ConversationSummary: Codable, Identifiable {
     struct IdeaRef: Codable, Identifiable {
         let id: String

@@ -159,6 +159,14 @@ final class APIClient {
         return w.conversations
     }
 
+    /// Historical backfill: one batch of an exported `conversations.json` array. `conversations`
+    /// is the raw JSON objects, sliced by the caller into batches; the backend parses + ingests.
+    func importBatch(format: String, conversations: [Any]) async throws -> ImportSummary {
+        let payload: [String: Any] = ["format": format, "conversations": conversations]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await request("/v1/import", method: "POST", body: body)
+    }
+
     func renameIdea(id: String, title: String) async throws -> IdeaDetail {
         let body = try JSONEncoder().encode(["title": title])
         return try await request("/v1/ideas/\(Self.pathSegment(id))", method: "PATCH", body: body)
@@ -189,6 +197,20 @@ final class APIClient {
     func pasteConversation(text: String) async throws -> IngestResult {
         let body = try JSONEncoder().encode(["text": text])
         return try await request("/v1/paste", method: "POST", body: body)
+    }
+
+    /// Ingest one structured conversation (used by the on-Mac Cursor history pass -- the browser
+    /// extension has its own path). The backend dedupes on message id, so re-sending is free.
+    func ingestConversation(
+        id: String, source: String, messages: [(id: String, role: String, text: String, createdAt: String)]
+    ) async throws -> IngestResult {
+        let payload: [String: Any] = [
+            "conversationId": id,
+            "source": source,
+            "messages": messages.map { ["id": $0.id, "role": $0.role, "text": $0.text, "createdAt": $0.createdAt] },
+        ]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await request("/v1/conversations", method: "POST", body: body)
     }
 
     func getAccount() async throws -> AccountStatus {
