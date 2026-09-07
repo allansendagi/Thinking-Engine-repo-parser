@@ -195,6 +195,52 @@ struct CreatedUser: Codable {
     let token: String
 }
 
+/// GET /v1/capture-health -- is capture actually working. `healthy` is false when a sensor is
+/// structurally degraded OR recent thinking is stuck identity-unresolved. Drives the one honest
+/// "some recent thinking couldn't be confidently connected" line -- never a corrupted idea.
+struct CaptureHealth: Codable {
+    struct Sensor: Codable, Identifiable {
+        let sensor: String
+        let observations: Int
+        let failed: Int
+        let degraded: Bool
+        var id: String { sensor }
+        /// "browser_extension" -> "your browser", etc. -- the user never sees the sensor name.
+        var friendlyName: String {
+            switch sensor {
+            case "browser_extension": return "your browser"
+            case "native_accessibility": return "a Mac app"
+            case "desktop_agent": return "Cursor history"
+            case "screen_ocr": return "what's on screen"
+            default: return "one source"
+            }
+        }
+    }
+    let healthy: Bool
+    let unresolvedConversations: Int
+    let sensors: [Sensor]
+
+    var degradedSensors: [Sensor] { sensors.filter(\.degraded) }
+}
+
+/// The banner line for a capture-health verdict, or nil when nothing needs saying. Pure so the
+/// wording is unit-tested without standing up AppState. A degraded sensor (Thread can't read a
+/// tool at all) takes priority over thinking that's merely held aside unresolved. `detail` is
+/// present only when there's something the user can actually do.
+func makeCaptureHealthNotice(_ h: CaptureHealth?) -> (title: String, detail: String?)? {
+    guard let h, !h.healthy else { return nil }
+    if let s = h.degradedSensors.first {
+        let detail = s.sensor == "browser_extension"
+            ? "Reopen the tab you were working in, or check the Thread extension is still on."
+            : nil
+        return ("Thread isn't reliably reading \(s.friendlyName) right now", detail)
+    }
+    if h.unresolvedConversations > 0 {
+        return ("Some recent thinking couldn't be confidently connected", nil)
+    }
+    return nil
+}
+
 /// GET /v1/account -- plan + entitlement for the footer + paywall.
 struct AccountStatus: Codable {
     let plan: String            // "free" | "pro"

@@ -143,9 +143,16 @@ export interface SensorHealth {
 
 export interface CaptureHealthSummary {
   windowDays: number;
-  /** True when no sensor is degraded. */
+  /** True when no sensor is degraded AND nothing recent is stuck identity-unresolved. */
   healthy: boolean;
   sensors: SensorHealth[];
+  /**
+   * Conversations observed in the window whose identity is still unresolved -- a strong
+   * content match to a different conversation that no later observation has cleared. These
+   * are the "couldn't be confidently connected" case: captured, held provisional, attached
+   * to no idea. Distinct from a degraded sensor (that's a structural break).
+   */
+  unresolvedConversations: number;
 }
 
 const HEALTH_MIN_SAMPLES = 3;
@@ -198,5 +205,33 @@ export function captureHealthSummary(db: Database, windowDays = 7, now = new Dat
     };
   });
 
-  return { windowDays, healthy: !sensors.some((s) => s.degraded), sensors };
+  // Conversations that are ACTIVELY stuck identity-unresolved: their most recent observation is
+  // within the last two days and is unresolved. A live fork keeps flushing, so it stays counted;
+  // one the user has abandoned stops flushing and drops out in two days rather than nagging for
+  // the whole window. `json_extract` reads the M3 identity verdict; pre-M3 rows (NULL) are ignored.
+  const unresolvedSince = new Date(now.getTime() - Math.min(windowDays, 2) * 86_400_000).toISOString();
+  const unresolvedRow = db
+    .query(
+      `SELECT COUNT(*) AS n FROM (
+         SELECT e.conversation_id,
+                json_extract(e.identity, '$.status') AS latest_status
+           FROM evidence e
+          WHERE e.identity IS NOT NULL
+            AND e.observed_at = (
+              SELECT MAX(e2.observed_at) FROM evidence e2
+               WHERE e2.conversation_id = e.conversation_id AND e2.identity IS NOT NULL
+            )
+            AND e.observed_at >= ?
+          GROUP BY e.conversation_id
+       ) WHERE latest_status = 'unresolved'`,
+    )
+    .get(unresolvedSince) as { n: number } | null;
+  const unresolvedConversations = unresolvedRow?.n ?? 0;
+
+  return {
+    windowDays,
+    healthy: !sensors.some((s) => s.degraded) && unresolvedConversations === 0,
+    sensors,
+    unresolvedConversations,
+  };
 }
