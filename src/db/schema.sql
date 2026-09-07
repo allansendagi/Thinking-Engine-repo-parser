@@ -19,6 +19,32 @@ CREATE TABLE IF NOT EXISTS canonical_events (
   capture_fidelity TEXT
 );
 
+-- Raw sensor observations, one row per observation that advanced a conversation or failed
+-- structure validation. The epistemic level BELOW canonical_events: what a sensor reported, and
+-- the canonicalizer's structural verdict on it -- kept for audit, replay, sensor-health, and
+-- (later) reconciliation. Never joined into the idea graph. See state/canonicalize.ts /
+-- THREAD.md §7. Not a FK parent of canonical_events -- partial coverage (import/paste/pre-field)
+-- is expected.
+CREATE TABLE IF NOT EXISTS evidence (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  -- CaptureMethod: browser_extension | native_accessibility | desktop_agent | screen_ocr |
+  -- import | paste.
+  sensor TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  -- Messages in the raw observation, and how many became canonical events after validation.
+  observed_count INTEGER NOT NULL,
+  accepted_count INTEGER NOT NULL,
+  -- Canonicalizer verdict: 1 when nothing was dropped. Advisory issues don't flip it.
+  integrity_ok INTEGER NOT NULL,
+  -- JSON array of { code, detail }; NULL when clean.
+  integrity_issues TEXT,
+  -- JSON: { messages: [{id, role, text, createdAt}], sourceUrl, capture } -- the observation
+  -- verbatim, so canonicalization can be replayed when it improves.
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS evidence_conversation ON evidence(conversation_id, observed_at);
+
 CREATE TABLE IF NOT EXISTS cognitive_events (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL,

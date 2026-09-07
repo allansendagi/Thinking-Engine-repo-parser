@@ -3,6 +3,8 @@ import type { CanonicalEvent, CaptureProvenance, Role } from "../types";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { runPipeline, persistPipelineResult, type PipelineProviders } from "../state/pipeline";
 import { replayDiscardedEvents } from "../state/replayDiscarded";
+import { canonicalize, type IntegrityIssue, type RawObservation } from "../state/canonicalize";
+import { recordEvidence } from "../db/evidence";
 
 export interface IncomingMessage {
   id: string;
@@ -41,6 +43,14 @@ export interface IngestResult {
   promotedFromDiscard: number;
   rejectedExtractions: number;
   ideaCount: number;
+  /**
+   * The canonicalizer's structural verdict on THIS observation -- `true` when nothing was
+   * dropped. Advisory issues (a timestamp regression, an all-one-role transcript) don't flip it.
+   * Not surfaced to the user; the Mac app can use it as a sensor-health signal.
+   */
+  integrityOk: boolean;
+  /** Structure-validation issues found in this observation, if any. */
+  integrityIssues: IntegrityIssue[];
 }
 
 /**
@@ -56,46 +66,54 @@ export async function ingestConversation(
   providers: PipelineProviders,
 ): Promise<IngestResult> {
   const existingIdeaCount = () => loadIdeas(db).length;
+  const zeros = {
+    newCanonicalEvents: 0,
+    newCognitiveEvents: 0,
+    discardedEvents: 0,
+    promotedFromDiscard: 0,
+    rejectedExtractions: 0,
+  };
 
   if (input.messages.length === 0) {
-    return {
-      newCanonicalEvents: 0,
-      newCognitiveEvents: 0,
-      discardedEvents: 0,
-      promotedFromDiscard: 0,
-      rejectedExtractions: 0,
-      ideaCount: existingIdeaCount(),
-    };
+    return { ...zeros, ideaCount: existingIdeaCount(), integrityOk: true, integrityIssues: [] };
   }
+
+  // Evidence -> canonical events. A clean observation canonicalizes to exactly the same events a
+  // plain positional map would; a malformed one loses only the messages that genuinely can't be
+  // canonical events (no id/text, unknown role, a dup id) and records why.
+  const obs: RawObservation = {
+    conversationId: input.conversationId,
+    source: input.source,
+    // CaptureMethod doubles as the sensor identity. Null (a legacy client) => the extension,
+    // which is what all early live capture was (THREAD.md §7).
+    sensor: input.capture?.method ?? "browser_extension",
+    messages: input.messages,
+    sourceUrl: input.sourceUrl ?? null,
+    capture: input.capture ?? null,
+  };
+  const { events: allEvents, integrity } = canonicalize(obs);
 
   const existingIds = new Set(
     loadCanonicalEvents(db)
       .filter((e) => e.conversationId === input.conversationId)
       .map((e) => e.id),
   );
-
-  const allEvents: CanonicalEvent[] = input.messages.map((m, i) => ({
-    id: m.id,
-    conversationId: input.conversationId,
-    source: input.source,
-    role: m.role,
-    text: m.text,
-    createdAt: m.createdAt,
-    index: i,
-    sourceUrl: input.sourceUrl ?? null,
-    capture: input.capture ?? null,
-  }));
-
   const newEventIds = new Set(allEvents.filter((e) => !existingIds.has(e.id)).map((e) => e.id));
+
+  // Record the observation when it advanced the conversation OR failed structure validation --
+  // a no-op resend that is now structurally broken is itself a sensor-health signal. A clean
+  // no-op resend carries no signal and is not recorded.
+  if (newEventIds.size > 0 || !integrity.ok) {
+    const newMessages = input.messages.filter((m) => newEventIds.has(m.id));
+    recordEvidence(db, obs, { events: allEvents, integrity }, newMessages);
+  }
 
   if (newEventIds.size === 0) {
     return {
-      newCanonicalEvents: 0,
-      newCognitiveEvents: 0,
-      discardedEvents: 0,
-      promotedFromDiscard: 0,
-      rejectedExtractions: 0,
+      ...zeros,
       ideaCount: existingIdeaCount(),
+      integrityOk: integrity.ok,
+      integrityIssues: integrity.issues,
     };
   }
 
@@ -115,5 +133,7 @@ export async function ingestConversation(
     promotedFromDiscard: replay.promoted,
     rejectedExtractions: result.rejectedExtractions.length,
     ideaCount: loadIdeas(db).length,
+    integrityOk: integrity.ok,
+    integrityIssues: integrity.issues,
   };
 }
