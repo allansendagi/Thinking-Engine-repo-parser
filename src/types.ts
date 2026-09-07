@@ -5,6 +5,26 @@
 
 export type Role = "user" | "assistant";
 
+/**
+ * How a canonical event reached Thread, best-fidelity first. Orthogonal to
+ * `CognitiveEvent.confidence`, which rates the *inference*, not the *capture*. See THREAD.md §7,
+ * and §17 for the precedence Thread negotiates capture along.
+ */
+export type CaptureMethod =
+  | "browser_extension" // DOM read from inside the page -- exact roles + message boundaries
+  | "native_accessibility" // OS accessibility read of a native app -- reserved, not yet emitted
+  | "desktop_agent" // local file / DB scan (Cursor state.vscdb etc.) -- structural heuristics
+  | "screen_ocr" // ScreenCaptureKit + Vision -- lossy; reserved, not yet emitted
+  | "import" // user-supplied official export (ChatGPT / Claude conversations.json)
+  | "paste"; // user-pasted transcript -- may be partial or hand-edited
+
+export type CaptureFidelity = "high" | "medium" | "low";
+
+export interface CaptureProvenance {
+  method: CaptureMethod;
+  fidelity: CaptureFidelity;
+}
+
 /** One message, after branch resolution -- the export's tree flattened to the path the user kept. */
 export interface CanonicalEvent {
   id: string;
@@ -23,6 +43,13 @@ export interface CanonicalEvent {
    * paste-ready continuation text.
    */
   sourceUrl?: string | null;
+  /**
+   * How this message was captured and how much to trust that capture -- NOT whether Thread's
+   * reading of it is right (that's `CognitiveEvent.confidence`). One value per conversation.
+   * Null for data captured before this field: treat as `{ browser_extension, high }`, which is
+   * what all early live capture was. See THREAD.md §7.
+   */
+  capture?: CaptureProvenance | null;
 }
 
 export type CognitiveEventType =

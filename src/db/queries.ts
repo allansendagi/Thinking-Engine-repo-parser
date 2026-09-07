@@ -1,5 +1,26 @@
 import type { Database } from "bun:sqlite";
-import type { CanonicalEvent, CognitiveEvent, DiscardedEvent, IdeaNode, IdeaState, Role } from "../types";
+import type {
+  CanonicalEvent,
+  CaptureFidelity,
+  CaptureMethod,
+  CaptureProvenance,
+  CognitiveEvent,
+  DiscardedEvent,
+  IdeaNode,
+  IdeaState,
+  Role,
+} from "../types";
+
+/** Rehydrate the capture columns into CanonicalEvent.capture. Null (pre-field rows) stays null;
+ *  a consumer reads null as browser_extension/high per THREAD.md §7. A method with no stored
+ *  fidelity defaults to "high" rather than dropping the row's provenance entirely. */
+function rowCapture(
+  method: string | null,
+  fidelity: string | null,
+): CaptureProvenance | null {
+  if (!method) return null;
+  return { method: method as CaptureMethod, fidelity: (fidelity ?? "high") as CaptureFidelity };
+}
 
 interface IdeaRow {
   id: string;
@@ -51,6 +72,8 @@ interface CanonicalEventRow {
   created_at: string;
   idx: number;
   source_url: string | null;
+  capture_method: string | null;
+  capture_fidelity: string | null;
 }
 
 /** Loads every idea, with its evolution/open loops/decisions/related ids, from SQLite. */
@@ -167,6 +190,7 @@ export function loadCanonicalEvents(db: Database): CanonicalEvent[] {
     createdAt: r.created_at,
     index: r.idx,
     sourceUrl: r.source_url ?? null,
+    capture: rowCapture(r.capture_method, r.capture_fidelity),
   }));
 }
 
@@ -275,5 +299,6 @@ export function loadCanonicalEvent(db: Database, id: string): CanonicalEvent | u
     createdAt: row.created_at,
     index: row.idx,
     sourceUrl: row.source_url ?? null,
+    capture: rowCapture(row.capture_method, row.capture_fidelity),
   };
 }

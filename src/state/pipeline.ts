@@ -157,13 +157,34 @@ export function persistPipelineResult(
 ): void {
   const insertCanonical = db.prepare(
     // The extension resends a conversation's full transcript on every flush, so each call
-    // REPLACEs every row. COALESCE keeps a previously-stored source_url when this write's value
-    // is null (a mid-navigation capture, a provisional URL) -- a good URL, once captured, sticks.
-    `INSERT OR REPLACE INTO canonical_events (id, conversation_id, source, role, text, created_at, idx, source_url)
-     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT source_url FROM canonical_events WHERE id = ?)))`,
+    // REPLACEs every row. COALESCE keeps a previously-stored value when this write's is null:
+    // for source_url a mid-navigation/provisional capture, for capture_method/_fidelity an
+    // older client that doesn't send them -- a good value, once captured, sticks.
+    `INSERT OR REPLACE INTO canonical_events
+       (id, conversation_id, source, role, text, created_at, idx, source_url, capture_method, capture_fidelity)
+     VALUES (
+       ?, ?, ?, ?, ?, ?, ?,
+       COALESCE(?, (SELECT source_url FROM canonical_events WHERE id = ?)),
+       COALESCE(?, (SELECT capture_method FROM canonical_events WHERE id = ?)),
+       COALESCE(?, (SELECT capture_fidelity FROM canonical_events WHERE id = ?))
+     )`,
   );
   for (const e of canonicalEvents) {
-    insertCanonical.run(e.id, e.conversationId, e.source, e.role, e.text, e.createdAt, e.index, e.sourceUrl ?? null, e.id);
+    insertCanonical.run(
+      e.id,
+      e.conversationId,
+      e.source,
+      e.role,
+      e.text,
+      e.createdAt,
+      e.index,
+      e.sourceUrl ?? null,
+      e.id,
+      e.capture?.method ?? null,
+      e.id,
+      e.capture?.fidelity ?? null,
+      e.id,
+    );
   }
 
   const insertCognitive = db.prepare(

@@ -59,7 +59,15 @@ export function ingestConversation(
 ): Promise<IngestResult> {
   return request("/v1/conversations", {
     method: "POST",
-    body: JSON.stringify({ conversationId, source, messages, sourceUrl }),
+    body: JSON.stringify({
+      conversationId,
+      source,
+      messages,
+      sourceUrl,
+      // The extension reads the live DOM inside the page: exact roles and message boundaries.
+      // See THREAD.md §7 (capture fidelity) and §17 (capture precedence).
+      capture: { method: "browser_extension", fidelity: "high" },
+    }),
   });
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { openDb } from "../db/client";
-import { loadIdeas } from "../db/queries";
+import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation } from "./ingest";
 import { FakeProvider } from "../providers/fake";
 
@@ -196,5 +196,73 @@ describe("ingestConversation against a real DB (simulates repeated HTTP calls as
     expect(finalIdeas).toHaveLength(1);
     expect(finalIdeas[0]?.evolution).toHaveLength(2);
     expect(finalIdeas[0]?.currentFormulation).toBe("Boundaries need to be executable.");
+  });
+});
+
+describe("capture provenance (THREAD.md §7)", () => {
+  const oneMessage = (id: string, text: string) => ({
+    conversationId: "conv_cap",
+    source: "fixture" as const,
+    messages: [{ id, role: "user" as const, text, createdAt: "2026-08-17T00:00:00.000Z" }],
+  });
+  const providersFor = (statement: string, sourceId: string) => ({
+    extraction: new FakeProvider([
+      extractionResponse([
+        { type: "new_idea", statement, confidence: 0.9, source_event_id: sourceId, evidence_quote: statement.slice(0, 12) },
+      ]),
+    ]),
+    reasoning: new FakeProvider([]),
+  });
+
+  test("a capture stamp is persisted onto every canonical event of the conversation", async () => {
+    const db = openDb(":memory:");
+    await ingestConversation(
+      db,
+      { ...oneMessage("m1", "Native capture beats an adapter."), capture: { method: "browser_extension", fidelity: "high" } },
+      providersFor("Native capture beats an adapter.", "m1"),
+    );
+    const [event] = loadCanonicalEvents(db);
+    expect(event?.capture).toEqual({ method: "browser_extension", fidelity: "high" });
+  });
+
+  test("a later call without a capture stamp does NOT clobber an already-stamped row (COALESCE)", async () => {
+    const db = openDb(":memory:");
+    // First call: m1, stamped desktop_agent/medium.
+    await ingestConversation(
+      db,
+      {
+        conversationId: "conv_cap",
+        source: "fixture" as const,
+        messages: [{ id: "m1", role: "user" as const, text: "Fidelity is part of provenance.", createdAt: "2026-08-17T00:00:00.000Z" }],
+        capture: { method: "desktop_agent", fidelity: "medium" },
+      },
+      providersFor("Fidelity is part of provenance.", "m1"),
+    );
+    // Second call adds m2 and carries NO capture field. persistPipelineResult REPLACEs every row
+    // of the conversation, so this is the real COALESCE path -- m1's stamp must survive.
+    await ingestConversation(
+      db,
+      {
+        conversationId: "conv_cap",
+        source: "fixture" as const,
+        messages: [
+          { id: "m1", role: "user" as const, text: "Fidelity is part of provenance.", createdAt: "2026-08-17T00:00:00.000Z" },
+          { id: "m2", role: "user" as const, text: "So the pipeline can weight it.", createdAt: "2026-08-19T00:00:00.000Z" },
+        ],
+      },
+      // Extraction finds nothing new worth promoting -- keeps the test on the persist/COALESCE
+      // path without also needing a scripted identity-resolution response.
+      { extraction: new FakeProvider([extractionResponse([])]), reasoning: new FakeProvider([]) },
+    );
+    const byId = Object.fromEntries(loadCanonicalEvents(db).map((e) => [e.id, e]));
+    expect(byId.m1?.capture).toEqual({ method: "desktop_agent", fidelity: "medium" }); // survived
+    expect(byId.m2?.capture).toBeNull(); // this call carried no stamp
+  });
+
+  test("no capture stamp at all stays null -- read downstream as extension/high, not stored as a guess", async () => {
+    const db = openDb(":memory:");
+    await ingestConversation(db, oneMessage("m1", "Legacy client sends nothing."), providersFor("Legacy client sends nothing.", "m1"));
+    const [event] = loadCanonicalEvents(db);
+    expect(event?.capture).toBeNull();
   });
 });

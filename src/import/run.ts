@@ -8,12 +8,12 @@ import type { CanonicalEvent } from "../types";
 export type ImportFormat = "chatgpt" | "claude";
 
 export function parseExportFile(format: ImportFormat, raw: unknown): CanonicalEvent[] {
-  switch (format) {
-    case "chatgpt":
-      return parseChatGptExport(raw);
-    case "claude":
-      return parseClaudeExport(raw);
-  }
+  const events = format === "chatgpt" ? parseChatGptExport(raw) : parseClaudeExport(raw);
+  // An official export is complete and structurally exact -- high-fidelity capture (THREAD.md §7).
+  return events.map((e) => ({
+    ...e,
+    capture: { method: "import" as const, fidelity: "high" as const },
+  }));
 }
 
 export interface ImportSummary {

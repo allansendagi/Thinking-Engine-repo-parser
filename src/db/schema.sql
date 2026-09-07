@@ -11,7 +11,12 @@ CREATE TABLE IF NOT EXISTS canonical_events (
   idx INTEGER NOT NULL,
   -- Canonical conversation URL (origin + path). Same for every row of a conversation. NULL for
   -- pastes and for rows written before this column existed. See CanonicalEvent.sourceUrl.
-  source_url TEXT
+  source_url TEXT,
+  -- How this row was captured + how much to trust that capture (NOT inference confidence).
+  -- One value per conversation. NULL for rows written before these columns -- read as
+  -- 'browser_extension' / 'high'. See CanonicalEvent.capture / THREAD.md §7.
+  capture_method TEXT,
+  capture_fidelity TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cognitive_events (
