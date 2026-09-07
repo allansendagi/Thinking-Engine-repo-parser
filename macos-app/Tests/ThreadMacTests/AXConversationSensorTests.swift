@@ -323,14 +323,70 @@ final class AXAdapterRegistryTests: XCTestCase {
         XCTAssertTrue(blocks.allSatisfy { $0.roleConfidence == .explicit })
     }
 
-    func testChatGPTAdapterInfersRolesByAlternationWhenUntagged() {
+    func testClaudeAdapterInfersRolesByAlternationWhenUntagged() {
         let bubbles = ["opening question about capture", "the answer to it", "a follow up question"].map {
             FakeAXNode("AXGroup", children: [FakeAXNode("AXStaticText", value: $0)])
         }
         let chat = FakeAXNode("AXScrollArea", identifier: "conversation-turns", children: bubbles)
         let app = FakeAXNode("AXApplication", children: [FakeAXNode("AXWindow", children: [chat])])
-        let root = AXAdapters.chatgpt.conversationRoot(appRoot: app)!
-        XCTAssertEqual(AXAdapters.chatgpt.messageBlocks(root: root).map(\.role), ["user", "assistant", "user"])
+        let root = AXAdapters.claude.conversationRoot(appRoot: app)!
+        XCTAssertEqual(AXAdapters.claude.messageBlocks(root: root).map(\.role), ["user", "assistant", "user"])
+    }
+
+    /// ChatGPT's desktop tree, faithful to a real AX dump 2026-09-07: every container is a
+    /// hint-less `AXGroup`, each user turn is preceded by an `AXHeading` "You said:", the message
+    /// text is an `AXStaticText` a few groups below, timestamps + "Copy message" sit between, and
+    /// the composer `AXTextArea` ends the transcript. The dump was quota-blocked so the assistant
+    /// slots held "You've hit your usage limit…" -- the USER anchor is what's verified here; the
+    /// adapter is `extractionUnverified` until a dump with real replies confirms the rest.
+    func testChatGPTUserTurnsAreHeadingAnchored() {
+        func heading() -> FakeAXNode {
+            FakeAXNode("AXHeading", description: "You said:",
+                       children: [FakeAXNode("AXStaticText", value: "You said:")])
+        }
+        func leaf(_ t: String) -> FakeAXNode {
+            FakeAXNode("AXGroup", children: [FakeAXNode("AXGroup", children: [FakeAXNode("AXStaticText", value: t)])])
+        }
+        let web = FakeAXNode("AXWebArea", description: "ChatGPT", children: [
+            FakeAXNode("AXStaticText", value: "NOMOS Strategy Plan"),   // sidebar -- above turn 1, ignored
+            FakeAXNode("AXButton", description: "New chat"),
+
+            heading(),
+            leaf("how should computable authority be verified"),
+            FakeAXNode("AXStaticText", value: "3:00 PM"),
+            FakeAXNode("AXButton", description: "Copy message"),
+            leaf("You've hit your usage limit. Upgrade your plan."),
+
+            heading(),
+            leaf("is that all"),
+            FakeAXNode("AXStaticText", value: "3:19 PM"),
+            leaf("You've hit your usage limit. Upgrade your plan."),
+
+            FakeAXNode("AXTextArea", value: "", description: "Message ChatGPT"),   // composer ends the transcript
+            FakeAXNode("AXStaticText", value: "text past the composer must be ignored"),
+        ])
+        let app = FakeAXNode("AXApplication", children: [FakeAXNode("AXWindow", children: [web])])
+
+        let adapter = AXAdapters.chatgpt
+        let root = adapter.conversationRoot(appRoot: app)
+        XCTAssertEqual((root as? FakeAXNode)?.axRole, "AXWebArea")
+        let blocks = adapter.messageBlocks(root: root!)
+
+        XCTAssertEqual(blocks.map(\.role), ["user", "assistant", "user", "assistant"])
+        XCTAssertEqual(blocks[0].text, "how should computable authority be verified")
+        XCTAssertEqual(blocks[2].text, "is that all")
+        XCTAssertTrue(blocks.allSatisfy { $0.roleConfidence == .explicit })
+        XCTAssertFalse(blocks.contains { $0.text.contains("past the composer") })
+        // key is derived from the first USER turn -- stable regardless of assistant-side splitting
+        XCTAssertEqual(adapter.conversationKey(root: root!, appRoot: app),
+                       adapter.conversationKey(root: root!, appRoot: app))
+        XCTAssertNotNil(adapter.conversationKey(root: root!, appRoot: app))
+    }
+
+    func testChatGPTAdapterIsMeasurementOnlyUntilAssistantSideIsVerified() {
+        XCTAssertTrue(AXAdapters.chatgpt.extractionUnverified)
+        XCTAssertFalse(AXAdapters.cursor.extractionUnverified)
+        XCTAssertFalse(AXAdapters.claude.extractionUnverified)
     }
 }
 
