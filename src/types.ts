@@ -25,6 +25,15 @@ export interface CaptureProvenance {
   fidelity: CaptureFidelity;
 }
 
+/**
+ * Whether a canonical event is trusted to move durable cognitive state. `provisional` events
+ * are stored and used as extraction *context*, but never become the source of a cognitive event
+ * -- they inform Thread without silently rewriting the idea graph, and are promoted to
+ * `committed` when a clean observation corroborates them (see state/canonicalize.ts, THREAD.md
+ * §17: "probabilistic capture, deterministic state"). Absent = `committed` (all early data was).
+ */
+export type CanonicalEventStatus = "committed" | "provisional";
+
 /** One message, after branch resolution -- the export's tree flattened to the path the user kept. */
 export interface CanonicalEvent {
   id: string;
@@ -50,6 +59,11 @@ export interface CanonicalEvent {
    * what all early live capture was. See THREAD.md §7.
    */
   capture?: CaptureProvenance | null;
+  /**
+   * Trust gate: `provisional` events are stored and used as context but never extracted into
+   * cognitive events until corroborated. Absent = `committed`. See CanonicalEventStatus.
+   */
+  status?: CanonicalEventStatus;
 }
 
 export type CognitiveEventType =
