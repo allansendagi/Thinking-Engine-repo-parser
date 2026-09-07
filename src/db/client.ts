@@ -36,6 +36,7 @@ function migrate(db: Database): void {
     ["canonical_events", "capture_method TEXT"],
     ["canonical_events", "capture_fidelity TEXT"],
     ["canonical_events", "status TEXT NOT NULL DEFAULT 'committed'"],
+    ["evidence", "identity TEXT"],
   ];
   for (const [table, column] of addColumns) {
     try {

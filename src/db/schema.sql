@@ -43,8 +43,12 @@ CREATE TABLE IF NOT EXISTS evidence (
   integrity_ok INTEGER NOT NULL,
   -- JSON array of { code, detail }; NULL when clean.
   integrity_issues TEXT,
-  -- JSON: { messages: [{id, role, text, createdAt}], sourceUrl, capture } -- the observation
-  -- verbatim, so canonicalization can be replayed when it improves.
+  -- JSON ConversationIdentity: { status, canonicalId, authority, claims, conflicts } -- the
+  -- identity verdict for this observation, so every resolution is auditable. NULL pre-M3.
+  identity TEXT,
+  -- JSON: { form, messages: [{id, role, text, createdAt}], sourceUrl, capture } -- the
+  -- observation's new turns (or the whole transcript when broken), so canonicalization can be
+  -- replayed when it improves.
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS evidence_conversation ON evidence(conversation_id, observed_at);

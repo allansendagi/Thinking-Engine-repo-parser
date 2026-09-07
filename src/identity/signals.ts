@@ -33,7 +33,9 @@ function tokenize(text: string): string[] {
     .filter((t) => t.length > 2 && !STOPWORDS.has(t));
 }
 
-function jaccard(a: Set<string>, b: Set<string>): number {
+/** |A ∩ B| / |A ∪ B|. 0 when either set is empty. Also the content-fingerprint similarity in
+ *  state/resolveConversationIdentity.ts. */
+export function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0;
   let intersection = 0;
   for (const t of a) if (b.has(t)) intersection++;
