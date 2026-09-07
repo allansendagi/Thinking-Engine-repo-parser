@@ -199,16 +199,28 @@ final class APIClient {
         return try await request("/v1/paste", method: "POST", body: body)
     }
 
-    /// Ingest one structured conversation (used by the on-Mac Cursor history pass -- the browser
-    /// extension has its own path). The backend dedupes on message id, so re-sending is free.
+    /// Ingest one structured conversation (used by the on-Mac Cursor history pass and the live AX
+    /// sensor -- the browser extension has its own path). The backend dedupes on message id, so
+    /// re-sending is free.
+    ///
+    /// `capture` stamps the provenance: which sensor observed this and how much to trust it
+    /// (`method` in CaptureMethod, `fidelity` high|medium|low). Omit it and the backend reads the
+    /// row as `browser_extension`/`high` -- so a native capture that leaves this nil is
+    /// indistinguishable from extension traffic. `sourceUrl` is an optional "view source" anchor.
     func ingestConversation(
-        id: String, source: String, messages: [(id: String, role: String, text: String, createdAt: String)]
+        id: String,
+        source: String,
+        messages: [(id: String, role: String, text: String, createdAt: String)],
+        capture: (method: String, fidelity: String)? = nil,
+        sourceUrl: String? = nil
     ) async throws -> IngestResult {
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "conversationId": id,
             "source": source,
             "messages": messages.map { ["id": $0.id, "role": $0.role, "text": $0.text, "createdAt": $0.createdAt] },
         ]
+        if let capture { payload["capture"] = ["method": capture.method, "fidelity": capture.fidelity] }
+        if let sourceUrl { payload["sourceUrl"] = sourceUrl }
         let body = try JSONSerialization.data(withJSONObject: payload)
         return try await request("/v1/conversations", method: "POST", body: body)
     }
