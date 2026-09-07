@@ -13,7 +13,7 @@ enum ListTab: String, CaseIterable, Identifiable {
 /// Sub-mode of the "All" tab only. Recent and Open loops are always ideas.
 /// `.ideas` = every idea; `.activity` = the chronological feed of captured conversations.
 enum AllMode: String, CaseIterable, Identifiable {
-    case ideas = "Ideas", activity = "Activity"
+    case activity = "Activity", ideas = "Ideas"
     var id: String { rawValue }
 }
 
@@ -337,10 +337,17 @@ final class AppState: ObservableObject {
     @Published var listSelection: String?
 
     /// Which of the panel's three segments is showing. See `ListTab`.
-    @Published var listTab: ListTab = .recent
+    @Published var listTab: ListTab = .recent {
+        // Activity is the default "All" sub-mode now, so opening the tab -- not just toggling the
+        // sub-mode -- has to be what kicks off the first conversation load.
+        didSet { if listTab == .all, allMode == .activity, conversations.isEmpty {
+            Task { await loadConversations() }
+        } }
+    }
 
-    /// "All" tab sub-mode. Only meaningful when `listTab == .all`.
-    @Published var allMode: AllMode = .ideas {
+    /// "All" tab sub-mode. Only meaningful when `listTab == .all`. Defaults to the activity feed
+    /// -- the chronological record of what was captured -- rather than the synthesized idea list.
+    @Published var allMode: AllMode = .activity {
         didSet { if allMode == .activity, conversations.isEmpty { Task { await loadConversations() } } }
     }
 
@@ -1588,16 +1595,32 @@ final class AppState: ObservableObject {
             case .cursor: return nil
             }
         }
-        static func from(source: String?) -> AITool? { source.flatMap { AITool(rawValue: $0) } }
+        /// Tolerant: provenance carries a display label ("ChatGPT"), backfill carries a slug
+        /// ("chatgpt"), some rows carry a host ("chatgpt.com") or a bundle id. Match on substring
+        /// so "Continue" routes to the app the idea actually came from, not always Claude.
+        static func from(source: String?) -> AITool? {
+            guard let s = source?.lowercased(), !s.isEmpty else { return nil }
+            if s.contains("chatgpt") || s.contains("openai") || s.contains("codex") { return .chatgpt }
+            if s.contains("claude") || s.contains("anthropic") { return .claude }
+            if s.contains("gemini") || s.contains("bard") { return .gemini }
+            if s.contains("cursor") { return .cursor }
+            return AITool(rawValue: s)
+        }
     }
 
     private let preferredKey = "thread.preferredAI"
 
-    /// The tool the user last developed this idea in, or an explicit preference, else Claude.
+    /// Where "Continue" goes by default for the open idea: the tool it was most recently
+    /// developed in (the newest provenance step with a recognizable source). Only when the idea
+    /// has no usable source does it fall back to the last tool the user explicitly picked, then
+    /// Claude. Provenance wins over the stored pick -- "route to the relevant chatbot".
     var preferredTool: AITool {
         get {
+            if let fromIdea = selectedTrace?.provenance.reversed()
+                .lazy.compactMap({ AITool.from(source: $0.source) }).first {
+                return fromIdea
+            }
             if let raw = UserDefaults.standard.string(forKey: preferredKey), let t = AITool(rawValue: raw) { return t }
-            if let last = selectedTrace?.provenance.last?.source, let t = AITool.from(source: last) { return t }
             return .claude
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: preferredKey) }
