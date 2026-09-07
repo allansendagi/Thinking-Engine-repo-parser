@@ -14,7 +14,15 @@ export function setupDom(url: string, bodyHtml: string): Window {
   const g = globalThis as unknown as Record<string, unknown>;
   g.document = window.document;
   g.location = window.location;
+  g.window = window;
   g.Node = window.Node;
+  // `fillComposer` uses `instanceof` against these and constructs events -- they must be the
+  // SAME constructors happy-dom used to build the elements under test.
+  g.HTMLTextAreaElement = window.HTMLTextAreaElement;
+  g.HTMLInputElement = window.HTMLInputElement;
+  g.HTMLElement = window.HTMLElement;
+  g.Event = window.Event;
+  g.InputEvent = window.InputEvent;
 
   return window;
 }

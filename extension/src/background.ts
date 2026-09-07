@@ -10,7 +10,16 @@ import {
   setPairingState,
   setResumeSnooze,
 } from "./lib/storage";
-import { ApiError, getThinkingState, ingestConversation, isPaymentRequired, isUnauthorized, verifyCredentials } from "./lib/api";
+import {
+  ApiError,
+  continueFromIdea,
+  getThinkingState,
+  ingestConversation,
+  isPaymentRequired,
+  isUnauthorized,
+  resolveContinuationText,
+  verifyCredentials,
+} from "./lib/api";
 import { fetchDesktopPairing, PAIRING_PORT } from "./lib/pairing";
 import { suggestionFromState, type ResumeSuggestion } from "./lib/resume";
 import type { CaptureMessage, PairingState } from "./lib/types";
@@ -217,8 +226,29 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     return true;
   }
 
+  if (isContinuePacketMessage(message)) {
+    continuePacket(message.ideaId)
+      .then((text) => sendResponse({ ok: true, text }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
   return false;
 });
+
+/**
+ * The continuation packet text for one idea -- the compact cognitive checkpoint the content
+ * script drops into the AI tool's composer. Not Pro-gated. Throws (surfaced to the card) on a
+ * missing pairing or an API error so the card can fall back to the Mac-app hand-off.
+ */
+async function continuePacket(ideaId: string): Promise<string> {
+  const { credentials } = await getSettings();
+  if (!credentials) throw new Error("Not paired -- open Thread for Mac.");
+  const res = await continueFromIdea(ideaId);
+  // Bake every model-written slot in so what lands in the composer is ready to send, not a
+  // template with `{{...}}` tokens in it.
+  return resolveContinuationText(res);
+}
 
 /**
  * The one qualifying "you may be returning to this" idea, or null. Computed from Thinking State
@@ -311,6 +341,15 @@ function isResumeDismissMessage(message: unknown): message is { type: "thread:re
     typeof message === "object" &&
     message !== null &&
     (message as { type?: unknown }).type === "thread:resume-dismiss" &&
+    typeof (message as { ideaId?: unknown }).ideaId === "string"
+  );
+}
+
+function isContinuePacketMessage(message: unknown): message is { type: "thread:continue-packet"; ideaId: string } {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    (message as { type?: unknown }).type === "thread:continue-packet" &&
     typeof (message as { ideaId?: unknown }).ideaId === "string"
   );
 }

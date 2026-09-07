@@ -138,3 +138,41 @@ export function setOpenLoopResolved(id: string, resolved: boolean): Promise<void
 export function continueThinking(topic: string): Promise<{ text: string }> {
   return request("/v1/continue", { method: "POST", body: JSON.stringify({ topic }) });
 }
+
+export interface ContinuePacketResponse {
+  /** Paste-ready render. Carries `{{...}}` placeholders for the model-written slots -- see
+   *  `resolveContinuationText`. */
+  text: string;
+  packet: { suggestedNext: string; thinkingShift?: string | null; trajectory?: string[] | null };
+  tier?: "pro" | "free";
+}
+
+/**
+ * The continuation packet for one idea -- the compact cognitive checkpoint (current formulation,
+ * how the thinking changed, what's established, what's unresolved, the continuation task), NOT a
+ * transcript. `/v1/continue` is not Pro-gated; `tier` just says whether the "continue from here"
+ * line was model-written ("pro") or templated ("free").
+ */
+export function continueFromIdea(ideaId: string): Promise<ContinuePacketResponse> {
+  return request("/v1/continue", { method: "POST", body: JSON.stringify({ ideaId }) });
+}
+
+const CONTINUE_TOKEN = "{{CONTINUE_FROM_HERE}}";
+const THINKING_SHIFT_TOKEN = "{{THINKING_SHIFT}}";
+const THINKING_EVOLUTION_TOKEN = "{{THINKING_EVOLUTION}}";
+
+/**
+ * Bake the model-written slots into the paste-ready text -- the browser twin of the server's
+ * `resolvePacketText`. Replacing a token that isn't present is a no-op.
+ */
+export function resolveContinuationText(r: ContinuePacketResponse): string {
+  const chain = (r.packet.trajectory ?? []).filter(Boolean).join("\n  ↓\n  ");
+  return (
+    r.text
+      .replace(CONTINUE_TOKEN, r.packet.suggestedNext ?? "")
+      .replace(THINKING_SHIFT_TOKEN, (r.packet.thinkingShift ?? "").trim())
+      .replace(THINKING_EVOLUTION_TOKEN, chain)
+      .replace(/\n{3,}/g, "\n\n")
+      .trimEnd() + "\n"
+  );
+}

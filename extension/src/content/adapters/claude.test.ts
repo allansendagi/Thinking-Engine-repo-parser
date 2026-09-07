@@ -56,4 +56,22 @@ describe("claudeAdapter", () => {
       { role: "assistant", text: "Because they act autonomously." },
     ]);
   });
+
+  test("insertIntoComposer writes into the ProseMirror composer", () => {
+    const window = setupDom(
+      "https://claude.ai/",
+      `<div contenteditable="true" class="ProseMirror"></div>`,
+    );
+    const ok = claudeAdapter.insertIntoComposer!(
+      "Where you left off: authority must be independently verifiable",
+      window.document as unknown as ParentNode,
+    );
+    expect(ok).toBe(true);
+    expect(window.document.querySelector(".ProseMirror")!.textContent).toContain("independently verifiable");
+  });
+
+  test("insertIntoComposer returns false with no composer present", () => {
+    const window = setupDom("https://claude.ai/", "<main></main>");
+    expect(claudeAdapter.insertIntoComposer!("x", window.document as unknown as ParentNode)).toBe(false);
+  });
 });

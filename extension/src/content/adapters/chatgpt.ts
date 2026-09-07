@@ -1,5 +1,5 @@
 import type { SiteAdapter, RawMessage } from "../common/siteAdapter";
-import { cleanText } from "../common/domUtils";
+import { cleanText, fillComposer, firstMatch } from "../common/domUtils";
 
 /**
  * Verified against a real live chatgpt.com conversation (2026-09-01): `data-message-author-role`
@@ -10,6 +10,15 @@ import { cleanText } from "../common/domUtils";
  * doesn't immediately break capture. See extension/README.md.
  */
 const ROLE_ATTRS = ["data-message-author-role", "data-turn"];
+
+/** The prompt box: historically a `<textarea>`, now a ProseMirror contenteditable, both with
+ *  `id="prompt-textarea"`. Ordered fallbacks so one rename degrades instead of breaking. */
+const COMPOSER_SELECTORS = [
+  "#prompt-textarea",
+  'form [contenteditable="true"]',
+  'form textarea',
+  'main textarea',
+];
 
 function collect(root: ParentNode): HTMLElement[] {
   for (const attr of ROLE_ATTRS) {
@@ -60,5 +69,10 @@ export const chatGptAdapter: SiteAdapter = {
     }
 
     return messages;
+  },
+
+  insertIntoComposer(text: string, root: ParentNode = document): boolean {
+    const el = firstMatch(root, COMPOSER_SELECTORS);
+    return el ? fillComposer(el, text) : false;
   },
 };
