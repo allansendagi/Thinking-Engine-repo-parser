@@ -1,47 +1,91 @@
 import SwiftUI
 
-/// First run. Thread has already created the account, so there is nothing to set up. Native-first
-/// (`browserCapturePublic == false`): the screen names the two capture paths that work with no
-/// browser -- Cursor's local store (automatic) and paste-a-conversation for ChatGPT/Claude -- and
-/// gets out of the way. Once browser capture is a public, one-click thing, `ready` gains the
-/// "Connect Browser" action. Signing in to an existing account (another Mac) stays a quiet
-/// afterthought either way.
+/// First run and post-sign-out. Three states:
+///  - genuine first run (`!isPaired`, never signed out): the account is auto-created in `onAppear`,
+///    then `ready` -- native-first, nothing to set up.
+///  - deliberately signed out (`!isPaired`, `CredentialStore.deliberatelySignedOut`): DON'T
+///    auto-create a throwaway account -- sign-in is the screen, with "start a new account" as the
+///    secondary. This is the path back to your real account.
+///  - offline first run: `settingUp` -- honest wait + a visible retry.
+/// Once browser capture is public, `ready` gains the "Connect Browser" action.
 struct WelcomeView: View {
     @EnvironmentObject var appState: AppState
     @State private var showSignIn = false
     @State private var retrying = false
+    @State private var startingFresh = false
+
+    /// An explicit sign-out, not a first launch -- `CredentialStore.clear()` sets this and any
+    /// successful pair / sign-in clears it again.
+    private var signedOut: Bool { CredentialStore.deliberatelySignedOut }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if appState.isPaired {
                 ready
+                quietSignIn
+            } else if signedOut {
+                signInPrompt
             } else {
                 settingUp
-            }
-
-            Divider().padding(.top, 2)
-
-            if showSignIn {
-                EmailCodeForm(
-                    title: "Sign in to your Thread account",
-                    sendCode: { await appState.sendSignInCode(email: $0) },
-                    verify: { await appState.signIn(email: $0, code: $1) }
-                )
-            } else {
-                Button("Already use Thread on another Mac? Sign in") {
-                    withAnimation(.easeOut(duration: 0.15)) { showSignIn = true }
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11)).foregroundStyle(Theme.ink(0.4))
             }
         }
         .padding(16)
         .frame(width: 320)
-        .onAppear { if !appState.isPaired { Task { await appState.pairNewAccount() } } }
+        .onAppear {
+            // Only on a true first run. Right after a deliberate sign-out, auto-creating an
+            // account would bury the real one behind a fresh empty stranger.
+            if !appState.isPaired && !signedOut {
+                Task { await appState.pairNewAccount() }
+            }
+        }
     }
 
-    // The account is up. Native-first: nothing to do -- just start. With browser capture public,
-    // the one real action is connecting the browser.
+    // MARK: signed out -- sign-in is the primary action
+
+    private var signInPrompt: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header("Signed out", "Sign in with your email to pick your thinking back up.")
+
+            EmailCodeForm(
+                title: "Sign in to your Thread account",
+                sendCode: { await appState.sendSignInCode(email: $0) },
+                verify: { await appState.signIn(email: $0, code: $1) }
+            )
+
+            Divider().padding(.top, 2)
+
+            Button(startingFresh ? "Starting…" : "Start a new account instead") {
+                startingFresh = true
+                Task { await appState.pairNewAccount(); startingFresh = false }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11)).foregroundStyle(Theme.ink(0.4))
+            .disabled(startingFresh)
+        }
+    }
+
+    // MARK: paired -- the quiet "another Mac?" sign-in toggle
+
+    @ViewBuilder
+    private var quietSignIn: some View {
+        Divider().padding(.top, 2)
+        if showSignIn {
+            EmailCodeForm(
+                title: "Sign in to your Thread account",
+                sendCode: { await appState.sendSignInCode(email: $0) },
+                verify: { await appState.signIn(email: $0, code: $1) }
+            )
+        } else {
+            Button("Already use Thread on another Mac? Sign in") {
+                withAnimation(.easeOut(duration: 0.15)) { showSignIn = true }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11)).foregroundStyle(Theme.ink(0.4))
+        }
+    }
+
+    // MARK: paired -- native-first, nothing to do
+
     @ViewBuilder
     private var ready: some View {
         if AppState.browserCapturePublic {
