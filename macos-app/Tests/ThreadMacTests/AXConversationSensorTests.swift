@@ -298,6 +298,7 @@ final class AXAdapterRegistryTests: XCTestCase {
         XCTAssertEqual(AXAdapters.forBundleID("com.todesktop.230313mzl4w4u92")?.source, "cursor")
         XCTAssertEqual(AXAdapters.forBundleID("com.anthropic.claudefordesktop")?.source, "claude")
         XCTAssertEqual(AXAdapters.forBundleID("com.openai.chat")?.source, "chatgpt")
+        XCTAssertEqual(AXAdapters.forBundleID("com.openai.codex")?.source, "chatgpt")
         XCTAssertNil(AXAdapters.forBundleID("com.apple.Safari"))
     }
 

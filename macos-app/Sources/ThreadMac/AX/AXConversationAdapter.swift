@@ -86,7 +86,10 @@ struct AXAdapterConfig {
     )
 
     static let chatgpt = AXAdapterConfig(
-        bundleIDs: ["com.openai.chat"],
+        // The desktop app ships under `com.openai.chat` on some installs and `com.openai.codex`
+        // on others (OpenAI folded the two apps together) -- claim both. Verified `com.openai.codex`
+        // on a real machine 2026-09-07.
+        bundleIDs: ["com.openai.chat", "com.openai.codex"],
         source: "chatgpt",
         userHints: ["user", "you said", "your message"],
         assistantHints: ["assistant", "chatgpt", "chatgpt said", "gpt", "ai response", "response"],

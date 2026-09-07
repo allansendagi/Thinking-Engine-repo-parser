@@ -61,8 +61,19 @@ final class AXSensorRunner {
 
     // MARK: - lifecycle
 
+    /// Always on while the sensor runs (it only runs under THREAD_AX_SENSOR=1). A measurement rig
+    /// that goes silent on "no permission" or "nothing supported is frontmost" can't be measured.
+    private func log(_ msg: String) { print("[ThreadMac AX] \(msg)") }
+
     func start() {
-        guard Self.accessibilityGranted else { status = .needsPermission; return }
+        guard Self.accessibilityGranted else {
+            status = .needsPermission
+            log("Accessibility is NOT granted to this binary. Open System Settings > Privacy & "
+                + "Security > Accessibility, enable the entry for this app, then relaunch. "
+                + "(A fresh build registers as a new entry -- remove the old one.)")
+            return
+        }
+        log("Accessibility granted. Watching for Cursor / Claude / ChatGPT to come frontmost.")
 
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil
@@ -84,6 +95,9 @@ final class AXSensorRunner {
             considerApp(bundleID: id, pid: front.processIdentifier)
         } else {
             status = .waiting
+            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"
+            log("Waiting. Frontmost app is \(front) -- not one Thread reads. Switch to Cursor / "
+                + "Claude / ChatGPT and click into the window.")
         }
     }
 
@@ -99,7 +113,10 @@ final class AXSensorRunner {
     // MARK: - app routing
 
     private func considerApp(bundleID: String, pid: pid_t) {
-        guard let match = adapters.first(where: { $0.bundleIDs.contains(bundleID) }) else { return }
+        guard let match = adapters.first(where: { $0.bundleIDs.contains(bundleID) }) else {
+            if adapter != nil { log("Left a supported app (\(bundleID) is now frontmost). Idle until one returns.") }
+            return
+        }
         if watchedPID == pid, adapter?.source == match.source { return } // already on it
         detach()
         attach(adapter: match, pid: pid)
@@ -125,6 +142,7 @@ final class AXSensorRunner {
         self.watchedPID = pid
         self.state = AXSensorState() // a different app is a different conversation context
         status = .watching(source: adapter.source, pid: pid)
+        log("Attached to \(adapter.source) (pid \(pid)). \(dumpTree ? "Dumping its AX tree, then watching for turns." : "Watching for turns. Set THREAD_AX_DUMP=1 for the tree.")")
 
         if dumpTree { dump(LiveAXNode(el), label: adapter.source) }
         scanSoon()
@@ -171,13 +189,31 @@ final class AXSensorRunner {
         )
     }
 
+    /// Last thing `scan()` reported, so a repeating bail reason is logged once, not every burst.
+    private var lastScanNote: String?
+    private func scanNote(_ s: String) {
+        guard lastScanNote != s else { return }
+        lastScanNote = s
+        log(s)
+    }
+
     private func scan() {
         guard let appElement, let adapter else { return }
         let appRoot = LiveAXNode(appElement)
-        guard let root = adapter.conversationRoot(appRoot: appRoot) else { return }
-        guard let key = adapter.conversationKey(root: root, appRoot: appRoot) else { return }
+        guard let root = adapter.conversationRoot(appRoot: appRoot) else {
+            scanNote("Attached to \(adapter.source) but no conversation container matched the hint "
+                + "set. Run with THREAD_AX_DUMP=1 and share the tree so the hints can be tuned.")
+            return
+        }
+        guard let key = adapter.conversationKey(root: root, appRoot: appRoot) else {
+            scanNote("Found the \(adapter.source) conversation pane but couldn't derive a stable key for it.")
+            return
+        }
         let blocks = adapter.messageBlocks(root: root)
-        guard !blocks.isEmpty else { return }
+        guard !blocks.isEmpty else {
+            scanNote("Found the \(adapter.source) conversation pane (key \(key)) but pulled 0 message blocks from it.")
+            return
+        }
 
         let step = AXConversationSensor.step(
             observation: .init(conversationKey: key, blocks: blocks),
@@ -185,8 +221,12 @@ final class AXSensorRunner {
             state: &state
         )
         if step.holdingStreamingTail { scheduleTailSettle() }
-        guard !step.settled.isEmpty else { return }
+        guard !step.settled.isEmpty else {
+            scanNote("Read \(blocks.count) block(s) from \(adapter.source), holding for the turn to settle.")
+            return
+        }
 
+        scanNote("Capturing \(step.settled.count) settled turn(s) from \(adapter.source).")
         let source = adapter.source
         let conversationID = "\(source)::ax::\(key)"
         let base = Date()
