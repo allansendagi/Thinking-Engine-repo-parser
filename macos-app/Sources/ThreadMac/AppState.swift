@@ -844,6 +844,26 @@ final class AppState: ObservableObject {
     func dismissPaywallBanner() { paywallBannerDismissed = true }
     var showsPaywallBanner: Bool { isPaired && isLocked && !paywallBannerDismissed }
 
+    // MARK: - Capture health
+
+    /// GET /v1/capture-health, refreshed alongside the graph. nil until the first fetch.
+    @Published var captureHealth: CaptureHealth?
+    @Published var captureHealthNoticeDismissed = false
+    func dismissCaptureHealthNotice() { captureHealthNoticeDismissed = true }
+
+    /// The one honest line for the banner, or nil when capture is healthy. Pure -- see
+    /// `makeCaptureHealthNotice`.
+    var captureHealthNotice: (title: String, detail: String?)? {
+        guard isPaired else { return nil }
+        return makeCaptureHealthNotice(captureHealth)
+    }
+    var showsCaptureHealthNotice: Bool { captureHealthNotice != nil && !captureHealthNoticeDismissed }
+
+    func refreshCaptureHealth() async {
+        guard isPaired, reconnect == nil else { return }
+        captureHealth = try? await client.captureHealth()
+    }
+
     /// Where the founder buys Pro / manages the account -- payment lives on the website.
     static let marketingBaseURL = "https://www.threadnow.app"
 
@@ -1233,6 +1253,7 @@ final class AppState: ObservableObject {
         isLoading = false
         reconcileEmbeddings()
         await refreshAccount()
+        await refreshCaptureHealth()
         if listTab == .all, allMode == .activity { await loadConversations() }
     }
 

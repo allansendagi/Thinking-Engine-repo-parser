@@ -134,6 +134,11 @@ final class APIClient {
         return try await request("/v1/ideas?q=\(q)")
     }
 
+    /// Is capture actually working, over the last week. Per-user, not admin-gated.
+    func captureHealth() async throws -> CaptureHealth {
+        try await request("/v1/capture-health")
+    }
+
     /// Idea/loop ids can contain `:` (paste-sourced ids look like `<conv>::<n>`), which
     /// URLSession rejects raw in a path with "unsupported URL". Encode to RFC 3986 unreserved
     /// only; the backend decodeURIComponent's it back.

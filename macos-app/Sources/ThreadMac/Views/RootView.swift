@@ -16,6 +16,10 @@ struct RootView: View {
                 PaywallBanner()
             }
 
+            if appState.showsCaptureHealthNotice && !inDetail {
+                CaptureHealthBanner()
+            }
+
             Group {
                 if appState.needsReconnect {
                     ReconnectView()
