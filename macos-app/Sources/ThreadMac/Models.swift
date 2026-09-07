@@ -205,8 +205,17 @@ struct CaptureHealth: Codable {
         let failed: Int
         let degraded: Bool
         var id: String { sensor }
-        /// "browser_extension" -> "your browser", etc. -- the user never sees the sensor name.
+        /// "browser_extension" -> "your browser", "native_accessibility:claude" -> "the Claude
+        /// app", etc. -- the user never sees the raw sensor key.
         var friendlyName: String {
+            if sensor.hasPrefix("native_accessibility:") {
+                switch sensor.dropFirst("native_accessibility:".count) {
+                case "cursor": return "the Cursor app"
+                case "claude": return "the Claude app"
+                case "chatgpt": return "the ChatGPT app"
+                default: return "a Mac app"
+                }
+            }
             switch sensor {
             case "browser_extension": return "your browser"
             case "native_accessibility": return "a Mac app"

@@ -22,14 +22,16 @@ struct AXMessageBlock: Equatable {
 /// Everything app-specific about reading a conversation out of one native app's AX tree. The
 /// generic sensor (`AXConversationSensor`) owns identity, ordering, incremental diffing, the
 /// streaming-tail hold, and change detection; an adapter only has to locate the message list and
-/// label its turns. "A generic AX sensor that happens to have Cursor as its first adapter."
+/// label its turns. Adding a native AI app is a new adapter, never an engine change.
 protocol AXConversationAdapter {
     /// Bundle identifiers this adapter claims. The first is the canonical one.
-    static var bundleIDs: [String] { get }
+    var bundleIDs: [String] { get }
+    /// The `Source` raw value for captures from this app -- "cursor" | "claude" | "chatgpt".
+    /// Also the per-app key in capture health, so one app's adapter breaking is visible on its own.
+    var source: String { get }
 
     /// The element whose subtree contains the on-screen message list, or nil if this tree has no
-    /// conversation visible right now. Narrowing to this before observing keeps notification noise
-    /// (and re-scan cost) down.
+    /// conversation visible right now.
     func conversationRoot(appRoot: AXNode) -> AXNode?
 
     /// The conversation's turns within `root`, oldest first. Empty when nothing message-shaped is
@@ -39,48 +41,91 @@ protocol AXConversationAdapter {
     /// A key that is stable while the user stays in one chat and changes when they switch to a
     /// different one. nil when it can't be determined (the sensor then holds its current key).
     func conversationKey(root: AXNode, appRoot: AXNode) -> String?
+
+    /// The message-composer element, for native continuation (writing a checkpoint back in). nil
+    /// when it can't be found. Optional -- default is nil.
+    func composerElement(appRoot: AXNode) -> AXNode?
 }
 
-// MARK: - Cursor
+extension AXConversationAdapter {
+    func composerElement(appRoot: AXNode) -> AXNode? { nil }
+}
 
-/// Reads a Cursor chat/composer pane through Accessibility.
+// MARK: - config-driven heuristic adapter
+
+/// The hint sets that make one `HeuristicAXAdapter` behave as the Cursor / Claude / ChatGPT
+/// adapter. Everything else -- tree walk, ancestor-hint propagation, block extraction, the
+/// alternation fallback, the virtualization-safe conversation key -- is shared.
+struct AXAdapterConfig {
+    let bundleIDs: [String]
+    let source: String
+    var userHints: [String]
+    var assistantHints: [String]
+    var chatContainerHints: [String]
+    var composerHints: [String] = [
+        "composer", "message", "send a message", "reply", "ask", "prompt", "type a message", "chat input",
+    ]
+    var containerRoles: Set<String> = ["AXScrollArea", "AXGroup", "AXWebArea", "AXList"]
+    var blockRoles: Set<String> = ["AXGroup", "AXStaticText", "AXTextArea", "AXWebArea", "AXCell"]
+    var composerRoles: Set<String> = ["AXTextArea", "AXTextField"]
+
+    static let cursor = AXAdapterConfig(
+        bundleIDs: ["com.todesktop.230313mzl4w4u92"],
+        source: "cursor",
+        userHints: ["user", "human", "you said", "your message", "prompt"],
+        assistantHints: ["assistant", "ai ", "ai:", "ai response", "response", "bot", "model", "cursor", "markdown"],
+        chatContainerHints: ["chat", "composer", "aichat", "conversation", "messages", "thread"]
+    )
+
+    static let claude = AXAdapterConfig(
+        bundleIDs: ["com.anthropic.claudefordesktop", "com.anthropic.claude"],
+        source: "claude",
+        userHints: ["user", "human", "you said", "your message"],
+        assistantHints: ["assistant", "claude", "claude responded", "ai response", "response", "model"],
+        chatContainerHints: ["chat", "conversation", "messages", "thread"]
+    )
+
+    static let chatgpt = AXAdapterConfig(
+        bundleIDs: ["com.openai.chat"],
+        source: "chatgpt",
+        userHints: ["user", "you said", "your message"],
+        assistantHints: ["assistant", "chatgpt", "chatgpt said", "gpt", "ai response", "response"],
+        chatContainerHints: ["chat", "conversation", "messages", "thread"]
+    )
+}
+
+/// Reads a native AI app's chat pane through Accessibility, driven by `AXAdapterConfig`.
 ///
-/// UNVERIFIED against a real Cursor build, on purpose and for the same reason `CursorBackfill` is:
-/// Cursor is an Electron app, its AX tree is a bridged DOM, and the exact roles / identifiers /
-/// nesting it exposes are undocumented and move between releases. So this matches on a broad set of
-/// hints and otherwise falls back to turn alternation, and it degrades to "found nothing" rather
-/// than emitting a confident wrong answer. The generic sensor's provisional/committed handling and
-/// the `medium` fidelity stamp on inferred roles are what make that safe.
-struct CursorAXAdapter: AXConversationAdapter {
-    static let bundleIDs = ["com.todesktop.230313mzl4w4u92"]
+/// UNVERIFIED against every one of these apps, on purpose and for the same reason `CursorBackfill`
+/// is: they are Electron / web-view apps, their AX trees are bridged DOM, and the exact roles /
+/// identifiers / nesting are undocumented and move between releases. So this matches on a broad
+/// set of hints and otherwise falls back to turn alternation, and it degrades to "found nothing"
+/// rather than a confident wrong answer. The generic sensor's provisional/committed handling and
+/// the `medium` fidelity stamp on inferred roles are what make that safe. Tune the hint sets
+/// against a real AX-tree dump (THREAD_AX_DUMP=1).
+struct HeuristicAXAdapter: AXConversationAdapter {
+    let config: AXAdapterConfig
 
-    /// Container roles a chat list plausibly lives in.
-    private let containerRoles: Set<String> = ["AXScrollArea", "AXGroup", "AXWebArea", "AXList"]
-    /// Roles a single rendered turn plausibly is.
-    private let blockRoles: Set<String> = ["AXGroup", "AXStaticText", "AXTextArea", "AXWebArea", "AXCell"]
-
-    private let userHints = ["user", "human", "you said", "your message", "prompt"]
-    private let assistantHints = ["assistant", "ai ", "ai:", "ai response", "response", "bot", "model", "cursor", "markdown"]
-    private let chatContainerHints = ["chat", "composer", "aichat", "conversation", "messages", "thread"]
+    var bundleIDs: [String] { config.bundleIDs }
+    var source: String { config.source }
 
     func conversationRoot(appRoot: AXNode) -> AXNode? {
         let all = appRoot.flattened()
 
         // First choice: a container whose own hints name it as the chat pane. One block is enough
-        // here -- a named container plus a message-shaped child is unambiguous, and it lets a
-        // conversation with a single turn so far (asked, not yet answered) be captured.
+        // -- a named container plus a message-shaped child is unambiguous, and it lets a
+        // conversation with a single turn so far be captured.
         let named = all.first { node in
-            containerRoles.contains(node.axRole)
-                && chatContainerHints.contains { node.axHints.contains($0) }
+            config.containerRoles.contains(node.axRole)
+                && config.chatContainerHints.contains { node.axHints.contains($0) }
                 && !blocks(in: node).isEmpty
         }
         if let named { return named }
 
-        // Otherwise: the container that yields the most message-shaped blocks (shallowest on a tie
-        // so we get the whole list, not one turn's inner group). Needs at least two -- without a
-        // name, one stray text block in a group is not enough to call it a conversation.
+        // Otherwise: the container that yields the most message-shaped blocks (shallowest on a
+        // tie so we get the whole list, not one turn's inner group). Needs at least two.
         var best: (node: AXNode, count: Int)?
-        for node in all where containerRoles.contains(node.axRole) {
+        for node in all where config.containerRoles.contains(node.axRole) {
             let c = blocks(in: node).count
             if c >= 2, best == nil || c > best!.count { best = (node, c) }
         }
@@ -88,12 +133,11 @@ struct CursorAXAdapter: AXConversationAdapter {
     }
 
     func messageBlocks(root: AXNode) -> [AXMessageBlock] {
-        let raw = blocks(in: root)
-        return raw.enumerated().map { index, block in
-            if let explicit = explicitRole(for: block) {
+        blocks(in: root).enumerated().map { index, block in
+            if let explicit = hintRoleOrNil(block.hints) {
                 return AXMessageBlock(role: explicit, text: block.text, roleConfidence: .explicit)
             }
-            // Cursor conversations open with a user turn; alternate from there.
+            // These conversations open with a user turn; alternate from there.
             return AXMessageBlock(
                 role: index.isMultiple(of: 2) ? "user" : "assistant",
                 text: block.text,
@@ -105,33 +149,34 @@ struct CursorAXAdapter: AXConversationAdapter {
     func conversationKey(root: AXNode, appRoot _: AXNode) -> String? {
         // Prefer a handle that does NOT move when the message list virtualizes: the pane's own
         // identifier, else its title. Only if neither exists, fall back to hashing the first
-        // visible turn -- and that fallback genuinely shifts when the top of the transcript
-        // scrolls out of the AX tree, which the sensor would read as a conversation switch.
+        // visible turn -- which genuinely shifts when the top of the transcript scrolls out.
         if let id = root.axIdentifier?.trimmingCharacters(in: .whitespaces), id.count > 3 {
             return AXText.shortHash(id)
         }
         if let title = root.axTitle?.trimmingCharacters(in: .whitespaces), !title.isEmpty {
             return AXText.shortHash(title)
         }
-        let blocks = self.blocks(in: root)
-        guard let first = blocks.first?.text, !first.isEmpty else { return nil }
+        guard let first = blocks(in: root).first?.text, !first.isEmpty else { return nil }
         return AXText.shortHash(AXText.normalize(first))
+    }
+
+    func composerElement(appRoot: AXNode) -> AXNode? {
+        appRoot.flattened().first { node in
+            config.composerRoles.contains(node.axRole)
+                && (config.composerHints.contains { node.axHints.contains($0) } || node.axRole == "AXTextArea")
+        }
     }
 
     // MARK: heuristic block extraction
 
     /// A candidate turn: `axText` present and non-trivial, a plausible block role, and NOT already
-    /// contained in a chosen ancestor (take the outermost coherent block, skip its inner text).
-    ///
-    /// `hints` for a block is its own identity attributes PLUS every ancestor's, joined -- Cursor
-    /// (Electron) hangs the role hint on a wrapper `AXGroup` while the text lives on a nested
-    /// `AXStaticText`, so a leaf-only read would miss every role.
+    /// inside a chosen ancestor (take the outermost coherent block). `hints` is the block's own
+    /// identity attributes PLUS every ancestor's -- these apps hang the role hint on a wrapper
+    /// while the text lives on a nested leaf.
     private func blocks(in root: AXNode) -> [(node: AXNode, text: String, hints: String)] {
         var out: [(node: AXNode, text: String, hints: String)] = []
         var cutoff = -1
 
-        // Pre-order walk carrying accumulated ancestor hints. Push children reversed so LIFO
-        // yields natural order.
         var ordered: [(node: AXNode, depth: Int, hints: String)] = []
         var stack: [(node: AXNode, depth: Int, hints: String)] = [(root, 0, root.axHints)]
         while let (n, d, h) = stack.popLast() {
@@ -145,25 +190,35 @@ struct CursorAXAdapter: AXConversationAdapter {
         for (node, depth, hints) in ordered {
             if cutoff >= 0, depth > cutoff { continue }
             cutoff = -1
-            guard blockRoles.contains(node.axRole), let text = node.axText else { continue }
+            guard config.blockRoles.contains(node.axRole), let text = node.axText else { continue }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             let substantial = trimmed.count >= 12 || trimmed.contains(" ")
-            let hinted = !hintRole(hints).isEmpty
+            let hinted = hintRoleOrNil(hints) != nil
             guard !trimmed.isEmpty, substantial || hinted else { continue }
             out.append((node, trimmed, hints))
-            cutoff = depth  // skip this block's descendants
+            cutoff = depth
         }
         return out
     }
 
-    private func explicitRole(for block: (node: AXNode, text: String, hints: String)) -> String? {
-        let r = hintRole(block.hints)
-        return r.isEmpty ? nil : r
+    private func hintRoleOrNil(_ hints: String) -> String? {
+        if config.userHints.contains(where: hints.contains) { return "user" }
+        if config.assistantHints.contains(where: hints.contains) { return "assistant" }
+        return nil
     }
+}
 
-    private func hintRole(_ hints: String) -> String {
-        if userHints.contains(where: hints.contains) { return "user" }
-        if assistantHints.contains(where: hints.contains) { return "assistant" }
-        return ""
+// MARK: - registry
+
+/// The set of native AI apps Thread can read. Adding one is a line here plus a config above.
+enum AXAdapters {
+    static let cursor = HeuristicAXAdapter(config: .cursor)
+    static let claude = HeuristicAXAdapter(config: .claude)
+    static let chatgpt = HeuristicAXAdapter(config: .chatgpt)
+
+    static let all: [any AXConversationAdapter] = [cursor, claude, chatgpt]
+
+    static func forBundleID(_ id: String) -> (any AXConversationAdapter)? {
+        all.first { $0.bundleIDs.contains(id) }
     }
 }

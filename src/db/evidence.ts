@@ -60,13 +60,14 @@ export function recordEvidence(
   });
   db.prepare(
     `INSERT INTO evidence
-       (id, conversation_id, sensor, observed_at, observed_count, accepted_count,
+       (id, conversation_id, sensor, source, observed_at, observed_count, accepted_count,
         integrity_ok, integrity_issues, identity, payload)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     obs.conversationId,
     obs.sensor,
+    obs.source ?? null,
     obs.observedAt ?? new Date().toISOString(),
     result.integrity.observed,
     result.integrity.accepted,
@@ -165,17 +166,21 @@ const HEALTH_DEGRADED_RATE = 0.5;
  */
 export function captureHealthSummary(db: Database, windowDays = 7, now = new Date()): CaptureHealthSummary {
   const since = new Date(now.getTime() - windowDays * 86_400_000).toISOString();
+  // The unit that can break on its own: the extension is one thing, but native AX capture is
+  // per-app (the Cursor adapter can drift while Claude's works). So native rows key on their
+  // source app, everything else on the sensor.
+  const KEY = "CASE WHEN sensor = 'native_accessibility' THEN 'native_accessibility:' || COALESCE(source, '?') ELSE sensor END";
   const rows = db
     .query(
-      `SELECT sensor,
+      `SELECT ${KEY} AS health_key,
               COUNT(*) AS observations,
               SUM(CASE WHEN integrity_ok = 0 THEN 1 ELSE 0 END) AS failed,
               MAX(CASE WHEN integrity_ok = 0 THEN observed_at END) AS last_failure_at
        FROM evidence WHERE observed_at >= ?
-       GROUP BY sensor ORDER BY sensor ASC`,
+       GROUP BY health_key ORDER BY health_key ASC`,
     )
     .all(since) as {
-    sensor: string;
+    health_key: string;
     observations: number;
     failed: number;
     last_failure_at: string | null;
@@ -186,16 +191,16 @@ export function captureHealthSummary(db: Database, windowDays = 7, now = new Dat
     if (r.last_failure_at) {
       const issueRow = db
         .query(
-          "SELECT integrity_issues FROM evidence WHERE sensor = ? AND observed_at = ? AND integrity_ok = 0 LIMIT 1",
+          `SELECT integrity_issues FROM evidence WHERE ${KEY} = ? AND observed_at = ? AND integrity_ok = 0 LIMIT 1`,
         )
-        .get(r.sensor, r.last_failure_at) as { integrity_issues: string | null } | null;
+        .get(r.health_key, r.last_failure_at) as { integrity_issues: string | null } | null;
       if (issueRow?.integrity_issues) {
         lastFailureIssues = (JSON.parse(issueRow.integrity_issues) as { code: string }[]).map((i) => i.code);
       }
     }
     const failureRate = r.observations ? r.failed / r.observations : 0;
     return {
-      sensor: r.sensor,
+      sensor: r.health_key,
       observations: r.observations,
       failed: r.failed,
       failureRate,
