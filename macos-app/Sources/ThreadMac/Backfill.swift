@@ -195,8 +195,9 @@ enum Backfill {
     /// it and send each conversation to `/v1/conversations` (the backend dedupes on message id).
     /// Same progress + 402 handling as `run`.
     ///
-    /// `startingAt` resumes an interrupted run. `readConversations()` reads in `ORDER BY key`, so
-    /// the sequence is stable across launches and skipping the first N lands in the same place.
+    /// `startingAt` resumes an interrupted run. `readConversations()` returns oldest-first by
+    /// `lastUpdatedAt` (composerId tie-break), so the sequence is stable across launches and
+    /// skipping the first N lands in the same place.
     static func runCursor(
         client: APIClient,
         progress: @escaping (BackfillProgress) -> Void,
@@ -205,22 +206,21 @@ enum Backfill {
         let convs = CursorBackfill.readConversations()
         guard !convs.isEmpty else { throw BackfillError.emptyExport }
 
-        let iso = ISO8601DateFormatter()
         var done = max(0, min(startingAt, convs.count))
         var lastIdeaCount = 0
         for c in convs.dropFirst(done) {
-            let base = Date()
-            let messages = c.messages.enumerated().map { i, m in
-                (id: "\(c.id)::\(i)", role: m.role, text: m.text,
-                 createdAt: iso.string(from: base.addingTimeInterval(Double(i))))
+            // Real bubble ids + real per-turn timestamps from the local store -- so a message
+            // dedupes identically whether it arrived via this backfill or a later live read.
+            let messages = c.messages.map {
+                (id: $0.bubbleId, role: $0.role, text: $0.text, createdAt: $0.createdAt)
             }
             do {
-                // Heuristic read of Cursor's local state.vscdb -- same mechanism as the
-                // desktop agent, so stamp it that way rather than letting it default to
-                // browser_extension/high.
+                // Structured read of Cursor's local state.vscdb (typed roles, ordered headers) --
+                // high fidelity, not a scrape. Still goes through the evidence -> canonical ->
+                // engine pipeline; this never creates an idea directly.
                 lastIdeaCount = try await client.ingestConversation(
                     id: c.id, source: "cursor", messages: messages,
-                    capture: (method: "desktop_agent", fidelity: "medium")
+                    capture: (method: "desktop_agent", fidelity: "high")
                 ).ideaCount
             } catch let APIError.http(status, _) where status == 402 {
                 return (ImportSummary(newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: lastIdeaCount), done)
