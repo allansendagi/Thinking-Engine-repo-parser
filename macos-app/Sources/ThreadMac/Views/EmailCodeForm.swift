@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Two-step email + 6-digit code form. Used for signing this Mac in to an existing account
-/// (PairingView) and for claiming an anonymous account with an email (SettingsView).
+/// (WelcomeView / ReconnectView) and for claiming an anonymous account with an email (SettingsView).
 struct EmailCodeForm: View {
     @EnvironmentObject var appState: AppState
 

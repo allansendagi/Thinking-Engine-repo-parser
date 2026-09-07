@@ -223,6 +223,26 @@ struct CaptureHealth: Codable {
     var degradedSensors: [Sensor] { sensors.filter(\.degraded) }
 }
 
+/// Whether the first-run "Thread is ready — connect your browser" screen should be up. Pure so
+/// the condition is unit-tested.
+///
+/// `everConnectedBrowser` is the durable signal (a persisted "a browser has pinged this Mac"
+/// flag, not the live 90s freshness check) that keeps an established account off this screen on a
+/// cold launch, before `thinkingState` has been fetched and while `ideaCount` still reads 0. An
+/// established account with no readable snapshot lands in the reconnect flow instead, which
+/// `hasReconnect` already excludes.
+func shouldShowWelcome(
+    isPaired: Bool,
+    hasReconnect: Bool,
+    welcomeDismissed: Bool,
+    everConnectedBrowser: Bool,
+    ideaCount: Int,
+    pendingCaptureCount: Int
+) -> Bool {
+    guard isPaired, !hasReconnect, !welcomeDismissed else { return false }
+    return !everConnectedBrowser && ideaCount == 0 && pendingCaptureCount == 0
+}
+
 /// The banner line for a capture-health verdict, or nil when nothing needs saying. Pure so the
 /// wording is unit-tested without standing up AppState. A degraded sensor (Thread can't read a
 /// tool at all) takes priority over thinking that's merely held aside unresolved. `detail` is

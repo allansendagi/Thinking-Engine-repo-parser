@@ -525,6 +525,41 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(true, forKey: onboardingKey)
     }
 
+    // MARK: - First run
+
+    /// The account is created automatically and capture on a native Mac app needs nothing. The
+    /// one real setup action for a browser user is connecting the browser -- so that's the whole
+    /// first-run screen. It clears itself the moment a browser connects, or when dismissed.
+    private let welcomeKey = "thread.welcomeDismissed"
+    @Published var welcomeDismissed = UserDefaults.standard.bool(forKey: "thread.welcomeDismissed")
+
+    func dismissWelcome() {
+        welcomeDismissed = true
+        UserDefaults.standard.set(true, forKey: welcomeKey)
+        // Explicitly choosing "just the Mac apps" also means: stop offering the history backfill.
+        // (Connecting a browser clears the welcome the other way and leaves that offer standing.)
+        dismissOnboarding()
+    }
+
+    var showsWelcome: Bool {
+        shouldShowWelcome(
+            isPaired: isPaired,
+            hasReconnect: reconnect != nil,
+            welcomeDismissed: welcomeDismissed,
+            // Durable: has a browser ever paired with this Mac, not just "pinged in the last 90s".
+            everConnectedBrowser: lastExtensionPing != nil,
+            ideaCount: thinkingState?.currentIdeas.count ?? 0,
+            pendingCaptureCount: pendingCaptures.count
+        )
+    }
+
+    /// Open the extension's install page and hold the pairing window open so a just-installed
+    /// extension pairs with no further clicks.
+    func connectBrowser() {
+        if let url = Self.browserExtensionURL { NSWorkspace.shared.open(url) }
+        openPairingWindow(seconds: 300)
+    }
+
     // MARK: - Historical backfill ("Recover my thinking")
 
     enum BackfillUIState: Equatable {
