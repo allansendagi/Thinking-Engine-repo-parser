@@ -1253,6 +1253,8 @@ final class AppState: ObservableObject {
         searchResults = []
         reconnect = nil
         lastExtensionHandshake = nil
+        // (The Cursor local-store watch keys its "already sent" set by account id and re-seeds on
+        // a mismatch, so it needs no explicit teardown here.)
         // `lastExtensionPing` is deliberately NOT cleared: if the same browser is still running
         // it re-confirms within a minute, so signing out and back in doesn't force a manual
         // "Connect a browser". A ping for a *different* account is rejected in noteExtensionPing,

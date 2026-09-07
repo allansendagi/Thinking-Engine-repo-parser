@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var servicesProvider: ThreadServicesProvider?
     private var ambientNudge: AmbientNudge?
     private var axSensor: AXSensorRunner?
+    private var cursorWatch: CursorLiveWatch?
     private let setupNotifier = SetupNotifier()
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
     private var pendingURLs: [URL] = []
@@ -82,6 +83,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Tell the user exactly what's blocking setup (permission, account, a broken sensor) via
         // a macOS notification with the literal fix -- so a menu-bar app never leaves them guessing.
         setupNotifier.start()
+
+        // Continuous capture from Cursor's local store (state.vscdb). Native AX read is dead for
+        // Cursor, but its structured local store isn't -- this is the shipped Cursor read path.
+        // Seeds silently on first paired run; only new turns from then on. History = the explicit
+        // "Recover my thinking" backfill.
+        let watch = CursorLiveWatch(
+            client: { [appState] in appState.client },
+            paired: { [weak appState] in appState?.isPaired ?? false }
+        )
+        watch.start()
+        cursorWatch = watch
 
         // Native AX capture across Cursor / Claude / ChatGPT. OFF unless THREAD_AX_SENSOR=1 --
         // still a measurement rig ("does AX-only capture actually work"), not a shipped path,
