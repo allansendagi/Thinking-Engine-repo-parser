@@ -45,6 +45,7 @@ import {
   loadIdeas,
 } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
+import { captureHealthSummary } from "../db/evidence";
 import { parsePastedConversation } from "../import/pasteParser";
 import { importIntoDb, parseExportFile } from "../import/run";
 
@@ -755,6 +756,16 @@ export function createRequestHandler(
         const sinceDaysParam = url.searchParams.get("sinceDays");
         const sinceDays = sinceDaysParam ? Number(sinceDaysParam) : undefined;
         return json(getRecentChanges(db, sinceDays));
+      }
+
+      // Per-user capture health, derived from the evidence store: which sensors are producing
+      // structurally sound observations and which are degraded. A degraded sensor otherwise
+      // fails silently -- every observation parks provisional, no ideas appear, no error. The
+      // Mac app reads this to show "some recent thinking couldn't be confidently connected".
+      if (req.method === "GET" && pathname === "/v1/capture-health") {
+        const daysParam = Number(url.searchParams.get("days") ?? "7");
+        const windowDays = Number.isFinite(daysParam) && daysParam > 0 && daysParam <= 90 ? daysParam : 7;
+        return json(captureHealthSummary(db, windowDays));
       }
 
       if (req.method === "POST" && pathname === "/v1/continue") {

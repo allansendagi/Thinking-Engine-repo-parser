@@ -88,6 +88,50 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(wrongToken.status).toBe(401);
   });
 
+  test("GET /v1/capture-health: authed, per-user, reports a degraded sensor from the evidence store", async () => {
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([]),
+      reasoning: new FakeProvider([]),
+    });
+    expect((await handler(new Request("http://x/v1/capture-health"))).status).toBe(401);
+
+    const { userId, token } = await createTestUser(handler);
+    const authHeader = { authorization: `Bearer ${userId}:${token}` };
+    const post = (messages: unknown[]) =>
+      handler(
+        new Request("http://x/v1/conversations", {
+          method: "POST",
+          headers: { ...authHeader, "content-type": "application/json" },
+          body: JSON.stringify({
+            conversationId: "conv_h",
+            source: "fixture",
+            messages,
+            capture: { method: "browser_extension", fidelity: "high" },
+          }),
+        }),
+      );
+
+    // Four structurally broken observations from the extension (a blank-id turn each time) ->
+    // every one parks provisional, the sensor is failing 100% of its recorded observations.
+    for (let i = 0; i < 4; i++) {
+      await post([
+        { id: "", role: "user", text: "dropped", createdAt: "2026-09-07T00:00:00.000Z" },
+        { id: `m${i}`, role: "user", text: `turn ${i}`, createdAt: `2026-09-07T00:0${i}:00.000Z` },
+      ]);
+    }
+
+    const res = await handler(new Request("http://x/v1/capture-health", { headers: authHeader }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      healthy: boolean;
+      sensors: { sensor: string; failed: number; degraded: boolean; lastFailureIssues: string[] }[];
+    };
+    expect(body.healthy).toBe(false);
+    const ext = body.sensors.find((s) => s.sensor === "browser_extension");
+    expect(ext?.degraded).toBe(true);
+    expect(ext?.lastFailureIssues).toContain("empty_id");
+  });
+
   test("create user -> ingest a conversation -> read it back via the API", async () => {
     const handler = createRequestHandler({
       extraction: new FakeProvider([
