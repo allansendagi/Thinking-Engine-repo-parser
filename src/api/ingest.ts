@@ -123,6 +123,12 @@ export async function ingestConversation(
   // re-extract them -- they never entered the idea graph), and drop provisional rows this
   // full observation no longer lists (transient sensor noise). Committed rows are never GC'd --
   // a partial flush must not erase confirmed history.
+  //
+  // Promotion matches on id alone. That is safe for every current sensor: the extension uses
+  // stable DOM ids, /v1/paste defaults to a random conversationId (so its positional
+  // `paste::<i>` ids never collide across two different pastes). If a client is ever added that
+  // POSTs /v1/paste with a stable conversationId AND reuses it for different content, promotion
+  // would need to compare text too.
   const promoting = new Set<string>();
   let retracted = 0;
   if (observationCommitted) {

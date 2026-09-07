@@ -208,22 +208,34 @@ export function loadCanonicalStatuses(
 }
 
 /** Drop provisional rows for a conversation that a newer clean full observation no longer lists
- *  -- they were transient sensor noise. Provisional rows never have cognitive events, so this is
- *  a leaf delete. Full-resend semantics; revisit when the delta/reconciliation protocol lands. */
+ *  -- they were transient sensor noise. By design a provisional row is a leaf: it is never
+ *  extracted, so it has no cognitive event / evolution step / decision / discard pointing at it.
+ *  The DELETE is still guarded against a dependent row (a foreign-key error here would otherwise
+ *  500 the whole ingest for housekeeping) -- if the invariant is ever violated somewhere, skip
+ *  the row and log rather than fail. Full-resend semantics; revisit at the reconciliation
+ *  milestone. */
 export function dropRetractedProvisional(
   db: Database,
   conversationId: string,
   stillPresentIds: string[],
 ): number {
   const placeholders = stillPresentIds.map(() => "?").join(",");
-  const res = db
-    .query(
-      `DELETE FROM canonical_events
-       WHERE conversation_id = ? AND status = 'provisional'
-       ${stillPresentIds.length ? `AND id NOT IN (${placeholders})` : ""}`,
-    )
-    .run(conversationId, ...stillPresentIds);
-  return res.changes;
+  try {
+    const res = db
+      .query(
+        `DELETE FROM canonical_events
+         WHERE conversation_id = ? AND status = 'provisional'
+         ${stillPresentIds.length ? `AND id NOT IN (${placeholders})` : ""}`,
+      )
+      .run(conversationId, ...stillPresentIds);
+    return res.changes;
+  } catch (e) {
+    console.error(
+      `[Thread] retracted-provisional GC skipped for ${conversationId} (a provisional row has a dependent -- invariant violation):`,
+      e,
+    );
+    return 0;
+  }
 }
 
 export interface ConversationSummary {
