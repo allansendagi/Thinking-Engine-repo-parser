@@ -333,37 +333,48 @@ final class AXAdapterRegistryTests: XCTestCase {
         XCTAssertEqual(AXAdapters.claude.messageBlocks(root: root).map(\.role), ["user", "assistant", "user"])
     }
 
-    /// ChatGPT's desktop tree, faithful to a real AX dump 2026-09-07: every container is a
-    /// hint-less `AXGroup`, each user turn is preceded by an `AXHeading` "You said:", the message
-    /// text is an `AXStaticText` a few groups below, timestamps + "Copy message" sit between, and
-    /// the composer `AXTextArea` ends the transcript. The dump was quota-blocked so the assistant
-    /// slots held "You've hit your usage limit…" -- the USER anchor is what's verified here; the
-    /// adapter is `extractionUnverified` until a dump with real replies confirms the rest.
-    func testChatGPTUserTurnsAreHeadingAnchored() {
-        func heading() -> FakeAXNode {
-            FakeAXNode("AXHeading", description: "You said:",
-                       children: [FakeAXNode("AXStaticText", value: "You said:")])
+    /// ChatGPT's desktop tree, faithful to real AX dumps 2026-09-07: hint-less `AXGroup`
+    /// containers; each turn preceded by an `AXHeading` ("You said:" / "ChatGPT said:") whose
+    /// text is also duplicated in a child `AXStaticText`; the assistant reply shattered into a
+    /// leaf per styled span; action buttons ("Copy", "Regenerate response") after the content;
+    /// the composer `AXTextArea` ending the transcript. Adapter stays `extractionUnverified`
+    /// until streaming/settle behaviour is confirmed against more dumps.
+    func testChatGPTBothRolesAreHeadingAnchoredAndRunsAreJoined() {
+        func heading(_ label: String) -> FakeAXNode {
+            FakeAXNode("AXHeading", description: label,
+                       children: [FakeAXNode("AXStaticText", value: label)])
         }
-        func leaf(_ t: String) -> FakeAXNode {
-            FakeAXNode("AXGroup", children: [FakeAXNode("AXGroup", children: [FakeAXNode("AXStaticText", value: t)])])
-        }
+        func run(_ t: String) -> FakeAXNode { FakeAXNode("AXStaticText", value: t) }
+        func span(_ t: String) -> FakeAXNode { FakeAXNode("AXGroup", children: [FakeAXNode("AXStaticText", value: t)]) }
+
         let web = FakeAXNode("AXWebArea", description: "ChatGPT", children: [
-            FakeAXNode("AXStaticText", value: "NOMOS Strategy Plan"),   // sidebar -- above turn 1, ignored
+            run("NOMOS Strategy Plan"),                       // sidebar -- above turn 1, ignored
             FakeAXNode("AXButton", description: "New chat"),
 
-            heading(),
-            leaf("how should computable authority be verified"),
-            FakeAXNode("AXStaticText", value: "3:00 PM"),
+            heading("You said:"),
+            FakeAXNode("AXGroup", children: [FakeAXNode("AXGroup", children: [run("why am out of messages")])]),
             FakeAXNode("AXButton", description: "Copy message"),
-            leaf("You've hit your usage limit. Upgrade your plan."),
+            FakeAXNode("AXButton", description: "Edit message"),
 
-            heading(),
-            leaf("is that all"),
-            FakeAXNode("AXStaticText", value: "3:19 PM"),
-            leaf("You've hit your usage limit. Upgrade your plan."),
+            heading("ChatGPT said:"),
+            FakeAXNode("AXGroup", children: [
+                run("If you mean"), span("you’ve hit ChatGPT’s message limit"),
+                run(", it’s most likely because you’re on the"), span("Free plan"),
+                run(", which resets after a while."),
+            ]),
+            FakeAXNode("AXButton", description: "Copy"),               // real chrome is AXButton --
+            FakeAXNode("AXButton", description: "Regenerate response"),// invisible to the walk anyway
+            FakeAXNode("AXButton", description: "Rate response"),
 
-            FakeAXNode("AXTextArea", value: "", description: "Message ChatGPT"),   // composer ends the transcript
-            FakeAXNode("AXStaticText", value: "text past the composer must be ignored"),
+            heading("You said:"),
+            FakeAXNode("AXGroup", children: [run("does this actually work")]),
+
+            // the attachment-limit banner sits between the last turn and the composer
+            heading("You've reached the limit for file attachments"),
+            run("Attachments are unavailable until usage resets at 4:00 PM"),
+
+            FakeAXNode("AXTextArea", value: "", description: "Message ChatGPT"),
+            run("text past the composer must be ignored"),
         ])
         let app = FakeAXNode("AXApplication", children: [FakeAXNode("AXWindow", children: [web])])
 
@@ -372,18 +383,39 @@ final class AXAdapterRegistryTests: XCTestCase {
         XCTAssertEqual((root as? FakeAXNode)?.axRole, "AXWebArea")
         let blocks = adapter.messageBlocks(root: root!)
 
-        XCTAssertEqual(blocks.map(\.role), ["user", "assistant", "user", "assistant"])
-        XCTAssertEqual(blocks[0].text, "how should computable authority be verified")
-        XCTAssertEqual(blocks[2].text, "is that all")
-        XCTAssertTrue(blocks.allSatisfy { $0.roleConfidence == .explicit })
+        XCTAssertEqual(blocks.map(\.role), ["user", "assistant", "user"])
+        XCTAssertEqual(blocks[0].text, "why am out of messages")
+        XCTAssertEqual(blocks[1].text,
+                       "If you mean you’ve hit ChatGPT’s message limit, it’s most likely because you’re on the Free plan, which resets after a while.")
+        XCTAssertEqual(blocks[2].text, "does this actually work")
+        XCTAssertFalse(blocks.contains { $0.text.contains("ChatGPT said:") })          // heading text not leaked
+        XCTAssertFalse(blocks.contains { $0.text.lowercased().contains("attachments are unavailable") })
         XCTAssertFalse(blocks.contains { $0.text.contains("past the composer") })
-        // key is derived from the first USER turn -- stable regardless of assistant-side splitting
-        XCTAssertEqual(adapter.conversationKey(root: root!, appRoot: app),
-                       adapter.conversationKey(root: root!, appRoot: app))
+        XCTAssertTrue(blocks.allSatisfy { $0.roleConfidence == .explicit })
         XCTAssertNotNil(adapter.conversationKey(root: root!, appRoot: app))
     }
 
-    func testChatGPTAdapterIsMeasurementOnlyUntilAssistantSideIsVerified() {
+    func testChatGPTDropsAStillStreamingTrailingTurn() {
+        func heading(_ label: String) -> FakeAXNode {
+            FakeAXNode("AXHeading", description: label, children: [FakeAXNode("AXStaticText", value: label)])
+        }
+        let web = FakeAXNode("AXWebArea", description: "ChatGPT", children: [
+            heading("You said:"),
+            FakeAXNode("AXGroup", children: [FakeAXNode("AXStaticText", value: "kick it off")]),
+            heading("ChatGPT said:"),
+            FakeAXNode("AXStaticText", value: "ChatGPT is responding"),
+            FakeAXNode("AXGroup", children: [FakeAXNode("AXStaticText", value: "partial answer so f")]),
+            FakeAXNode("AXTextArea", value: "", description: "Message ChatGPT"),
+        ])
+        let app = FakeAXNode("AXApplication", children: [FakeAXNode("AXWindow", children: [web])])
+        let blocks = AXAdapters.chatgpt.messageBlocks(root: AXAdapters.chatgpt.conversationRoot(appRoot: app)!)
+        XCTAssertEqual(blocks.map(\.role), ["user"])   // the mid-stream assistant turn is held back
+    }
+
+    /// ChatGPT native READ is permanently measurement-only -- unstable streamed content defeats
+    /// content-hashed dedup and the tree carries no conversation id. Read is served by the
+    /// browser extension; the heading-anchored code below is kept only to keep dumps legible.
+    func testChatGPTNativeReadIsMeasurementOnly() {
         XCTAssertTrue(AXAdapters.chatgpt.extractionUnverified)
         XCTAssertFalse(AXAdapters.cursor.extractionUnverified)
         XCTAssertFalse(AXAdapters.claude.extractionUnverified)
