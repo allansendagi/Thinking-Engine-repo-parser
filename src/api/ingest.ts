@@ -3,6 +3,7 @@ import type { CanonicalEvent, CaptureProvenance, Role } from "../types";
 import {
   dropRetractedProvisional,
   loadCanonicalStatuses,
+  loadConversationFingerprints,
   loadIdeas,
 } from "../db/queries";
 import {
@@ -13,7 +14,23 @@ import {
 } from "../state/pipeline";
 import { replayDiscardedEvents } from "../state/replayDiscarded";
 import { canonicalize, type IntegrityIssue, type RawObservation } from "../state/canonicalize";
+import {
+  resolveConversationIdentity,
+  type ConversationIdentity,
+  type IdentityConflict,
+  type IdentityStatus,
+} from "../state/resolveConversationIdentity";
 import { recordEvidence } from "../db/evidence";
+
+/**
+ * How many COMMITTED events a conversation needs before identity resolution stops re-running on
+ * every flush. Below this, each observation is still checked -- a fork feeds in turn by turn, and
+ * its first turn ("let me continue our earlier chat about X") is too short to trip the strong
+ * fingerprint match; only once it has echoed enough of the parent's verbatim content does the
+ * contradiction show. Above this, the conversation has established its own identity (a fork could
+ * no longer masquerade as it) and the per-flush fingerprint scan is pure cost.
+ */
+const IDENTITY_SETTLE_MIN_COMMITTED = 5;
 
 export interface IncomingMessage {
   id: string;
@@ -69,6 +86,14 @@ export interface IngestResult {
   promotedEvents: number;
   /** Provisional rows dropped because a newer clean full observation no longer listed them. */
   retractedProvisional: number;
+  /**
+   * Conversation-identity verdict for THIS observation. `unresolved` means a strong lower-tier
+   * contradiction (content fingerprint points at a different conversation than the sensor's id)
+   * -- the events are parked provisional and attached to nothing. See resolveConversationIdentity.
+   */
+  identityStatus: IdentityStatus;
+  /** Identity contradictions found -- a `strong_content_mismatch` is what forces `unresolved`. */
+  identityConflicts: IdentityConflict[];
 }
 
 /**
@@ -93,10 +118,17 @@ export async function ingestConversation(
     provisionalEvents: 0,
     promotedEvents: 0,
     retractedProvisional: 0,
+    identityConflicts: [] as IdentityConflict[],
   };
 
   if (input.messages.length === 0) {
-    return { ...zeros, ideaCount: existingIdeaCount(), integrityOk: true, integrityIssues: [] };
+    return {
+      ...zeros,
+      ideaCount: existingIdeaCount(),
+      integrityOk: true,
+      integrityIssues: [],
+      identityStatus: "resolved",
+    };
   }
 
   // Evidence -> canonical events. A clean observation canonicalizes to exactly the same events a
@@ -113,10 +145,43 @@ export async function ingestConversation(
     sourceUrl: input.sourceUrl ?? null,
     capture: input.capture ?? null,
   };
-  const { events: allEvents, integrity } = canonicalize(obs);
-  const observationCommitted = integrity.status === "committed";
+  const { events: canonEvents, integrity } = canonicalize(obs);
 
   const priorStatus = loadCanonicalStatuses(db, input.conversationId);
+
+  // Conversation identity. Higher-tier evidence (the sensor's id / the URL) is authoritative; a
+  // STRONG lower-tier contradiction -- the content fingerprint strongly matches a DIFFERENT
+  // conversation -- quarantines the observation as `unresolved` rather than overriding identity.
+  //
+  // Identity keeps being re-checked until the conversation has IDENTITY_SETTLE_MIN_COMMITTED
+  // committed events (a fork reveals itself over its first few turns, not on turn one). Past that
+  // the conversation owns its identity and the per-flush fingerprint scan is skipped -- the
+  // fabricated verdict still carries the one honest claim (platform_id -> this id) so an evidence
+  // row written afterwards stays auditable rather than recording `claims: []`.
+  const committedCount = [...priorStatus.values()].filter((s) => s === "committed").length;
+  const identitySettled = committedCount >= IDENTITY_SETTLE_MIN_COMMITTED;
+  const identity: ConversationIdentity = identitySettled
+    ? {
+        status: "resolved",
+        canonicalId: input.conversationId,
+        authority: "platform_id",
+        claims: [{ authority: "platform_id", conversationId: input.conversationId, strength: 1 }],
+        conflicts: [],
+      }
+    : resolveConversationIdentity(obs, loadConversationFingerprints(db));
+  const identityUnresolved = identity.status === "unresolved";
+  // Force provisional on an unresolved observation -- but never downgrade an event that a prior
+  // clean observation already committed (M2 invariant: a partial/late signal must not erase
+  // confirmed history). A late-emerging conflict quarantines only the NEW events and records why.
+  const allEvents = identityUnresolved
+    ? canonEvents.map((e) =>
+        priorStatus.get(e.id) === "committed" ? e : { ...e, status: "provisional" as const },
+      )
+    : canonEvents;
+
+  // The observation only corroborates (promotes, GCs) when it is trustworthy on BOTH axes.
+  const observationCommitted = integrity.status === "committed" && !identityUnresolved;
+
   const newToCanonical = new Set(allEvents.filter((e) => !priorStatus.has(e.id)).map((e) => e.id));
 
   // A clean observation corroborates: promote any of its events that are stored provisional (and
@@ -143,11 +208,11 @@ export async function ingestConversation(
     }
   }
 
-  // Record the observation when it advanced, promoted, or failed structure validation. A clean
-  // no-op resend carries no signal.
-  if (newToCanonical.size > 0 || promoting.size > 0 || !integrity.ok) {
+  // Record the observation when it advanced, promoted, failed structure validation, or came back
+  // identity-unresolved. A clean no-op resend carries no signal.
+  if (newToCanonical.size > 0 || promoting.size > 0 || !integrity.ok || identityUnresolved) {
     const newMessages = input.messages.filter((m) => newToCanonical.has(m.id));
-    recordEvidence(db, obs, { events: allEvents, integrity }, newMessages);
+    recordEvidence(db, obs, { events: allEvents, integrity }, newMessages, identity);
   }
 
   const provisionalParked = allEvents.filter(
@@ -175,6 +240,8 @@ export async function ingestConversation(
       integrityIssues: integrity.issues,
       provisionalEvents: provisionalParked,
       retractedProvisional: retracted,
+      identityStatus: identity.status,
+      identityConflicts: identity.conflicts,
     };
   }
 
@@ -199,5 +266,7 @@ export async function ingestConversation(
     provisionalEvents: provisionalParked,
     promotedEvents: promoting.size,
     retractedProvisional: retracted,
+    identityStatus: identity.status,
+    identityConflicts: identity.conflicts,
   };
 }

@@ -531,3 +531,147 @@ describe("provisional / committed (THREAD.md §17 -- probabilistic capture, dete
     expect(loadCanonicalEvents(db).map((e) => e.id).sort()).toEqual(["m1", "m2"]);
   });
 });
+
+describe("conversation identity (THREAD.md §9, §17 -- a wrong merge is worse than a missed merge)", () => {
+  const LINES = [
+    "Capture should be treated as a data-integrity subsystem, not an ingestion layer.",
+    "Evidence, canonical event, and thinking event are three epistemic levels that must not blur.",
+    "A shaky observation informs Thread but cannot silently rewrite durable state.",
+  ];
+  const ideaProviders = (statement: string, sourceId: string) => ({
+    extraction: new FakeProvider([
+      extractionResponse([
+        { type: "new_idea", statement, confidence: 0.9, source_event_id: sourceId, evidence_quote: statement.slice(0, 12) },
+      ]),
+    ]),
+    reasoning: new FakeProvider([]),
+  });
+  const noExtraction = () => ({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+  // Ids are globally unique in reality (DOM ids, paste uuids); namespace them per conversation so
+  // an INSERT OR REPLACE for one conversation can't clobber another's rows.
+  const msgs = (prefix: string, texts: string[]) =>
+    texts.map((t, i) => ({ id: `${prefix}_x${i}`, role: (i % 2 ? "assistant" : "user") as "user" | "assistant", text: t, createdAt: `2026-09-07T00:0${i}:00.000Z` }));
+
+  test("an observation whose content strongly matches a DIFFERENT existing conversation is quarantined UNRESOLVED", async () => {
+    const db = openDb(":memory:");
+
+    // Establish conversation A.
+    await ingestConversation(
+      db,
+      { conversationId: "conv_A", source: "fixture", messages: msgs("A", LINES), capture: { method: "browser_extension", fidelity: "high" } },
+      ideaProviders(LINES[0]!, "A_x0"),
+    );
+    expect(loadIdeas(db)).toHaveLength(1);
+
+    // A "new" conversation (fresh platform id) that is verbatim the same turns -- a re-paste / fork.
+    // Providers must NOT be called: an unresolved observation never reaches extraction.
+    const res = await ingestConversation(
+      db,
+      { conversationId: "conv_FORK", source: "fixture", messages: msgs("FORK", LINES), capture: { method: "browser_extension", fidelity: "high" } },
+      noExtraction(),
+    );
+
+    expect(res.identityStatus).toBe("unresolved");
+    expect(res.identityConflicts.map((c) => c.type)).toContain("strong_content_mismatch");
+    expect(res.provisionalEvents).toBe(3);
+    // Nothing attached to conv_FORK or conv_A beyond A's original idea.
+    expect(loadIdeas(db)).toHaveLength(1);
+    // conv_FORK's events are stored, but provisional.
+    expect(loadCanonicalEvents(db).filter((e) => e.conversationId === "conv_FORK").every((e) => e.status === "provisional")).toBe(true);
+
+    // The evidence row carries the full auditable identity record.
+    const ev = loadEvidenceForConversation(db, "conv_FORK");
+    expect(ev).toHaveLength(1);
+    expect(ev[0]?.identity?.status).toBe("unresolved");
+    expect(ev[0]?.identity?.claims.some((c) => c.authority === "content_fingerprint" && c.conversationId === "conv_A")).toBe(true);
+  });
+
+  test("a fork fed in ONE TURN AT A TIME is still quarantined once it has echoed enough of the parent", async () => {
+    const db = openDb(":memory:");
+
+    // Establish conversation A (all three turns at once).
+    await ingestConversation(
+      db,
+      { conversationId: "conv_A", source: "fixture", messages: msgs("A", LINES), capture: { method: "browser_extension", fidelity: "high" } },
+      ideaProviders(LINES[0]!, "A_x0"),
+    );
+    expect(loadIdeas(db)).toHaveLength(1);
+
+    // conv_FORK arrives turn by turn, the way the extension actually flushes. Turn 1 is too short
+    // to match; by turn 3 it is verbatim the parent. The old "settled after one committed event"
+    // rule would have stopped checking after turn 1 -- this asserts it keeps checking.
+    const forkExtraction = { extraction: new FakeProvider([extractionResponse([]), extractionResponse([])]), reasoning: new FakeProvider([]) };
+
+    const r1 = await ingestConversation(
+      db,
+      { conversationId: "conv_FORK", source: "fixture", messages: msgs("FORK", LINES.slice(0, 1)), capture: { method: "browser_extension", fidelity: "high" } },
+      forkExtraction,
+    );
+    expect(r1.identityStatus).toBe("resolved"); // one short line, no match yet
+
+    const r2 = await ingestConversation(
+      db,
+      { conversationId: "conv_FORK", source: "fixture", messages: msgs("FORK", LINES.slice(0, 2)), capture: { method: "browser_extension", fidelity: "high" } },
+      forkExtraction,
+    );
+    expect(r2.identityStatus).toBe("resolved"); // 2/3 overlap -- weak, not blocking
+
+    const r3 = await ingestConversation(
+      db,
+      { conversationId: "conv_FORK", source: "fixture", messages: msgs("FORK", LINES), capture: { method: "browser_extension", fidelity: "high" } },
+      { extraction: new FakeProvider([]), reasoning: new FakeProvider([]) }, // must NOT be reached
+    );
+    expect(r3.identityStatus).toBe("unresolved");
+    expect(r3.identityConflicts.map((c) => c.type)).toContain("strong_content_mismatch");
+
+    // The turns committed before the conflict emerged are NOT downgraded (confirmed history is
+    // preserved); only the turn that tipped it over is quarantined.
+    const forkEvents = loadCanonicalEvents(db).filter((e) => e.conversationId === "conv_FORK");
+    expect(forkEvents.filter((e) => e.status === "committed").map((e) => e.id).sort()).toEqual(["FORK_x0", "FORK_x1"]);
+    expect(forkEvents.filter((e) => e.status === "provisional").map((e) => e.id)).toEqual(["FORK_x2"]);
+    expect(r3.provisionalEvents).toBe(1);
+    // conv_FORK never produced an idea of its own.
+    expect(loadIdeas(db)).toHaveLength(1);
+  });
+
+  test("a normal new conversation with no content clash resolves and creates its idea", async () => {
+    const db = openDb(":memory:");
+    await ingestConversation(
+      db,
+      { conversationId: "conv_A", source: "fixture", messages: msgs("A", LINES), capture: { method: "browser_extension", fidelity: "high" } },
+      ideaProviders(LINES[0]!, "A_x0"),
+    );
+    const res = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_B",
+        source: "fixture",
+        messages: msgs("B", [
+          "Totally separate thread about Railway deploy lag and a CLI status check.",
+          "Right, the auto-deploy webhook is intermittently slow, hours sometimes.",
+        ]),
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      {
+        extraction: new FakeProvider([
+          extractionResponse([
+            {
+              type: "new_idea",
+              statement: "Totally separate thread about Railway deploy lag and a CLI status check.",
+              confidence: 0.9,
+              source_event_id: "B_x0",
+              evidence_quote: "Railway deploy",
+            },
+          ]),
+        ]),
+        // One existing idea now, so the pipeline runs identity resolution -- say "no match".
+        reasoning: new FakeProvider([
+          JSON.stringify({ matched_idea_id: null, confidence: 0.2, reasoning: "unrelated", also_related_idea_id: null }),
+        ]),
+      },
+    );
+    expect(res.identityStatus).toBe("resolved");
+    expect(res.identityConflicts).toEqual([]);
+    expect(loadIdeas(db)).toHaveLength(2);
+  });
+});

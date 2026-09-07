@@ -204,12 +204,15 @@ switch (command) {
         }
         console.log("");
         for (const r of rows) {
-          const flag = r.integrityOk ? "  " : "⚠ ";
+          const unresolved = r.identity?.status === "unresolved";
+          const flag = !r.integrityOk || unresolved ? "⚠ " : "  ";
           console.log(
             `  ${flag}${r.observedAt}  ${r.sensor.padEnd(18)} ${r.conversationId}  ` +
-              `${r.acceptedCount}/${r.observedCount} msgs`,
+              `${r.acceptedCount}/${r.observedCount} msgs` +
+              (unresolved ? "  identity UNRESOLVED" : ""),
           );
           for (const i of r.integrityIssues) console.log(`       ${i.code}: ${i.detail}`);
+          for (const c of r.identity?.conflicts ?? []) console.log(`       ${c.type}: ${c.detail}`);
         }
       } finally {
         db.close();

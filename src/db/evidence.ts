@@ -10,6 +10,7 @@
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import type { CanonicalizeResult, ObservedMessage, RawObservation } from "../state/canonicalize";
+import type { ConversationIdentity } from "../state/resolveConversationIdentity";
 
 export interface EvidenceRow {
   id: string;
@@ -20,6 +21,9 @@ export interface EvidenceRow {
   acceptedCount: number;
   integrityOk: boolean;
   integrityIssues: { code: string; detail: string }[];
+  /** The conversation-identity verdict for this observation (status, canonical id, competing
+   *  claims, conflicts) -- makes every resolution auditable. Null for rows written before M3. */
+  identity: ConversationIdentity | null;
   payload: {
     /**
      * "delta" -- only the turns new in this observation (the clean common case; the full
@@ -44,6 +48,7 @@ export function recordEvidence(
   obs: RawObservation,
   result: CanonicalizeResult,
   newMessages: ObservedMessage[],
+  identity?: ConversationIdentity,
 ): string {
   const id = randomUUID();
   const form: "delta" | "full" = result.integrity.ok ? "delta" : "full";
@@ -56,8 +61,8 @@ export function recordEvidence(
   db.prepare(
     `INSERT INTO evidence
        (id, conversation_id, sensor, observed_at, observed_count, accepted_count,
-        integrity_ok, integrity_issues, payload)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        integrity_ok, integrity_issues, identity, payload)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     obs.conversationId,
@@ -67,6 +72,7 @@ export function recordEvidence(
     result.integrity.accepted,
     result.integrity.ok ? 1 : 0,
     result.integrity.issues.length ? JSON.stringify(result.integrity.issues) : null,
+    identity ? JSON.stringify(identity) : null,
     payload,
   );
   return id;
@@ -81,6 +87,7 @@ interface EvidenceDbRow {
   accepted_count: number;
   integrity_ok: number;
   integrity_issues: string | null;
+  identity: string | null;
   payload: string;
 }
 
@@ -94,6 +101,7 @@ function mapRow(r: EvidenceDbRow): EvidenceRow {
     acceptedCount: r.accepted_count,
     integrityOk: r.integrity_ok === 1,
     integrityIssues: r.integrity_issues ? JSON.parse(r.integrity_issues) : [],
+    identity: r.identity ? JSON.parse(r.identity) : null,
     payload: JSON.parse(r.payload),
   };
 }

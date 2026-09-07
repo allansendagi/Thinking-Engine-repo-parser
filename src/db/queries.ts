@@ -11,6 +11,11 @@ import type {
   Role,
 } from "../types";
 
+import {
+  contentFingerprint,
+  type KnownConversation,
+} from "../state/resolveConversationIdentity";
+
 /** Rehydrate the capture columns into CanonicalEvent.capture. Null (pre-field rows) stays null;
  *  a consumer reads null as browser_extension/high per THREAD.md §7. A method with no stored
  *  fidelity defaults to "high" rather than dropping the row's provenance entirely. */
@@ -205,6 +210,32 @@ export function loadCanonicalStatuses(
     .query("SELECT id, status FROM canonical_events WHERE conversation_id = ?")
     .all(conversationId) as { id: string; status: string | null }[];
   return new Map(rows.map((r) => [r.id, r.status === "provisional" ? "provisional" : "committed"]));
+}
+
+/** Every known conversation with its content fingerprint (verbatim-normalized message texts) and
+ *  URL -- the corpus the conversation-identity resolver checks an observation against
+ *  (state/resolveConversationIdentity.ts). The fingerprint is computed via the resolver's own
+ *  `contentFingerprint` so both sides normalize identically. Computed on read; cheap at this
+ *  scale, materialize later if a user's history gets large. */
+export function loadConversationFingerprints(db: Database): KnownConversation[] {
+  const rows = db
+    .query("SELECT conversation_id, text, source_url FROM canonical_events")
+    .all() as { conversation_id: string; text: string; source_url: string | null }[];
+  const byConv = new Map<string, { texts: { text: string }[]; sourceUrl: string | null }>();
+  for (const r of rows) {
+    let entry = byConv.get(r.conversation_id);
+    if (!entry) {
+      entry = { texts: [], sourceUrl: r.source_url ?? null };
+      byConv.set(r.conversation_id, entry);
+    }
+    entry.texts.push({ text: r.text });
+    if (!entry.sourceUrl && r.source_url) entry.sourceUrl = r.source_url;
+  }
+  return [...byConv.entries()].map(([conversationId, v]) => ({
+    conversationId,
+    fingerprint: contentFingerprint(v.texts),
+    sourceUrl: v.sourceUrl,
+  }));
 }
 
 /** Drop provisional rows for a conversation that a newer clean full observation no longer lists
