@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var servicesProvider: ThreadServicesProvider?
     private var ambientNudge: AmbientNudge?
+    private var axSensor: AXSensorRunner?
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
     private var pendingURLs: [URL] = []
 
@@ -76,6 +77,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ambient = AmbientNudge(appState: appState)
         ambient.start()
         ambientNudge = ambient
+
+        // M4 measurement rig: the generic AX sensor with Cursor as its first adapter. OFF unless
+        // THREAD_AX_SENSOR=1 -- this is a rig to answer "does AX-only capture actually work",
+        // not a shipped capture path. It prompts for Accessibility and needs a running Cursor;
+        // everything it captures is stamped native_accessibility so it's distinguishable from
+        // extension traffic in the evidence store.
+        if ProcessInfo.processInfo.environment["THREAD_AX_SENSOR"] == "1" {
+            AXSensorRunner.requestAccessibility()
+            let sensor = AXSensorRunner(
+                adapter: CursorAXAdapter(),
+                bundleID: CursorAXAdapter.bundleIDs[0],
+                source: "cursor",
+                ingest: { [weak appState] id, messages, fidelity in
+                    guard let appState, appState.isPaired else { return }
+                    do {
+                        let r = try await appState.client.ingestConversation(
+                            id: id, source: "cursor", messages: messages,
+                            capture: (method: "native_accessibility", fidelity: fidelity)
+                        )
+                        print("[ThreadMac AX] +\(messages.count) msg fidelity=\(fidelity) -> canonical +\(r.newCanonicalEvents), ideas \(r.ideaCount)")
+                    } catch {
+                        print("[ThreadMac AX] ingest failed: \(error)")
+                    }
+                }
+            )
+            sensor.onStatusChange = { print("[ThreadMac AX] status: \($0)") }
+            sensor.start()
+            axSensor = sensor
+            // Cursor may not be up yet at launch -- one delayed retry if we're not watching.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                if case .watching = self?.axSensor?.status { return }
+                self?.axSensor?.start()
+            }
+        }
 
         // Flush any thread:// URL that launched us before this point.
         let queued = pendingURLs

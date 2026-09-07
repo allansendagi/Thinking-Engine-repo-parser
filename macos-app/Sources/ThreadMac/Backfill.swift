@@ -215,7 +215,13 @@ enum Backfill {
                  createdAt: iso.string(from: base.addingTimeInterval(Double(i))))
             }
             do {
-                lastIdeaCount = try await client.ingestConversation(id: c.id, source: "cursor", messages: messages).ideaCount
+                // Heuristic read of Cursor's local state.vscdb -- same mechanism as the
+                // desktop agent, so stamp it that way rather than letting it default to
+                // browser_extension/high.
+                lastIdeaCount = try await client.ingestConversation(
+                    id: c.id, source: "cursor", messages: messages,
+                    capture: (method: "desktop_agent", fidelity: "medium")
+                ).ideaCount
             } catch let APIError.http(status, _) where status == 402 {
                 return (ImportSummary(newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: lastIdeaCount), done)
             }
