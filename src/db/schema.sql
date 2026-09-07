@@ -16,7 +16,11 @@ CREATE TABLE IF NOT EXISTS canonical_events (
   -- One value per conversation. NULL for rows written before these columns -- read as
   -- 'browser_extension' / 'high'. See CanonicalEvent.capture / THREAD.md §7.
   capture_method TEXT,
-  capture_fidelity TEXT
+  capture_fidelity TEXT,
+  -- Trust gate: 'committed' | 'provisional'. Provisional rows are stored and used as extraction
+  -- context but never become the source of a cognitive event until a clean observation promotes
+  -- them. Defaulted so pre-gate rows keep today's behavior. See CanonicalEventStatus / THREAD.md §17.
+  status TEXT NOT NULL DEFAULT 'committed'
 );
 
 -- Raw sensor observations, one row per observation that advanced a conversation or failed

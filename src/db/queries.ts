@@ -74,6 +74,7 @@ interface CanonicalEventRow {
   source_url: string | null;
   capture_method: string | null;
   capture_fidelity: string | null;
+  status: string | null;
 }
 
 /** Loads every idea, with its evolution/open loops/decisions/related ids, from SQLite. */
@@ -191,7 +192,38 @@ export function loadCanonicalEvents(db: Database): CanonicalEvent[] {
     index: r.idx,
     sourceUrl: r.source_url ?? null,
     capture: rowCapture(r.capture_method, r.capture_fidelity),
+    status: r.status === "provisional" ? "provisional" : "committed",
   }));
+}
+
+/** Just the id -> status map for one conversation -- drives promotion + retracted-provisional GC. */
+export function loadCanonicalStatuses(
+  db: Database,
+  conversationId: string,
+): Map<string, "committed" | "provisional"> {
+  const rows = db
+    .query("SELECT id, status FROM canonical_events WHERE conversation_id = ?")
+    .all(conversationId) as { id: string; status: string | null }[];
+  return new Map(rows.map((r) => [r.id, r.status === "provisional" ? "provisional" : "committed"]));
+}
+
+/** Drop provisional rows for a conversation that a newer clean full observation no longer lists
+ *  -- they were transient sensor noise. Provisional rows never have cognitive events, so this is
+ *  a leaf delete. Full-resend semantics; revisit when the delta/reconciliation protocol lands. */
+export function dropRetractedProvisional(
+  db: Database,
+  conversationId: string,
+  stillPresentIds: string[],
+): number {
+  const placeholders = stillPresentIds.map(() => "?").join(",");
+  const res = db
+    .query(
+      `DELETE FROM canonical_events
+       WHERE conversation_id = ? AND status = 'provisional'
+       ${stillPresentIds.length ? `AND id NOT IN (${placeholders})` : ""}`,
+    )
+    .run(conversationId, ...stillPresentIds);
+  return res.changes;
 }
 
 export interface ConversationSummary {
@@ -300,5 +332,6 @@ export function loadCanonicalEvent(db: Database, id: string): CanonicalEvent | u
     index: row.idx,
     sourceUrl: row.source_url ?? null,
     capture: rowCapture(row.capture_method, row.capture_fidelity),
+    status: row.status === "provisional" ? "provisional" : "committed",
   };
 }

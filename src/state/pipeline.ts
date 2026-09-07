@@ -150,23 +150,25 @@ export async function runPipeline(
   };
 }
 
-export function persistPipelineResult(
-  db: Database,
-  canonicalEvents: CanonicalEvent[],
-  result: PipelineResult,
-): void {
+/**
+ * Write canonical event rows -- the "just store the observation" path, used directly by
+ * ingest.ts when an observation is held provisional (nothing to run through the pipeline) and by
+ * persistPipelineResult below. INSERT OR REPLACE because the extension resends a conversation's
+ * full transcript on every flush. COALESCE keeps a previously-stored value when this write's is
+ * null (a mid-navigation source_url, an older client that omits capture_*). `status` is written
+ * plainly, latest-wins -- a promotion (provisional -> committed) must be able to overwrite.
+ */
+export function persistCanonicalEvents(db: Database, canonicalEvents: CanonicalEvent[]): void {
   const insertCanonical = db.prepare(
-    // The extension resends a conversation's full transcript on every flush, so each call
-    // REPLACEs every row. COALESCE keeps a previously-stored value when this write's is null:
-    // for source_url a mid-navigation/provisional capture, for capture_method/_fidelity an
-    // older client that doesn't send them -- a good value, once captured, sticks.
     `INSERT OR REPLACE INTO canonical_events
-       (id, conversation_id, source, role, text, created_at, idx, source_url, capture_method, capture_fidelity)
+       (id, conversation_id, source, role, text, created_at, idx, source_url,
+        capture_method, capture_fidelity, status)
      VALUES (
        ?, ?, ?, ?, ?, ?, ?,
        COALESCE(?, (SELECT source_url FROM canonical_events WHERE id = ?)),
        COALESCE(?, (SELECT capture_method FROM canonical_events WHERE id = ?)),
-       COALESCE(?, (SELECT capture_fidelity FROM canonical_events WHERE id = ?))
+       COALESCE(?, (SELECT capture_fidelity FROM canonical_events WHERE id = ?)),
+       ?
      )`,
   );
   for (const e of canonicalEvents) {
@@ -184,8 +186,17 @@ export function persistPipelineResult(
       e.id,
       e.capture?.fidelity ?? null,
       e.id,
+      e.status ?? "committed",
     );
   }
+}
+
+export function persistPipelineResult(
+  db: Database,
+  canonicalEvents: CanonicalEvent[],
+  result: PipelineResult,
+): void {
+  persistCanonicalEvents(db, canonicalEvents);
 
   const insertCognitive = db.prepare(
     `INSERT OR REPLACE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, why_it_matters)

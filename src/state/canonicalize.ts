@@ -13,7 +13,13 @@
  * conversation identity, or reconcile against other observations -- those are later milestones.
  */
 
-import type { CanonicalEvent, CaptureMethod, CaptureProvenance, Role } from "../types";
+import type {
+  CanonicalEvent,
+  CanonicalEventStatus,
+  CaptureMethod,
+  CaptureProvenance,
+  Role,
+} from "../types";
 
 export interface ObservedMessage {
   id: string;
@@ -60,7 +66,10 @@ const DROP_CODES: ReadonlySet<IntegrityCode> = new Set<IntegrityCode>([
 ]);
 
 export interface CanonicalizeResult {
-  /** Structurally valid messages as canonical events, re-indexed 0..n-1 by kept position. */
+  /**
+   * Structurally valid messages as canonical events, re-indexed 0..n-1 by kept position, each
+   * tagged `committed` or `provisional` per `provisionalReason` below.
+   */
   events: CanonicalEvent[];
   integrity: {
     /** True when nothing was dropped -- advisory issues (regression, single_role) don't flip it. */
@@ -70,7 +79,30 @@ export interface CanonicalizeResult {
     observed: number;
     /** Messages that became canonical events. */
     accepted: number;
+    /** `committed` unless this observation is untrustworthy -- see `provisionalReason`. */
+    status: CanonicalEventStatus;
+    /** Why the events are provisional, or null when committed. */
+    provisionalReason: string | null;
   };
+}
+
+/**
+ * Policy: an observation's events are held provisional -- stored, used as context, but never
+ * extracted into cognitive events until corroborated -- when the observation dropped content in
+ * structure validation, or when the sensor itself rates the capture low fidelity. Identity being
+ * unresolved is a third trigger, added in the identity milestone. Returns the reason, or null
+ * when the observation is trustworthy enough to commit.
+ */
+export function provisionalReason(
+  capture: CaptureProvenance | null | undefined,
+  integrity: { ok: boolean; issues: IntegrityIssue[] },
+): string | null {
+  if (!integrity.ok) {
+    const codes = [...new Set(integrity.issues.filter((i) => DROP_CODES.has(i.code)).map((i) => i.code))];
+    return `structure validation dropped content: ${codes.join(", ")}`;
+  }
+  if (capture?.fidelity === "low") return "capture fidelity is low";
+  return null;
 }
 
 const isRole = (r: unknown): r is Role => r === "user" || r === "assistant";
@@ -146,6 +178,10 @@ export function canonicalize(obs: RawObservation): CanonicalizeResult {
     issues.push({ code: "single_role", detail: `all ${kept.length} messages are "${kept[0]!.role}"` });
   }
 
+  const ok = !issues.some((x) => DROP_CODES.has(x.code));
+  const reason = provisionalReason(obs.capture, { ok, issues });
+  const status: CanonicalEventStatus = reason ? "provisional" : "committed";
+
   const events: CanonicalEvent[] = kept.map((m, i) => ({
     id: m.id,
     conversationId: obs.conversationId,
@@ -156,15 +192,18 @@ export function canonicalize(obs: RawObservation): CanonicalizeResult {
     index: i,
     sourceUrl: obs.sourceUrl ?? null,
     capture: obs.capture ?? null,
+    status,
   }));
 
   return {
     events,
     integrity: {
-      ok: !issues.some((x) => DROP_CODES.has(x.code)),
+      ok,
       issues,
       observed: obs.messages.length,
       accepted: events.length,
+      status,
+      provisionalReason: reason,
     },
   };
 }

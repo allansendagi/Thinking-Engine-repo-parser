@@ -1,7 +1,16 @@
 import type { Database } from "bun:sqlite";
 import type { CanonicalEvent, CaptureProvenance, Role } from "../types";
-import { loadCanonicalEvents, loadIdeas } from "../db/queries";
-import { runPipeline, persistPipelineResult, type PipelineProviders } from "../state/pipeline";
+import {
+  dropRetractedProvisional,
+  loadCanonicalStatuses,
+  loadIdeas,
+} from "../db/queries";
+import {
+  runPipeline,
+  persistPipelineResult,
+  persistCanonicalEvents,
+  type PipelineProviders,
+} from "../state/pipeline";
 import { replayDiscardedEvents } from "../state/replayDiscarded";
 import { canonicalize, type IntegrityIssue, type RawObservation } from "../state/canonicalize";
 import { recordEvidence } from "../db/evidence";
@@ -51,6 +60,15 @@ export interface IngestResult {
   integrityOk: boolean;
   /** Structure-validation issues found in this observation, if any. */
   integrityIssues: IntegrityIssue[];
+  /**
+   * Canonical events this call PARKED as provisional -- stored and used as context, but held
+   * back from the idea graph until a clean observation corroborates them. See CanonicalEventStatus.
+   */
+  provisionalEvents: number;
+  /** Previously-provisional events this call PROMOTED to committed (a clean observation saw them). */
+  promotedEvents: number;
+  /** Provisional rows dropped because a newer clean full observation no longer listed them. */
+  retractedProvisional: number;
 }
 
 /**
@@ -72,6 +90,9 @@ export async function ingestConversation(
     discardedEvents: 0,
     promotedFromDiscard: 0,
     rejectedExtractions: 0,
+    provisionalEvents: 0,
+    promotedEvents: 0,
+    retractedProvisional: 0,
   };
 
   if (input.messages.length === 0) {
@@ -80,7 +101,8 @@ export async function ingestConversation(
 
   // Evidence -> canonical events. A clean observation canonicalizes to exactly the same events a
   // plain positional map would; a malformed one loses only the messages that genuinely can't be
-  // canonical events (no id/text, unknown role, a dup id) and records why.
+  // canonical events (no id/text, unknown role, a dup id) and records why. Every event comes back
+  // tagged committed | provisional (canonicalize.ts / provisionalReason).
   const obs: RawObservation = {
     conversationId: input.conversationId,
     source: input.source,
@@ -92,42 +114,75 @@ export async function ingestConversation(
     capture: input.capture ?? null,
   };
   const { events: allEvents, integrity } = canonicalize(obs);
+  const observationCommitted = integrity.status === "committed";
 
-  const existingIds = new Set(
-    loadCanonicalEvents(db)
-      .filter((e) => e.conversationId === input.conversationId)
-      .map((e) => e.id),
-  );
-  const newEventIds = new Set(allEvents.filter((e) => !existingIds.has(e.id)).map((e) => e.id));
+  const priorStatus = loadCanonicalStatuses(db, input.conversationId);
+  const newToCanonical = new Set(allEvents.filter((e) => !priorStatus.has(e.id)).map((e) => e.id));
 
-  // Record the observation when it advanced the conversation OR failed structure validation --
-  // a no-op resend that is now structurally broken is itself a sensor-health signal. A clean
-  // no-op resend carries no signal and is not recorded.
-  if (newEventIds.size > 0 || !integrity.ok) {
-    const newMessages = input.messages.filter((m) => newEventIds.has(m.id));
+  // A clean observation corroborates: promote any of its events that are stored provisional (and
+  // re-extract them -- they never entered the idea graph), and drop provisional rows this
+  // full observation no longer lists (transient sensor noise). Committed rows are never GC'd --
+  // a partial flush must not erase confirmed history.
+  const promoting = new Set<string>();
+  let retracted = 0;
+  if (observationCommitted) {
+    for (const e of allEvents) if (priorStatus.get(e.id) === "provisional") promoting.add(e.id);
+    // Only touch the DB for GC when there is actually a provisional row to consider.
+    if ([...priorStatus.values()].includes("provisional")) {
+      retracted = dropRetractedProvisional(
+        db,
+        input.conversationId,
+        allEvents.map((e) => e.id),
+      );
+    }
+  }
+
+  // Record the observation when it advanced, promoted, or failed structure validation. A clean
+  // no-op resend carries no signal.
+  if (newToCanonical.size > 0 || promoting.size > 0 || !integrity.ok) {
+    const newMessages = input.messages.filter((m) => newToCanonical.has(m.id));
     recordEvidence(db, obs, { events: allEvents, integrity }, newMessages);
   }
 
-  if (newEventIds.size === 0) {
+  const provisionalParked = allEvents.filter(
+    (e) => e.status === "provisional" && newToCanonical.has(e.id),
+  ).length;
+
+  // What extraction actually runs over: events that are committed now AND either new to the DB
+  // or being promoted this call. Provisional events stay in `allEvents` as context but are never
+  // the source of a cognitive event -- "probabilistic capture, deterministic state".
+  const extractIds = new Set(
+    allEvents
+      .filter((e) => e.status === "committed" && (newToCanonical.has(e.id) || promoting.has(e.id)))
+      .map((e) => e.id),
+  );
+
+  if (extractIds.size === 0) {
+    // Nothing to run through the pipeline. Still store any new canonical rows (provisional ones
+    // land here), and report the GC.
+    if (newToCanonical.size > 0) persistCanonicalEvents(db, allEvents);
     return {
       ...zeros,
+      newCanonicalEvents: newToCanonical.size,
       ideaCount: existingIdeaCount(),
       integrityOk: integrity.ok,
       integrityIssues: integrity.issues,
+      provisionalEvents: provisionalParked,
+      retractedProvisional: retracted,
     };
   }
 
   const existingIdeas = new Map(loadIdeas(db).map((i) => [i.id, i]));
 
-  const result = await runPipeline(allEvents, providers, { existingIdeas, newEventIds });
-  persistPipelineResult(db, allEvents, result);
+  const result = await runPipeline(allEvents, providers, { existingIdeas, newEventIds: extractIds });
+  persistPipelineResult(db, allEvents, result); // writes every row, incl. promoted status=committed
 
   // Reconsider earlier medium-value discards now that this call may have created the idea they
   // belong to. Incremental-only -- see replayDiscardedEvents.
   const replay = await replayDiscardedEvents(db, providers);
 
   return {
-    newCanonicalEvents: newEventIds.size,
+    newCanonicalEvents: newToCanonical.size,
     newCognitiveEvents: result.cognitiveEvents.length + replay.promoted,
     discardedEvents: result.discardedEvents.length,
     promotedFromDiscard: replay.promoted,
@@ -135,5 +190,8 @@ export async function ingestConversation(
     ideaCount: loadIdeas(db).length,
     integrityOk: integrity.ok,
     integrityIssues: integrity.issues,
+    provisionalEvents: provisionalParked,
+    promotedEvents: promoting.size,
+    retractedProvisional: retracted,
   };
 }

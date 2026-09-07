@@ -340,7 +340,7 @@ describe("evidence layer (THREAD.md §7 -- raw observation below canonical event
     expect(evidence[1]).toMatchObject({ observedCount: 2, acceptedCount: 2 }); // counts still describe the whole observation
   });
 
-  test("a malformed observation still ingests the valid messages AND records the issue", async () => {
+  test("a malformed observation stores the valid message as PROVISIONAL -- no idea yet -- and records the issue", async () => {
     const db = openDb(":memory:");
     const res = await ingestConversation(
       db,
@@ -353,13 +353,16 @@ describe("evidence layer (THREAD.md §7 -- raw observation below canonical event
         ],
         capture: { method: "browser_extension", fidelity: "high" },
       },
+      // Providers scripted but should NOT be called -- a broken observation never reaches extraction.
       providersFor("this one is fine", "ok1"),
     );
     expect(res.integrityOk).toBe(false);
     expect(res.integrityIssues.map((i) => i.code)).toEqual(["empty_id"]);
-    // The good message still became a canonical event and an idea.
-    expect(loadCanonicalEvents(db).map((e) => e.id)).toEqual(["ok1"]);
-    expect(loadIdeas(db)).toHaveLength(1);
+    expect(res.provisionalEvents).toBe(1);
+    // The good message is stored, but provisional -- it did NOT rewrite the idea graph.
+    const stored = loadCanonicalEvents(db);
+    expect(stored.map((e) => [e.id, e.status])).toEqual([["ok1", "provisional"]]);
+    expect(loadIdeas(db)).toHaveLength(0);
 
     const evidence = loadEvidenceForConversation(db, "conv_bad");
     expect(evidence).toHaveLength(1);
@@ -402,5 +405,129 @@ describe("evidence layer (THREAD.md §7 -- raw observation below canonical event
     expect(evidence).toHaveLength(2);
     expect(evidence[1]).toMatchObject({ integrityOk: false });
     expect(evidence[1]?.integrityIssues.map((i) => i.code)).toContain("duplicate_id");
+  });
+});
+
+describe("provisional / committed (THREAD.md §17 -- probabilistic capture, deterministic state)", () => {
+  const idea = (statement: string, sourceId: string) => ({
+    extraction: new FakeProvider([
+      extractionResponse([
+        { type: "new_idea", statement, confidence: 0.9, source_event_id: sourceId, evidence_quote: statement.slice(0, 12) },
+      ]),
+    ]),
+    reasoning: new FakeProvider([]),
+  });
+  const noExtraction = () => ({ extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+
+  test("a broken observation parks events provisional; a later clean observation promotes + extracts them", async () => {
+    const db = openDb(":memory:");
+
+    // Observation 1: broken (a blank-id turn is dropped) -> m1 stored provisional, no idea, no
+    // extraction call (providers here have nothing scripted and must not be touched).
+    await ingestConversation(
+      db,
+      {
+        conversationId: "conv_pc",
+        source: "fixture",
+        messages: [
+          { id: "", role: "user", text: "dropped", createdAt: "2026-09-07T00:00:00.000Z" },
+          { id: "m1", role: "user", text: "Capture is a data-integrity subsystem.", createdAt: "2026-09-07T00:01:00.000Z" },
+        ],
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      noExtraction(),
+    );
+    expect(loadCanonicalEvents(db).map((e) => [e.id, e.status])).toEqual([["m1", "provisional"]]);
+    expect(loadIdeas(db)).toHaveLength(0);
+
+    // Observation 2: clean, same m1 (+ a new m2). m1 is corroborated -> promoted to committed and
+    // extracted for the first time; m2 is committed and extracted.
+    const res = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_pc",
+        source: "fixture",
+        messages: [
+          { id: "m1", role: "user", text: "Capture is a data-integrity subsystem.", createdAt: "2026-09-07T00:01:00.000Z" },
+          { id: "m2", role: "assistant", text: "Yes -- evidence, canonical, thinking.", createdAt: "2026-09-07T00:02:00.000Z" },
+        ],
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      idea("Capture is a data-integrity subsystem.", "m1"),
+    );
+    expect(res.promotedEvents).toBe(1);
+    expect(res.integrityOk).toBe(true);
+    expect(loadCanonicalEvents(db).map((e) => [e.id, e.status])).toEqual([
+      ["m1", "committed"],
+      ["m2", "committed"],
+    ]);
+    expect(loadIdeas(db)).toHaveLength(1);
+  });
+
+  test("a provisional row a later clean full observation no longer lists is dropped (retracted)", async () => {
+    const db = openDb(":memory:");
+
+    // Broken observation with two survivors m1, m2 -> both provisional.
+    await ingestConversation(
+      db,
+      {
+        conversationId: "conv_gc",
+        source: "fixture",
+        messages: [
+          { id: "", role: "user", text: "dropped", createdAt: "2026-09-07T00:00:00.000Z" },
+          { id: "m1", role: "user", text: "real turn", createdAt: "2026-09-07T00:01:00.000Z" },
+          { id: "m2", role: "assistant", text: "half-rendered node that will vanish", createdAt: "2026-09-07T00:02:00.000Z" },
+        ],
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      noExtraction(),
+    );
+    expect(loadCanonicalEvents(db).map((e) => e.id).sort()).toEqual(["m1", "m2"]);
+
+    // Clean observation: the sensor recovered and only ever really saw m1. m2 is retracted.
+    const res = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_gc",
+        source: "fixture",
+        messages: [{ id: "m1", role: "user", text: "real turn", createdAt: "2026-09-07T00:01:00.000Z" }],
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      idea("real turn", "m1"),
+    );
+    expect(res.retractedProvisional).toBe(1);
+    expect(res.promotedEvents).toBe(1);
+    expect(loadCanonicalEvents(db).map((e) => [e.id, e.status])).toEqual([["m1", "committed"]]);
+    expect(loadIdeas(db)).toHaveLength(1);
+  });
+
+  test("a committed row is never GC'd, even when a later partial observation omits it", async () => {
+    const db = openDb(":memory:");
+    await ingestConversation(
+      db,
+      {
+        conversationId: "conv_keep",
+        source: "fixture",
+        messages: [
+          { id: "m1", role: "user", text: "Turn one, committed.", createdAt: "2026-09-07T00:00:00.000Z" },
+          { id: "m2", role: "assistant", text: "Turn two.", createdAt: "2026-09-07T00:01:00.000Z" },
+        ],
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      idea("Turn one, committed.", "m1"),
+    );
+    // A later flush that only carries m1 (partial) must not erase m2.
+    const res = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_keep",
+        source: "fixture",
+        messages: [{ id: "m1", role: "user", text: "Turn one, committed.", createdAt: "2026-09-07T00:00:00.000Z" }],
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      noExtraction(),
+    );
+    expect(res.retractedProvisional).toBe(0);
+    expect(loadCanonicalEvents(db).map((e) => e.id).sort()).toEqual(["m1", "m2"]);
   });
 });

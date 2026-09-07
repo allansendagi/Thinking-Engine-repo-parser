@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canonicalize, type RawObservation } from "./canonicalize";
+import { canonicalize, provisionalReason, type RawObservation } from "./canonicalize";
 
 const obs = (
   messages: RawObservation["messages"],
@@ -118,5 +118,36 @@ describe("canonicalize -- structure validation (THREAD.md §7)", () => {
     expect(r.events).toEqual([]);
     expect(r.integrity.ok).toBe(true);
     expect(r.integrity.issues).toEqual([]);
+  });
+});
+
+describe("provisional / committed status (THREAD.md §17)", () => {
+  test("a clean high-fidelity observation is committed; every event carries status", () => {
+    const r = canonicalize(obs([m("a", "user", "one"), m("b", "assistant", "two")]));
+    expect(r.integrity.status).toBe("committed");
+    expect(r.integrity.provisionalReason).toBeNull();
+    expect(r.events.every((e) => e.status === "committed")).toBe(true);
+  });
+
+  test("an observation that dropped content is provisional, reason names the drop codes", () => {
+    const r = canonicalize(obs([m("", "user", "no id"), m("b", "assistant", "kept")]));
+    expect(r.integrity.status).toBe("provisional");
+    expect(r.integrity.provisionalReason).toContain("empty_id");
+    expect(r.events.every((e) => e.status === "provisional")).toBe(true);
+  });
+
+  test("a structurally-clean but low-fidelity observation is provisional", () => {
+    const o: RawObservation = {
+      ...obs([m("a", "user", "one"), m("b", "assistant", "two")]),
+      capture: { method: "screen_ocr", fidelity: "low" },
+    };
+    const r = canonicalize(o);
+    expect(r.integrity.ok).toBe(true);
+    expect(r.integrity.status).toBe("provisional");
+    expect(r.integrity.provisionalReason).toBe("capture fidelity is low");
+  });
+
+  test("provisionalReason: advisory-only issues (timestamp regression) do NOT make it provisional", () => {
+    expect(provisionalReason({ method: "browser_extension", fidelity: "high" }, { ok: true, issues: [{ code: "timestamp_regression", detail: "" }] })).toBeNull();
   });
 });
