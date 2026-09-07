@@ -363,10 +363,28 @@ struct IdeaDetailView: View {
     // MARK: continue — the page's one dominant action
 
     private func continueBlock(_ trace: IdeaTrace) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ContinueThinkingButton {
-                Task { await appState.continueInNativeApp(appState.preferredTool) }
+        let target = appState.preferredTool
+        return VStack(alignment: .leading, spacing: 8) {
+            ContinueThinkingButton(title: "Continue in \(target.label)") {
+                Task { await appState.continueInNativeApp(target) }
             }
+
+            Menu {
+                ForEach(AppState.AITool.allCases) { tool in
+                    Button {
+                        Task { await appState.continueInNativeApp(tool) }
+                    } label: {
+                        Label(tool.label, systemImage: tool == target ? "checkmark" : "arrow.up.forward.app")
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Text("Continue in a different app")
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                }
+                .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.accent)
+            }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
 
             if let packet = appState.continuationPacket {
                 ContinuationPreview(packet: packet).padding(.top, 10)
@@ -498,12 +516,13 @@ private struct Checkbox: View {
 /// The page's one dominant action. A quiet brightness lift on hover (the mock's
 /// `filter:brightness(1.06)`) + pointing-hand cursor.
 private struct ContinueThinkingButton: View {
+    var title: String = "Continue thinking"
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: action) {
-            Text("Continue thinking")
+            Text(title)
                 .font(.system(size: 14, weight: .medium)).kerning(-0.11)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, minHeight: 40)
