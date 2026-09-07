@@ -139,13 +139,14 @@ struct AXAdapterConfig {
 
 /// Reads a native AI app's chat pane through Accessibility, driven by `AXAdapterConfig`.
 ///
-/// UNVERIFIED against every one of these apps, on purpose and for the same reason `CursorBackfill`
-/// is: they are Electron / web-view apps, their AX trees are bridged DOM, and the exact roles /
-/// identifiers / nesting are undocumented and move between releases. So this matches on a broad
-/// set of hints and otherwise falls back to turn alternation, and it degrades to "found nothing"
-/// rather than a confident wrong answer. The generic sensor's provisional/committed handling and
-/// the `medium` fidelity stamp on inferred roles are what make that safe. Tune the hint sets
-/// against a real AX-tree dump (THREAD_AX_DUMP=1).
+/// Measured against real dumps of all three apps 2026-09-07 and found unusable for READ (see
+/// `AXAdapterConfig.extractionUnverified`) -- these are Electron / web-view apps whose bridged
+/// DOM trees shred prose into per-span leaves, interleave agent chrome, and carry no stable
+/// conversation id. So `extractionUnverified` is set for every adapter and this code is a
+/// measurement rig, never a shipped read path. It still matches on broad hints + alternation and
+/// degrades to "found nothing" rather than a confident wrong answer. Cursor READ is served by
+/// the structured local store (`CursorBackfill`); the AX layer's real job is WRITE
+/// (`NativeContinuation` / `composerElement`).
 struct HeuristicAXAdapter: AXConversationAdapter {
     let config: AXAdapterConfig
 
