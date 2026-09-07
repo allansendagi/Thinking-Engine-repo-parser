@@ -67,6 +67,24 @@ describe("buildThinkingState", () => {
     expect(state.recentChanges[0]?.formulation).toBe("Authority must be verifiable.");
   });
 
+  test("default window reaches the full span a resume nudge can score (past 30 days)", () => {
+    const at33Days = new Date(Date.now() - 33 * 24 * 60 * 60 * 1000).toISOString();
+    const withEdgeStep = idea({
+      evolution: [
+        { cognitiveEventId: "cog_1", formulation: "Edge-of-window step.", createdAt: at33Days, sourceEventId: "src_1" },
+        { cognitiveEventId: "cog_2", formulation: "Authority must be verifiable.", createdAt: now, sourceEventId: "src_2" },
+      ],
+    });
+
+    // Default (35): the 33-day step is in.
+    const wide = buildThinkingState([withEdgeStep], cognitiveEvents());
+    expect(wide.recentChanges.map((c) => c.formulation)).toContain("Edge-of-window step.");
+
+    // Explicit 30: the same step is out -- this is the gap the default now closes.
+    const narrow = buildThinkingState([withEdgeStep], cognitiveEvents(), { recentWindowDays: 30 });
+    expect(narrow.recentChanges.map((c) => c.formulation)).not.toContain("Edge-of-window step.");
+  });
+
   test("topic filter narrows currentIdeas by title/formulation substring", () => {
     const other = idea({ id: "idea_2", title: "Unrelated", currentFormulation: "Nothing to do with it.", evolution: [], relatedIdeaIds: [] });
     const state = buildThinkingState([idea(), other], cognitiveEvents(), { topic: "authority" });

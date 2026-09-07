@@ -35,7 +35,13 @@ export function buildThinkingState(
   const relevant = options.topic ? ideas.filter((i) => matchesTopic(i, options.topic as string)) : ideas;
   const relevantIds = new Set(relevant.map((i) => i.id));
 
-  const recentWindowDays = options.recentWindowDays ?? 30;
+  // Default covers the whole span the resume-nudge recency curve can still score against.
+  // `resumeRecencyWeight` (extension/src/lib/resume.ts, mirrored in the Mac app) only clears the
+  // confidence floor for ideas touched within ~32 days; a 30-day feed clipped the last ~2 days of
+  // that, so a barely-eligible idea 30-32 days old could never become a candidate. 35 gives margin
+  // without padding `recentChanges` with steps too old to ever nudge. Callers that want a tighter
+  // window (MCP prose) still pass their own.
+  const recentWindowDays = options.recentWindowDays ?? 35;
   const cutoff = Date.now() - recentWindowDays * 24 * 60 * 60 * 1000;
 
   const recentChanges: ThinkingState["recentChanges"] = [];
