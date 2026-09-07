@@ -536,9 +536,10 @@ final class AppState: ObservableObject {
     func dismissWelcome() {
         welcomeDismissed = true
         UserDefaults.standard.set(true, forKey: welcomeKey)
-        // Explicitly choosing "just the Mac apps" also means: stop offering the history backfill.
-        // (Connecting a browser clears the welcome the other way and leaves that offer standing.)
-        dismissOnboarding()
+        // With browser capture public, "Not now" is an explicit "I don't want the browser" -- so
+        // also stop offering the history backfill. Native-first, "Start" is just "go": leave the
+        // backfill offer standing (recovering an old ChatGPT export is still relevant).
+        if Self.browserCapturePublic { dismissOnboarding() }
     }
 
     var showsWelcome: Bool {
@@ -908,6 +909,12 @@ final class AppState: ObservableObject {
     static var browserExtensionURL: URL? {
         URL(string: chromeWebStoreURL ?? "\(marketingBaseURL)/get-started")
     }
+
+    /// Native-first launch. While false, Thread presents itself as working purely with the AI
+    /// apps on the Mac -- first run says "just open one", the browser is never mentioned as
+    /// setup. Flip to true when the extension is a public, one-click install and browser capture
+    /// becomes part of the story ("Thread now follows you into the browser too").
+    static let browserCapturePublic = false
 
     @Published var authBusy = false
     @Published var authError: String?
