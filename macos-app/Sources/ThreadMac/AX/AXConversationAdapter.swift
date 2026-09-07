@@ -83,10 +83,20 @@ struct AXAdapterConfig {
     /// `AXHeading` reading "You said:". Verified against a real AX dump 2026-09-07.
     var userTurnHeadings: [String] = []
 
-    /// See `AXConversationAdapter.extractionUnverified`. Set for ChatGPT: the `"You said:"` user
-    /// anchor is confirmed, but the assistant side (is there a `"ChatGPT said:"` heading? how is
-    /// a multi-paragraph reply split across leaves?) has only been seen in a quota-blocked dump
-    /// with no real assistant turns -- so it's measured in dry-run until a full dump lands.
+    /// The assistant-side counterpart -- an `AXHeading` reading "ChatGPT said:". Only consulted
+    /// when `userTurnHeadings` is set. Verified against a real AX dump 2026-09-07.
+    var assistantTurnHeadings: [String] = []
+
+    /// See `AXConversationAdapter.extractionUnverified`. For ChatGPT this is now PERMANENT, not a
+    /// "not yet" -- two dumps 2026-09-07 settled it: ChatGPT re-renders an assistant turn as it
+    /// streams and drifts UI chrome (status line, attachment banner) through the same subtree, so
+    /// the turn's text is different on every scan and content-derived message ids never dedupe;
+    /// and there is no conversation id anywhere in the tree, so there's no durable identity for a
+    /// long chat. The heading-anchored extractor below is kept as measurement scaffolding (it
+    /// makes a dump legible) but its output must never reach the graph. ChatGPT READ is served by
+    /// the browser extension -- URL-based conversation id, real selectors. THREAD.md §17's
+    /// native > accessibility > browser ladder is a preference; AX lost this app on the merits.
+    /// (ChatGPT native WRITE is unaffected and confirmed working -- the composer is value-settable.)
     var extractionUnverified: Bool = false
 
     static let cursor = AXAdapterConfig(
@@ -115,6 +125,7 @@ struct AXAdapterConfig {
         assistantHints: ["assistant", "chatgpt", "chatgpt said", "gpt", "ai response", "response"],
         chatContainerHints: ["chat", "conversation", "messages", "thread"],
         userTurnHeadings: ["you said:", "you said"],
+        assistantTurnHeadings: ["chatgpt said:", "assistant said:", "chatgpt responded"],
         extractionUnverified: true
     )
 }
@@ -182,13 +193,14 @@ struct HeuristicAXAdapter: AXConversationAdapter {
 
     func conversationKey(root: AXNode, appRoot _: AXNode) -> String? {
         if !config.userTurnHeadings.isEmpty {
-            // No conversation id anywhere in ChatGPT's tree. It renders the whole transcript
-            // (not virtualized like an editor pane), so the first user turn is a stable handle
-            // for the life of the chat. TODO: switch to the chat-title element once a dump
-            // confirms where it reliably sits in the header.
-            guard let firstUser = headingAnchoredBlocks(root).first(where: { $0.role == "user" })?.text,
-                  !firstUser.isEmpty else { return nil }
-            return AXText.shortHash(AXText.normalize(firstUser))
+            // No conversation id anywhere in ChatGPT's tree. Hash the first turn -- prefer the
+            // first USER turn (most stable), else the first turn of any role (a transient scan
+            // mid-stream may briefly have only an assistant turn). TODO: a stable handle for a
+            // long conversation whose first turn has scrolled out is still unsolved.
+            let blocks = headingAnchoredBlocks(root)
+            let anchor = blocks.first(where: { $0.role == "user" })?.text ?? blocks.first?.text
+            guard let anchor, !anchor.isEmpty else { return nil }
+            return AXText.shortHash(AXText.normalize(anchor))
         }
         // Prefer a handle that does NOT move when the message list virtualizes: the pane's own
         // identifier, else its title. Only if neither exists, fall back to hashing the first
@@ -217,54 +229,75 @@ struct HeuristicAXAdapter: AXConversationAdapter {
 
     // MARK: heading-anchored extraction (ChatGPT-shaped trees)
 
-    /// Walk leaves in order. A leaf matching `userTurnHeadings` opens a USER turn; the next
-    /// substantial leaf is that user message; everything substantial after it (until the next
-    /// heading) is the assistant reply, joined. Text before the first heading -- the sidebar,
-    /// the project list -- is skipped because `role` is still nil. The first composer
-    /// (`AXTextArea`/`AXTextField`) ends the transcript. Roles are `.explicit`: the heading is
-    /// an unambiguous marker, not a guess.
+    /// Walk leaves in order. A leaf matching `userTurnHeadings` / `assistantTurnHeadings` opens a
+    /// turn of that role; every substantial leaf after it (until the next heading, or that turn's
+    /// action buttons) is the message. ChatGPT shatters one sentence across a leaf per styled
+    /// span, so runs are joined on a space and the space-before-punctuation that produces is
+    /// tightened back up. Sidebar / project text before the first heading is skipped (`role` is
+    /// nil); UI chrome is denylisted; the composer `AXTextArea` ends the transcript; a turn
+    /// that's still streaming ("ChatGPT is responding") is dropped rather than captured unstably.
+    /// Roles are `.explicit`. VERIFIED SHAPE ONLY -- `extractionUnverified` keeps this
+    /// measurement-only until streaming/settle and long-conversation behaviour are confirmed.
     private func headingAnchoredBlocks(_ root: AXNode) -> [AXMessageBlock] {
         var out: [AXMessageBlock] = []
         var role: String?
-        var expectingUserMessage = false
-        var assistantParts: [String] = []
+        var parts: [String] = []
+        var turnClosed = false     // seen this turn's action buttons -> ignore trailing chrome
+        var streamingTail = false  // "ChatGPT is responding" seen -> last turn isn't settled
 
-        func flushAssistant() {
-            let text = assistantParts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            assistantParts.removeAll()
-            if text.count >= 2 {
-                out.append(AXMessageBlock(role: "assistant", text: text, roleConfidence: .explicit))
-            }
+        func flush() {
+            defer { parts.removeAll(); turnClosed = false }
+            guard let r = role, !parts.isEmpty else { return }
+            var text = parts.joined(separator: " ")
+            text = text.replacingOccurrences(of: #" +([,.;:!?%)\]”’])"#, with: "$1", options: .regularExpression)
+            text = text.replacingOccurrences(of: #"([(\[“‘]) +"#, with: "$1", options: .regularExpression)
+            text = text.replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.count >= 2 { out.append(AXMessageBlock(role: r, text: text, roleConfidence: .explicit)) }
         }
 
-        for node in root.flattened(maxDepth: 60) {
+        for node in root.flattened(maxDepth: 70) {
             let r = node.axRole
-            if r == "AXTextArea" || r == "AXTextField" { break }  // reached the composer
+            if r == "AXTextArea" || r == "AXTextField" { break }  // the composer
             guard r == "AXHeading" || r == "AXStaticText" else { continue }
-            guard let raw = node.axText?.trimmingCharacters(in: .whitespacesAndNewlines), raw.count >= 2
+            guard let raw = node.axText?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
             else { continue }
             let low = raw.lowercased()
 
             if config.userTurnHeadings.contains(where: { low == $0 || low.hasPrefix($0) }) {
-                flushAssistant()
-                role = "user"
-                expectingUserMessage = true
-                continue
+                flush(); role = "user"; continue
             }
-            if raw == "Copy message" || raw == "Edit message" || isLikelyTimestamp(raw) { continue }
+            if config.assistantTurnHeadings.contains(where: { low == $0 || low.hasPrefix($0) }) {
+                flush(); role = "assistant"; continue
+            }
+            if low == "chatgpt is responding" { streamingTail = true; continue }
+            if Self.chromeCloses.contains(low) { turnClosed = true; continue }
+            if Self.chromeSkip.contains(low) || isLikelyTimestamp(raw)
+                || Self.chromePrefixes.contains(where: low.hasPrefix) { continue }
 
-            if role == "user", expectingUserMessage {
-                out.append(AXMessageBlock(role: "user", text: raw, roleConfidence: .explicit))
-                expectingUserMessage = false
-                role = "assistant"
-            } else if role == "assistant" {
-                assistantParts.append(raw)
-            }
-            // role == nil: still above the first turn (sidebar / project list) -- ignore.
+            if role != nil, !turnClosed { parts.append(raw) }
         }
-        flushAssistant()
+
+        // A still-streaming trailing turn changes text every scan -- every version hashes to a
+        // different message id. Drop it; the settle re-scan captures it once it's done.
+        if streamingTail, role == "assistant" { parts.removeAll(); role = nil }
+        flush()
         return out
     }
+
+    /// Buttons that mark the END of a turn's content -- anything after them (until the next
+    /// heading) is chrome, not message text.
+    private static let chromeCloses: Set<String> = [
+        "copy", "copy message", "regenerate response", "rate response", "more actions",
+    ]
+    /// Leaves that are never message content, wherever they appear.
+    private static let chromeSkip: Set<String> = [
+        "you said:", "chatgpt said:", "edit message", "share", "send", "dictate",
+        "add files and more", "message chatgpt", "select chatgpt model",
+        "you've reached the limit for file attachments",
+    ]
+    // Only unambiguous chrome -- a plan/upgrade phrase can be real message content.
+    private static let chromePrefixes: [String] = ["attachments are unavailable until"]
 
     private func isLikelyTimestamp(_ s: String) -> Bool {
         s.range(of: #"^\d{1,2}:\d{2}(:\d{2})?\s?(AM|PM)?$"#,
