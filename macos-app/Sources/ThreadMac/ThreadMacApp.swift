@@ -84,11 +84,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Everything captured is stamped native_accessibility + its source app so it's
         // distinguishable in the evidence store and per-app in capture health.
         if ProcessInfo.processInfo.environment["THREAD_AX_SENSOR"] == "1" {
+            print("[ThreadMac AX] THREAD_AX_SENSOR=1 -- native capture rig is ON "
+                + "(Cursor / Claude / ChatGPT). This build knows THREAD_AX_DUMP.")
             AXSensorRunner.requestAccessibility()
             let sensor = AXSensorRunner(
                 adapters: AXAdapters.all,
                 ingest: { [weak appState] source, id, messages, fidelity in
-                    guard let appState, appState.isPaired else { return }
+                    guard let appState else { return }
+                    guard appState.isPaired else {
+                        print("[ThreadMac AX] \(source): read \(messages.count) msg but this build isn't paired "
+                            + "to an account -- nothing sent. Finish onboarding in the menu-bar app first.")
+                        return
+                    }
                     do {
                         let r = try await appState.client.ingestConversation(
                             id: id, source: source, messages: messages,
