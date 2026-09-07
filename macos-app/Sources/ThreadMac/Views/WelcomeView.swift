@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// First run. Thread has already created the account and already captures from the AI apps on
-/// this Mac -- so there is nothing to set up. Native-first (`browserCapturePublic == false`):
-/// the screen just says so and gets out of the way. Once browser capture is a public, one-click
-/// thing, `ready` gains the "Connect Browser" action. Signing in to an existing account (another
-/// Mac) stays a quiet afterthought either way.
+/// First run. Thread has already created the account, so there is nothing to set up. Native-first
+/// (`browserCapturePublic == false`): the screen names the two capture paths that work with no
+/// browser -- Cursor's local store (automatic) and paste-a-conversation for ChatGPT/Claude -- and
+/// gets out of the way. Once browser capture is a public, one-click thing, `ready` gains the
+/// "Connect Browser" action. Signing in to an existing account (another Mac) stays a quiet
+/// afterthought either way.
 struct WelcomeView: View {
     @EnvironmentObject var appState: AppState
     @State private var showSignIn = false
@@ -47,7 +48,7 @@ struct WelcomeView: View {
             VStack(alignment: .leading, spacing: 14) {
                 header(
                     "Thread is ready",
-                    "Thread works automatically with the AI apps on your Mac. Connect your browser to add the AI you use in Chrome."
+                    "It captures your thinking in Cursor on its own. Connect your browser to add ChatGPT, Claude and Gemini."
                 )
                 Button("Connect Browser") { appState.connectBrowser() }
                     .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
@@ -59,7 +60,7 @@ struct WelcomeView: View {
             VStack(alignment: .leading, spacing: 14) {
                 header(
                     "Thread is ready",
-                    "Thread works automatically with the AI apps on your Mac. Just open one and start thinking."
+                    "It picks up your thinking in Cursor on its own. For ChatGPT and Claude, paste a conversation in — Thread takes it from there."
                 )
                 HStack(spacing: 6) {
                     Text("⌘⇧T").font(.system(size: 11, weight: .semibold, design: .rounded))
