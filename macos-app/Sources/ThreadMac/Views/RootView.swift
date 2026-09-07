@@ -23,8 +23,8 @@ struct RootView: View {
             Group {
                 if appState.needsReconnect {
                     ReconnectView()
-                } else if !appState.isPaired {
-                    PairingView()
+                } else if !appState.isPaired || appState.showsWelcome {
+                    WelcomeView()
                 } else if inDetail {
                     IdeaDetailView()
                 } else {

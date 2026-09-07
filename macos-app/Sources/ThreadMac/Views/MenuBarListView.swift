@@ -146,8 +146,7 @@ struct MenuBarListView: View {
                     .onAppear { appState.noteResumeShown(s.ideaId, lastActivity: appState.lastActivity(of: s.ideaId)) }
                 }
                 if groups.isEmpty {
-                    EmptyState(onboard: !appState.onboardingDismissed && tab != .loops,
-                               dismiss: { appState.dismissOnboarding() }, loops: tab == .loops)
+                    EmptyState(loops: tab == .loops)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     scroller
@@ -301,8 +300,6 @@ private struct Segmented: View {
 // MARK: - Empty / onboarding
 
 private struct EmptyState: View {
-    let onboard: Bool
-    let dismiss: () -> Void
     let loops: Bool
     var body: some View {
         VStack(spacing: 13) {
@@ -316,38 +313,12 @@ private struct EmptyState: View {
                     .font(.system(size: 11.5)).foregroundStyle(Theme.ink(0.5))
                     .multilineTextAlignment(.center).frame(maxWidth: 250)
                     .fixedSize(horizontal: false, vertical: true)
+                Text("Press ⌘⇧T anywhere to recall.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.ink(0.35))
             }
-            if onboard { OnboardingCard(dismiss: dismiss).frame(maxWidth: 300).padding(.top, 4) }
             Spacer()
         }
         .frame(maxWidth: .infinity).padding(20)
-    }
-}
-
-private struct OnboardingCard: View {
-    let dismiss: () -> Void
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Finish setup").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ink(0.8))
-                Spacer()
-                Button(action: dismiss) { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).font(.system(size: 9)).foregroundStyle(Theme.ink(0.3))
-            }
-            step(1, "Install the browser extension")
-            step(2, "Talk to ChatGPT, Claude, Gemini or Cursor")
-            step(3, "Press ⌘⇧T to recall anything")
-        }
-        .padding(12)
-        .background(Color.white.opacity(0.7), in: RoundedRectangle(cornerRadius: Theme.cardCorner))
-        .overlay(RoundedRectangle(cornerRadius: Theme.cardCorner).stroke(Theme.cardStroke, lineWidth: 0.5))
-    }
-    private func step(_ n: Int, _ t: String) -> some View {
-        HStack(spacing: 8) {
-            Text("\(n)").font(.system(size: 9, weight: .bold, design: .rounded)).foregroundStyle(Theme.accent)
-                .frame(width: 14, height: 14).background(Theme.accent.opacity(0.15), in: Circle())
-            Text(t).font(.system(size: 11)).foregroundStyle(Theme.ink(0.5))
-        }
     }
 }
 
