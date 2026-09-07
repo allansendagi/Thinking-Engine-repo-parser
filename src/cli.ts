@@ -159,6 +159,55 @@ switch (command) {
     }
     break;
   }
+  case "evidence": {
+    // Print recent raw sensor observations from the evidence store -- what each sensor reported
+    // and the canonicalizer's structural verdict. Read-only. See state/canonicalize.ts.
+    //   bun src/cli.ts evidence [--user=user_<24hex>] [--limit=50]
+    const arg = (k: string) =>
+      process.argv.find((a) => a.startsWith(`--${k}=`))?.split("=")[1];
+    const only = arg("user");
+    const limit = Number(arg("limit") ?? "50");
+    const { readdirSync } = await import("node:fs");
+    const { dataDir, openUserDb } = await import("./db/tenancy");
+    const { loadRecentEvidence } = await import("./db/evidence");
+
+    const users =
+      only !== undefined
+        ? [only]
+        : (() => {
+            try {
+              return readdirSync(dataDir())
+                .filter((f) => /^user_[a-f0-9]{24}\.db$/.test(f))
+                .map((f) => f.replace(/\.db$/, ""));
+            } catch {
+              return [];
+            }
+          })();
+    if (users.length === 0) {
+      console.log("No user DBs found.");
+      break;
+    }
+    for (const uid of users) {
+      const db = openUserDb(uid);
+      try {
+        const rows = loadRecentEvidence(db, limit);
+        if (rows.length === 0) continue;
+        console.log(`\n${uid}`);
+        for (const r of rows) {
+          const flag = r.integrityOk ? "  " : "⚠ ";
+          console.log(
+            `  ${flag}${r.observedAt}  ${r.sensor.padEnd(18)} ${r.conversationId}  ` +
+              `${r.acceptedCount}/${r.observedCount} msgs`,
+          );
+          for (const i of r.integrityIssues) console.log(`       ${i.code}: ${i.detail}`);
+        }
+      } finally {
+        db.close();
+      }
+    }
+    console.log("");
+    break;
+  }
   case "dedup": {
     // Retroactively collapse near-identical duplicate idea nodes -- the ones that predate
     // buildIdeaNode's in-pipeline lexical backstop. Dry-run by default; --apply writes, and only
@@ -261,6 +310,9 @@ Commands:
                                            today, 7d/30d, per-day bars, by version/country).
   waitlist                                 Print the /waitlist signups -- total, today, last 7d,
                                            and every entry (email, name, note) newest first.
+  evidence [--user=<id>] [--limit=50]       Print recent raw sensor observations -- which sensor,
+                                           the conversation, accepted/observed message counts,
+                                           and any structure-validation issues (⚠). Read-only.
   grant --email=<addr>|--user=<id> [--plan=pro|free] [--status=active]
                                            Set an account's plan directly in registry.db (no
                                            Paddle checkout). For founder / support accounts.

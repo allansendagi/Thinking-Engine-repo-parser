@@ -58,6 +58,7 @@ export function resetDb(db: Database): void {
     "discarded_events",
     "cognitive_events",
     "canonical_events",
+    "evidence",
   ];
   for (const table of tables) {
     db.exec(`DELETE FROM ${table};`);

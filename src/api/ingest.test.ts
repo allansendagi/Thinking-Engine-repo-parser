@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { openDb } from "../db/client";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
+import { loadEvidenceForConversation } from "../db/evidence";
 import { ingestConversation } from "./ingest";
 import { FakeProvider } from "../providers/fake";
 
@@ -264,5 +265,106 @@ describe("capture provenance (THREAD.md §7)", () => {
     await ingestConversation(db, oneMessage("m1", "Legacy client sends nothing."), providersFor("Legacy client sends nothing.", "m1"));
     const [event] = loadCanonicalEvents(db);
     expect(event?.capture).toBeNull();
+  });
+});
+
+describe("evidence layer (THREAD.md §7 -- raw observation below canonical events)", () => {
+  const providersFor = (statement: string, sourceId: string) => ({
+    extraction: new FakeProvider([
+      extractionResponse([
+        { type: "new_idea", statement, confidence: 0.9, source_event_id: sourceId, evidence_quote: statement.slice(0, 12) },
+      ]),
+    ]),
+    reasoning: new FakeProvider([]),
+  });
+
+  test("an advancing observation records one evidence row with the sensor + accepted/observed counts", async () => {
+    const db = openDb(":memory:");
+    const res = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_ev",
+        source: "fixture",
+        messages: [
+          { id: "m1", role: "user", text: "Evidence sits below canonical events.", createdAt: "2026-09-07T00:00:00.000Z" },
+          { id: "m2", role: "assistant", text: "Yes -- three epistemic levels.", createdAt: "2026-09-07T00:01:00.000Z" },
+        ],
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      providersFor("Evidence sits below canonical events.", "m1"),
+    );
+    expect(res.integrityOk).toBe(true);
+    expect(res.integrityIssues).toEqual([]);
+
+    const evidence = loadEvidenceForConversation(db, "conv_ev");
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({
+      sensor: "browser_extension",
+      observedCount: 2,
+      acceptedCount: 2,
+      integrityOk: true,
+    });
+    expect(evidence[0]?.payload.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
+  test("a malformed observation still ingests the valid messages AND records the issue", async () => {
+    const db = openDb(":memory:");
+    const res = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_bad",
+        source: "fixture",
+        messages: [
+          { id: "", role: "user", text: "no id -- cannot be a canonical event", createdAt: "2026-09-07T00:00:00.000Z" },
+          { id: "ok1", role: "user", text: "this one is fine", createdAt: "2026-09-07T00:01:00.000Z" },
+        ],
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      providersFor("this one is fine", "ok1"),
+    );
+    expect(res.integrityOk).toBe(false);
+    expect(res.integrityIssues.map((i) => i.code)).toEqual(["empty_id"]);
+    // The good message still became a canonical event and an idea.
+    expect(loadCanonicalEvents(db).map((e) => e.id)).toEqual(["ok1"]);
+    expect(loadIdeas(db)).toHaveLength(1);
+
+    const evidence = loadEvidenceForConversation(db, "conv_bad");
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({ observedCount: 2, acceptedCount: 1, integrityOk: false });
+    expect(evidence[0]?.integrityIssues[0]?.code).toBe("empty_id");
+  });
+
+  test("a clean no-op resend records NO new evidence row; a now-broken resend DOES", async () => {
+    const db = openDb(":memory:");
+    const clean = {
+      conversationId: "conv_resend",
+      source: "fixture" as const,
+      messages: [{ id: "m1", role: "user" as const, text: "First observation.", createdAt: "2026-09-07T00:00:00.000Z" }],
+      capture: { method: "browser_extension" as const, fidelity: "high" as const },
+    };
+    await ingestConversation(db, clean, providersFor("First observation.", "m1"));
+    expect(loadEvidenceForConversation(db, "conv_resend")).toHaveLength(1);
+
+    // Exact same transcript again, no new messages, still structurally clean -> no signal, no row.
+    await ingestConversation(db, clean, { extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    expect(loadEvidenceForConversation(db, "conv_resend")).toHaveLength(1);
+
+    // Same conversation, no new messages, but the sensor now returns a broken transcript
+    // (duplicate id) -> a health signal worth keeping even though nothing advanced.
+    await ingestConversation(
+      db,
+      {
+        ...clean,
+        messages: [
+          { id: "m1", role: "user", text: "First observation.", createdAt: "2026-09-07T00:00:00.000Z" },
+          { id: "m1", role: "user", text: "First observation.", createdAt: "2026-09-07T00:00:00.000Z" },
+        ],
+      },
+      { extraction: new FakeProvider([]), reasoning: new FakeProvider([]) },
+    );
+    const evidence = loadEvidenceForConversation(db, "conv_resend");
+    expect(evidence).toHaveLength(2);
+    expect(evidence[1]).toMatchObject({ integrityOk: false });
+    expect(evidence[1]?.integrityIssues.map((i) => i.code)).toContain("duplicate_id");
   });
 });
