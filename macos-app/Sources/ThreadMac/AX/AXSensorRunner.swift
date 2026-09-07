@@ -226,7 +226,6 @@ final class AXSensorRunner {
             return
         }
 
-        scanNote("Capturing \(step.settled.count) settled turn(s) from \(adapter.source).")
         let source = adapter.source
         let conversationID = "\(source)::ax::\(key)"
         let base = Date()
@@ -235,13 +234,27 @@ final class AXSensorRunner {
              createdAt: iso.string(from: base.addingTimeInterval(Double(i))))
         }
         let fidelity = AXConversationSensor.batchFidelity(step.settled)
+
+        // THREAD_AX_DUMP=1 is a MEASUREMENT run -- print what would be captured and write nothing.
+        // Tuning the adapters against a real tree must never mutate the user's idea graph.
+        // An adapter whose extraction hasn't been dump-verified is also measure-only: it still
+        // runs here so a dump can score it, but its output never reaches the graph.
+        if dumpTree || adapter.extractionUnverified {
+            let why = dumpTree ? "DRY RUN (THREAD_AX_DUMP=1)" : "\(source) extraction is unverified"
+            scanNote("\(why) -- would capture \(messages.count) turn(s) from \(source) (fidelity \(fidelity)). Not written to the graph.")
+            if dumpTree { for m in messages { log("  [\(m.role)] \(m.text.prefix(120))") } }
+            return
+        }
+
+        scanNote("Capturing \(step.settled.count) settled turn(s) from \(source).")
         Task { @MainActor [ingest] in await ingest(source, conversationID, messages, fidelity) }
     }
 
     // MARK: - diagnostics (THREAD_AX_DUMP=1)
 
     /// Print the AX subtree so the adapter hint sets can be tuned against real structure. This is
-    /// the data a measurement pass produces; it is never on in a shipped build.
+    /// the data a measurement pass produces; it is never on in a shipped build, and while it's on
+    /// `scan()` runs dry (see above) -- measurement never writes to the graph.
     private func dump(_ node: AXNode, label: String, depth: Int = 0, budget: Int = 1200) {
         guard depth == 0 || budget > 0 else { return }
         if depth == 0 { print("[ThreadMac AX] ===== tree dump: \(label) =====") }

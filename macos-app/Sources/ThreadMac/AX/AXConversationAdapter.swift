@@ -45,10 +45,16 @@ protocol AXConversationAdapter {
     /// The message-composer element, for native continuation (writing a checkpoint back in). nil
     /// when it can't be found. Optional -- default is nil.
     func composerElement(appRoot: AXNode) -> AXNode?
+
+    /// True when this adapter's extraction has not yet been checked against a real AX dump of a
+    /// full conversation. The sensor still RUNS it (so `THREAD_AX_DUMP=1` can measure it), but
+    /// won't write its output to the graph. Flip to false once a dump confirms both roles.
+    var extractionUnverified: Bool { get }
 }
 
 extension AXConversationAdapter {
     func composerElement(appRoot: AXNode) -> AXNode? { nil }
+    var extractionUnverified: Bool { false }
 }
 
 // MARK: - config-driven heuristic adapter
@@ -68,6 +74,20 @@ struct AXAdapterConfig {
     var containerRoles: Set<String> = ["AXScrollArea", "AXGroup", "AXWebArea", "AXList"]
     var blockRoles: Set<String> = ["AXGroup", "AXStaticText", "AXTextArea", "AXWebArea", "AXCell"]
     var composerRoles: Set<String> = ["AXTextArea", "AXTextField"]
+
+    /// When non-empty, the adapter switches from "find a hinted container + alternate" to
+    /// heading-anchored extraction: a leaf whose text matches one of these (case-insensitive,
+    /// exact or prefix) opens a new USER turn, and everything substantial until the next such
+    /// leaf is that turn's assistant reply. This is the shape ChatGPT's desktop tree actually
+    /// has -- every container is a hint-less `AXGroup`, but each user turn is preceded by an
+    /// `AXHeading` reading "You said:". Verified against a real AX dump 2026-09-07.
+    var userTurnHeadings: [String] = []
+
+    /// See `AXConversationAdapter.extractionUnverified`. Set for ChatGPT: the `"You said:"` user
+    /// anchor is confirmed, but the assistant side (is there a `"ChatGPT said:"` heading? how is
+    /// a multi-paragraph reply split across leaves?) has only been seen in a quota-blocked dump
+    /// with no real assistant turns -- so it's measured in dry-run until a full dump lands.
+    var extractionUnverified: Bool = false
 
     static let cursor = AXAdapterConfig(
         bundleIDs: ["com.todesktop.230313mzl4w4u92"],
@@ -93,7 +113,9 @@ struct AXAdapterConfig {
         source: "chatgpt",
         userHints: ["user", "you said", "your message"],
         assistantHints: ["assistant", "chatgpt", "chatgpt said", "gpt", "ai response", "response"],
-        chatContainerHints: ["chat", "conversation", "messages", "thread"]
+        chatContainerHints: ["chat", "conversation", "messages", "thread"],
+        userTurnHeadings: ["you said:", "you said"],
+        extractionUnverified: true
     )
 }
 
@@ -111,8 +133,16 @@ struct HeuristicAXAdapter: AXConversationAdapter {
 
     var bundleIDs: [String] { config.bundleIDs }
     var source: String { config.source }
+    var extractionUnverified: Bool { config.extractionUnverified }
 
     func conversationRoot(appRoot: AXNode) -> AXNode? {
+        if !config.userTurnHeadings.isEmpty {
+            // Heading-anchored apps (ChatGPT): nothing in the tree carries a container hint, so
+            // the scope is the whole web area and `headingAnchoredBlocks` does the filtering.
+            // nil only when there's no web content at all (a loading window).
+            return appRoot.flattened(maxDepth: 60).first { $0.axRole == "AXWebArea" } ?? appRoot
+        }
+
         let all = appRoot.flattened()
 
         // First choice: a container whose own hints name it as the chat pane. One block is enough
@@ -136,7 +166,8 @@ struct HeuristicAXAdapter: AXConversationAdapter {
     }
 
     func messageBlocks(root: AXNode) -> [AXMessageBlock] {
-        blocks(in: root).enumerated().map { index, block in
+        if !config.userTurnHeadings.isEmpty { return headingAnchoredBlocks(root) }
+        return blocks(in: root).enumerated().map { index, block in
             if let explicit = hintRoleOrNil(block.hints) {
                 return AXMessageBlock(role: explicit, text: block.text, roleConfidence: .explicit)
             }
@@ -150,6 +181,15 @@ struct HeuristicAXAdapter: AXConversationAdapter {
     }
 
     func conversationKey(root: AXNode, appRoot _: AXNode) -> String? {
+        if !config.userTurnHeadings.isEmpty {
+            // No conversation id anywhere in ChatGPT's tree. It renders the whole transcript
+            // (not virtualized like an editor pane), so the first user turn is a stable handle
+            // for the life of the chat. TODO: switch to the chat-title element once a dump
+            // confirms where it reliably sits in the header.
+            guard let firstUser = headingAnchoredBlocks(root).first(where: { $0.role == "user" })?.text,
+                  !firstUser.isEmpty else { return nil }
+            return AXText.shortHash(AXText.normalize(firstUser))
+        }
         // Prefer a handle that does NOT move when the message list virtualizes: the pane's own
         // identifier, else its title. Only if neither exists, fall back to hashing the first
         // visible turn -- which genuinely shifts when the top of the transcript scrolls out.
@@ -173,6 +213,62 @@ struct HeuristicAXAdapter: AXConversationAdapter {
             config.composerRoles.contains(node.axRole)
                 && config.composerHints.contains { node.axHints.contains($0) }
         }
+    }
+
+    // MARK: heading-anchored extraction (ChatGPT-shaped trees)
+
+    /// Walk leaves in order. A leaf matching `userTurnHeadings` opens a USER turn; the next
+    /// substantial leaf is that user message; everything substantial after it (until the next
+    /// heading) is the assistant reply, joined. Text before the first heading -- the sidebar,
+    /// the project list -- is skipped because `role` is still nil. The first composer
+    /// (`AXTextArea`/`AXTextField`) ends the transcript. Roles are `.explicit`: the heading is
+    /// an unambiguous marker, not a guess.
+    private func headingAnchoredBlocks(_ root: AXNode) -> [AXMessageBlock] {
+        var out: [AXMessageBlock] = []
+        var role: String?
+        var expectingUserMessage = false
+        var assistantParts: [String] = []
+
+        func flushAssistant() {
+            let text = assistantParts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            assistantParts.removeAll()
+            if text.count >= 2 {
+                out.append(AXMessageBlock(role: "assistant", text: text, roleConfidence: .explicit))
+            }
+        }
+
+        for node in root.flattened(maxDepth: 60) {
+            let r = node.axRole
+            if r == "AXTextArea" || r == "AXTextField" { break }  // reached the composer
+            guard r == "AXHeading" || r == "AXStaticText" else { continue }
+            guard let raw = node.axText?.trimmingCharacters(in: .whitespacesAndNewlines), raw.count >= 2
+            else { continue }
+            let low = raw.lowercased()
+
+            if config.userTurnHeadings.contains(where: { low == $0 || low.hasPrefix($0) }) {
+                flushAssistant()
+                role = "user"
+                expectingUserMessage = true
+                continue
+            }
+            if raw == "Copy message" || raw == "Edit message" || isLikelyTimestamp(raw) { continue }
+
+            if role == "user", expectingUserMessage {
+                out.append(AXMessageBlock(role: "user", text: raw, roleConfidence: .explicit))
+                expectingUserMessage = false
+                role = "assistant"
+            } else if role == "assistant" {
+                assistantParts.append(raw)
+            }
+            // role == nil: still above the first turn (sidebar / project list) -- ignore.
+        }
+        flushAssistant()
+        return out
+    }
+
+    private func isLikelyTimestamp(_ s: String) -> Bool {
+        s.range(of: #"^\d{1,2}:\d{2}(:\d{2})?\s?(AM|PM)?$"#,
+                options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     // MARK: heuristic block extraction

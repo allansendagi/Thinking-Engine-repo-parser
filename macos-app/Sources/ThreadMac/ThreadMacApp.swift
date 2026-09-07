@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var servicesProvider: ThreadServicesProvider?
     private var ambientNudge: AmbientNudge?
     private var axSensor: AXSensorRunner?
+    private let setupNotifier = SetupNotifier()
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
     private var pendingURLs: [URL] = []
 
@@ -78,6 +79,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ambient.start()
         ambientNudge = ambient
 
+        // Tell the user exactly what's blocking setup (permission, account, a broken sensor) via
+        // a macOS notification with the literal fix -- so a menu-bar app never leaves them guessing.
+        setupNotifier.start()
+
         // Native AX capture across Cursor / Claude / ChatGPT. OFF unless THREAD_AX_SENSOR=1 --
         // still a measurement rig ("does AX-only capture actually work"), not a shipped path,
         // until the adapters are verified against real AX trees (THREAD_AX_DUMP=1 prints them).
@@ -89,11 +94,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AXSensorRunner.requestAccessibility()
             let sensor = AXSensorRunner(
                 adapters: AXAdapters.all,
-                ingest: { [weak appState] source, id, messages, fidelity in
+                ingest: { [weak appState, setupNotifier] source, id, messages, fidelity in
                     guard let appState else { return }
                     guard appState.isPaired else {
                         print("[ThreadMac AX] \(source): read \(messages.count) msg but this build isn't paired "
                             + "to an account -- nothing sent. Finish onboarding in the menu-bar app first.")
+                        await MainActor.run { setupNotifier.report(.notPaired) }
                         return
                     }
                     do {
@@ -102,12 +108,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                             capture: (method: "native_accessibility", fidelity: fidelity)
                         )
                         print("[ThreadMac AX] \(source): +\(messages.count) msg fidelity=\(fidelity) -> canonical +\(r.newCanonicalEvents), ideas \(r.ideaCount)")
+                        await MainActor.run { setupNotifier.clear(.notPaired) }
                     } catch {
                         print("[ThreadMac AX] \(source) ingest failed: \(error)")
                     }
                 }
             )
-            sensor.onStatusChange = { print("[ThreadMac AX] status: \($0)") }
+            sensor.onStatusChange = { [setupNotifier] status in
+                print("[ThreadMac AX] status: \(status)")
+                switch status {
+                case .needsPermission:
+                    setupNotifier.report(.accessibilityNeeded)
+                case .error(let m):
+                    setupNotifier.report(.captureError("Native capture: \(m)"))
+                case .waiting, .watching:
+                    // Reaching either proves Accessibility is granted and there's no live error.
+                    // Says nothing about the account -- leave `.notPaired` alone.
+                    setupNotifier.clear(.accessibilityNeeded)
+                    setupNotifier.clear(.captureError(""))
+                case .idle:
+                    break
+                }
+            }
             sensor.start()
             axSensor = sensor
         }
