@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// First run. Thread has already created the account and can already capture from native Mac
-/// apps -- so there are no decisions here. The one real setup action for a browser user is
-/// connecting the browser; that's the only primary control. Signing in to an existing account
-/// (another Mac) is a quiet afterthought, not a fork in the road.
+/// First run. Thread has already created the account and already captures from the AI apps on
+/// this Mac -- so there is nothing to set up. Native-first (`browserCapturePublic == false`):
+/// the screen just says so and gets out of the way. Once browser capture is a public, one-click
+/// thing, `ready` gains the "Connect Browser" action. Signing in to an existing account (another
+/// Mac) stays a quiet afterthought either way.
 struct WelcomeView: View {
     @EnvironmentObject var appState: AppState
     @State private var showSignIn = false
@@ -38,23 +39,45 @@ struct WelcomeView: View {
         .onAppear { if !appState.isPaired { Task { await appState.pairNewAccount() } } }
     }
 
-    // The account is up: the one real action is connecting a browser.
+    // The account is up. Native-first: nothing to do -- just start. With browser capture public,
+    // the one real action is connecting the browser.
+    @ViewBuilder
     private var ready: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Thread is ready")
-                    .font(.system(size: 15, weight: .semibold))
-                Text("Connect your browser to let Thread capture the AI conversations you have there.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        if AppState.browserCapturePublic {
+            VStack(alignment: .leading, spacing: 14) {
+                header(
+                    "Thread is ready",
+                    "Thread works automatically with the AI apps on your Mac. Connect your browser to add the AI you use in Chrome."
+                )
+                Button("Connect Browser") { appState.connectBrowser() }
+                    .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
+                Button("Not now") { appState.dismissWelcome() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11)).foregroundStyle(Theme.ink(0.45))
             }
-            Button("Connect Browser") { appState.connectBrowser() }
-                .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
-            Button("You can start with supported Mac apps without this") {
-                appState.dismissWelcome()
+        } else {
+            VStack(alignment: .leading, spacing: 14) {
+                header(
+                    "Thread is ready",
+                    "Thread works automatically with the AI apps on your Mac. Just open one and start thinking."
+                )
+                HStack(spacing: 6) {
+                    Text("⌘⇧T").font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Theme.ink(0.06), in: RoundedRectangle(cornerRadius: 5))
+                    Text("Recall anything you've thought about").font(.system(size: 11)).foregroundStyle(Theme.ink(0.5))
+                }
+                Button("Start") { appState.dismissWelcome() }
+                    .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
             }
-            .buttonStyle(.plain)
-            .font(.system(size: 11)).foregroundStyle(Theme.ink(0.45))
+        }
+    }
+
+    private func header(_ title: String, _ body: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 15, weight: .semibold))
+            Text(body).font(.system(size: 12)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
