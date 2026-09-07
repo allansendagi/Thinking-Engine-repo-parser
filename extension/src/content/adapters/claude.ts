@@ -1,5 +1,5 @@
 import type { SiteAdapter, RawMessage } from "../common/siteAdapter";
-import { cleanText, matchFirst } from "../common/domUtils";
+import { cleanText, fillComposer, firstMatch, matchFirst } from "../common/domUtils";
 
 /**
  * Verified against live claude.ai (2026-09-01): user turns carry `data-testid="user-message"`;
@@ -11,6 +11,14 @@ import { cleanText, matchFirst } from "../common/domUtils";
  */
 
 const USER_SELECTORS = ['[data-testid="user-message"]', '[data-testid="human-turn"]'];
+
+/** Claude's composer is a ProseMirror contenteditable. Ordered fallbacks. */
+const COMPOSER_SELECTORS = [
+  'div[contenteditable="true"].ProseMirror',
+  '[data-testid="chat-input"] [contenteditable="true"]',
+  'fieldset [contenteditable="true"]',
+  'div[contenteditable="true"]',
+];
 const ASSISTANT_SELECTORS = [
   ".font-claude-response .standard-markdown",
   ".standard-markdown",
@@ -77,5 +85,10 @@ export const claudeAdapter: SiteAdapter = {
     return all
       .map(({ el, role }) => ({ role, text: stripChrome(el.textContent ?? "") }))
       .filter((m) => m.text.length > 0);
+  },
+
+  insertIntoComposer(text: string, root: ParentNode = document): boolean {
+    const el = firstMatch(root, COMPOSER_SELECTORS);
+    return el ? fillComposer(el, text) : false;
   },
 };

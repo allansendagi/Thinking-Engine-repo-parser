@@ -1,5 +1,5 @@
 import type { SiteAdapter, RawMessage } from "../common/siteAdapter";
-import { cleanText, matchFirst } from "../common/domUtils";
+import { cleanText, fillComposer, firstMatch, matchFirst } from "../common/domUtils";
 
 /**
  * Verified against live gemini.google.com (2026-09-01). Gemini's Angular app uses stable custom
@@ -12,6 +12,15 @@ import { cleanText, matchFirst } from "../common/domUtils";
 
 const USER_SELECTORS = ["user-query-content", "user-query"];
 const ASSISTANT_SELECTORS = ["message-content", "model-response"];
+
+/** Gemini's composer is a Quill contenteditable (`.ql-editor`) inside `rich-textarea`. */
+const COMPOSER_SELECTORS = [
+  "rich-textarea .ql-editor",
+  ".ql-editor[contenteditable='true']",
+  'div[contenteditable="true"][role="textbox"]',
+  'div[contenteditable="true"]',
+  "textarea",
+];
 
 function collect(root: ParentNode, selectors: string[]): HTMLElement[] {
   for (const selector of selectors) {
@@ -66,5 +75,10 @@ export const geminiAdapter: SiteAdapter = {
     return all
       .map(({ el, role }) => ({ role, text: stripChrome(el.textContent ?? "") }))
       .filter((m) => m.text.length > 0);
+  },
+
+  insertIntoComposer(text: string, root: ParentNode = document): boolean {
+    const el = firstMatch(root, COMPOSER_SELECTORS);
+    return el ? fillComposer(el, text) : false;
   },
 };

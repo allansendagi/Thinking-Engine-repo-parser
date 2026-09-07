@@ -17,4 +17,11 @@ export interface SiteAdapter {
   getConversationUrl?(): string | null;
   /** All currently-rendered messages, in conversation order. Empty array if none found. */
   extractMessages(root: ParentNode): RawMessage[];
+  /**
+   * Put `text` into this tool's message composer -- caret at the end, NOT submitted. Returns
+   * false when the composer element can't be found (selectors drifted, or this isn't a chat
+   * surface). Optional: an adapter without it just can't offer "continue here", only the
+   * hand-off-to-the-Mac-app fallback.
+   */
+  insertIntoComposer?(text: string, root?: ParentNode): boolean;
 }

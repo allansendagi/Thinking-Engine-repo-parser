@@ -61,4 +61,22 @@ describe("chatGptAdapter", () => {
     const window = setupDom("https://chatgpt.com/c/abc-123", "<main></main>");
     expect(chatGptAdapter.extractMessages(window.document as unknown as ParentNode)).toEqual([]);
   });
+
+  test("insertIntoComposer drops the packet into the prompt box without submitting", () => {
+    const window = setupDom(
+      "https://chatgpt.com/",
+      `<form><div id="prompt-textarea" contenteditable="true"></div><button type="submit">Send</button></form>`,
+    );
+    const ok = chatGptAdapter.insertIntoComposer!(
+      "Current idea: computable authority\nContinue from here.",
+      window.document as unknown as ParentNode,
+    );
+    expect(ok).toBe(true);
+    expect(window.document.getElementById("prompt-textarea")!.textContent).toContain("computable authority");
+  });
+
+  test("insertIntoComposer returns false when there is no composer", () => {
+    const window = setupDom("https://chatgpt.com/", "<main></main>");
+    expect(chatGptAdapter.insertIntoComposer!("x", window.document as unknown as ParentNode)).toBe(false);
+  });
 });

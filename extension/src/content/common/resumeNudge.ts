@@ -95,17 +95,22 @@ export function attachResumeNudge(adapter: SiteAdapter, doc: Document): () => vo
           box-shadow: 0 0 6px rgba(10,111,255,0.5); }
         .title { font-size: 13px; font-weight: 600; margin: 0 0 1px; }
         .sub { font-size: 11.5px; color: rgba(0,0,0,0.45); margin: 0 0 11px; }
-        .row { display: flex; gap: 8px; }
+        .row { display: flex; align-items: center; gap: 10px; }
         button { all: unset; cursor: pointer; font: inherit; font-size: 12px;
           padding: 6px 12px; border-radius: 7px; }
-        .resume { background: #0A6FFF; color: #fff; font-weight: 600; }
-        .resume:hover { background: #0960db; }
-        .later { color: rgba(0,0,0,0.5); }
+        button[disabled] { opacity: 0.6; cursor: default; }
+        .primary { background: #0A6FFF; color: #fff; font-weight: 600; }
+        .primary:hover { background: #0960db; }
+        .secondary { color: rgba(0,0,0,0.6); }
+        .secondary:hover { color: rgba(0,0,0,0.9); }
+        .later { color: rgba(0,0,0,0.45); margin-left: auto; }
         .later:hover { color: rgba(0,0,0,0.8); }
         @media (prefers-color-scheme: dark) {
           .card { color: #f5f5f7; background: rgba(30,30,32,0.98); border-color: rgba(255,255,255,0.12); }
           .eyebrow, .sub { color: rgba(255,255,255,0.5); }
-          .later { color: rgba(255,255,255,0.55); }
+          .secondary { color: rgba(255,255,255,0.6); }
+          .secondary:hover { color: #fff; }
+          .later { color: rgba(255,255,255,0.5); }
           .later:hover { color: #fff; }
         }
       </style>
@@ -113,27 +118,64 @@ export function attachResumeNudge(adapter: SiteAdapter, doc: Document): () => vo
         <div class="eyebrow"><span class="dot"></span>Pick up where you left off?</div>
         <p class="title"></p>
         <p class="sub">Last worked on ${ageText}</p>
-        <div class="row">
-          <button class="resume">Resume in Thread</button>
-          <button class="later">Not now</button>
-        </div>
+        <div class="row"></div>
       </div>`;
     // textContent, not innerHTML, for the idea title -- it's user data.
     root.querySelector(".title")!.textContent = s.title;
 
+    const rowEl = root.querySelector(".row")!;
     const teardown = () => host.remove();
-    root.querySelector(".resume")!.addEventListener("click", () => {
-      // Hand off to the Mac app inside the user gesture so the OS protocol prompt is allowed.
+
+    /** Hand off to the Mac app -- inside a user gesture so the OS protocol prompt is allowed. */
+    const openInThread = () => {
       const a = doc.createElement("a");
       a.href = `thread://continue?idea=${encodeURIComponent(s.ideaId)}`;
       root.appendChild(a);
       a.click();
       dismiss(s.ideaId);
       teardown();
-    });
-    root.querySelector(".later")!.addEventListener("click", () => {
+    };
+
+    const mkButton = (cls: string, label: string): HTMLButtonElement => {
+      const b = doc.createElement("button");
+      b.className = cls;
+      b.textContent = label;
+      rowEl.appendChild(b);
+      return b;
+    };
+
+    // Primary: drop the continuation packet straight into this tool's composer. Only when the
+    // adapter can write to a composer AND this is genuinely a NEW chat (no conversation id) --
+    // a loaded-but-slow existing thread also reads as "fresh" to the nudge heuristic, and we
+    // must not prepend a checkpoint into a conversation that already has context. Otherwise
+    // "Open in Thread" leads.
+    const canInsert =
+      typeof adapter.insertIntoComposer === "function" && adapter.getConversationId() === null;
+    const continueBtn = mkButton("primary", canInsert ? "Continue here" : "Open in Thread");
+    const secondaryBtn = canInsert ? mkButton("secondary", "Open in Thread") : null;
+    mkButton("later", "Not now").addEventListener("click", () => {
       dismiss(s.ideaId);
       teardown();
+    });
+    secondaryBtn?.addEventListener("click", openInThread);
+
+    continueBtn.addEventListener("click", () => {
+      if (!canInsert) return openInThread();
+      continueBtn.disabled = true;
+      continueBtn.textContent = "Continuing…";
+      chrome.runtime
+        .sendMessage({ type: "thread:continue-packet", ideaId: s.ideaId })
+        .then((res: { ok: boolean; text?: string; error?: string }) => {
+          if (res?.ok && res.text && adapter.insertIntoComposer!(res.text, doc)) {
+            dismiss(s.ideaId);
+            teardown();
+            return;
+          }
+          // Packet fetched but the composer wasn't found, or the fetch failed -- fall back to
+          // the Mac app rather than leaving the user with a dead button.
+          openInThread();
+        })
+        .catch(() => openInThread());
     });
 
     (doc.body ?? doc.documentElement).appendChild(host);

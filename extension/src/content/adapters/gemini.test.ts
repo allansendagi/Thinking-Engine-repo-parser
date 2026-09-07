@@ -43,4 +43,22 @@ describe("geminiAdapter", () => {
       { role: "assistant", text: "A persistent representation of your evolving ideas." },
     ]);
   });
+
+  test("insertIntoComposer writes into the Quill editor", () => {
+    const window = setupDom(
+      "https://gemini.google.com/app",
+      `<rich-textarea><div class="ql-editor" contenteditable="true" role="textbox"></div></rich-textarea>`,
+    );
+    const ok = geminiAdapter.insertIntoComposer!(
+      "Continuation task: verify authority independently",
+      window.document as unknown as ParentNode,
+    );
+    expect(ok).toBe(true);
+    expect(window.document.querySelector(".ql-editor")!.textContent).toContain("verify authority independently");
+  });
+
+  test("insertIntoComposer returns false with no composer present", () => {
+    const window = setupDom("https://gemini.google.com/app", "<main></main>");
+    expect(geminiAdapter.insertIntoComposer!("x", window.document as unknown as ParentNode)).toBe(false);
+  });
 });
