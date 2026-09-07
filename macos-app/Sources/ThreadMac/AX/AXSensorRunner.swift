@@ -114,7 +114,13 @@ final class AXSensorRunner {
 
     private func considerApp(bundleID: String, pid: pid_t) {
         guard let match = adapters.first(where: { $0.bundleIDs.contains(bundleID) }) else {
-            if adapter != nil { log("Left a supported app (\(bundleID) is now frontmost). Idle until one returns.") }
+            // Frontmost is not an app Thread reads -- let go of whatever we were on. "Follow the
+            // frontmost supported app" means attach to NOTHING while the user is elsewhere.
+            if adapter != nil {
+                log("Left \(adapter?.source ?? "a supported app") -- \(bundleID) is frontmost. Idle until one returns.")
+                detach()
+                status = .waiting
+            }
             return
         }
         if watchedPID == pid, adapter?.source == match.source { return } // already on it
@@ -124,6 +130,13 @@ final class AXSensorRunner {
 
     private func attach(adapter: any AXConversationAdapter, pid: pid_t) {
         let el = AXUIElementCreateApplication(pid)
+
+        // Chromium/Electron apps (Claude Desktop, Cursor, ...) expose an EMPTY AX tree until asked
+        // to build the DOM-bridged one. This is the documented opt-in. Some honour it, some
+        // don't -- if the tree is still empty after this, native read isn't available for that app.
+        AXUIElementSetAttributeValue(el, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(el, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+
         var obs: AXObserver?
         guard AXObserverCreate(pid, axSensorCallback, &obs) == .success, let obs else {
             status = .error("AXObserverCreate failed")
@@ -142,10 +155,25 @@ final class AXSensorRunner {
         self.watchedPID = pid
         self.state = AXSensorState() // a different app is a different conversation context
         status = .watching(source: adapter.source, pid: pid)
-        log("Attached to \(adapter.source) (pid \(pid)). \(dumpTree ? "Dumping its AX tree, then watching for turns." : "Watching for turns. Set THREAD_AX_DUMP=1 for the tree.")")
+        log("Attached to \(adapter.source) (pid \(pid)). Waiting for its AX tree to build\(dumpTree ? ", then dumping it." : ".")")
 
-        if dumpTree { dump(LiveAXNode(el), label: adapter.source) }
-        scanSoon()
+        // The tree builds asynchronously after the opt-in above -- give it a beat before the
+        // first dump/scan, or an Electron app looks empty when it just wasn't ready.
+        let el0 = el
+        let src = adapter.source
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            guard let self, self.watchedPID == pid else { return }
+            if self.dumpTree {
+                let node = LiveAXNode(el0)
+                if node.axChildren.isEmpty {
+                    self.log("\(src): AX tree is still empty after the Chromium opt-in -- this app "
+                        + "does not expose its content to Accessibility. Native read isn't possible here.")
+                } else {
+                    self.dump(node, label: src)
+                }
+            }
+            self.scanSoon()
+        }
     }
 
     private func detach() {
