@@ -81,7 +81,12 @@ function normalizeMessage(text: string): string {
 
 /** The set of verbatim-normalized message texts. Two conversations that share most of this set
  *  are the same conversation (a fork shares the parent's turns, then diverges). Very short
- *  turns ("ok", "yes") are dropped -- they collide across unrelated conversations. */
+ *  turns ("ok", "yes") are dropped -- they collide across unrelated conversations.
+ *
+ *  Each entry is a PREFIX (first ~400 chars lowercased, whitespace-collapsed), not the whole
+ *  message -- so two long replies that share an opening paragraph hash to the same entry. That's
+ *  wanted for forks (shared prefixes should match); the tradeoff is that two genuinely distinct
+ *  conversations that both open with the same boilerplate preamble drift toward a strong match. */
 export function contentFingerprint(messages: { text: string }[]): Set<string> {
   return new Set(messages.map((m) => normalizeMessage(m.text)).filter((s) => s.length >= 12));
 }

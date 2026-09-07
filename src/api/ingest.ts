@@ -22,6 +22,16 @@ import {
 } from "../state/resolveConversationIdentity";
 import { recordEvidence } from "../db/evidence";
 
+/**
+ * How many COMMITTED events a conversation needs before identity resolution stops re-running on
+ * every flush. Below this, each observation is still checked -- a fork feeds in turn by turn, and
+ * its first turn ("let me continue our earlier chat about X") is too short to trip the strong
+ * fingerprint match; only once it has echoed enough of the parent's verbatim content does the
+ * contradiction show. Above this, the conversation has established its own identity (a fork could
+ * no longer masquerade as it) and the per-flush fingerprint scan is pure cost.
+ */
+const IDENTITY_SETTLE_MIN_COMMITTED = 5;
+
 export interface IncomingMessage {
   id: string;
   role: Role;
@@ -142,18 +152,31 @@ export async function ingestConversation(
   // Conversation identity. Higher-tier evidence (the sensor's id / the URL) is authoritative; a
   // STRONG lower-tier contradiction -- the content fingerprint strongly matches a DIFFERENT
   // conversation -- quarantines the observation as `unresolved` rather than overriding identity.
-  // An unresolved observation's events are forced provisional: stored, attached to nothing.
   //
-  // Identity is settled on first contact: once this conversation has even one COMMITTED event,
-  // it's resolved and later resends don't re-litigate it (skipping a full fingerprint scan per
-  // flush). While it's still all-provisional (unresolved, or structurally broken), keep trying.
-  const identitySettled = [...priorStatus.values()].includes("committed");
+  // Identity keeps being re-checked until the conversation has IDENTITY_SETTLE_MIN_COMMITTED
+  // committed events (a fork reveals itself over its first few turns, not on turn one). Past that
+  // the conversation owns its identity and the per-flush fingerprint scan is skipped -- the
+  // fabricated verdict still carries the one honest claim (platform_id -> this id) so an evidence
+  // row written afterwards stays auditable rather than recording `claims: []`.
+  const committedCount = [...priorStatus.values()].filter((s) => s === "committed").length;
+  const identitySettled = committedCount >= IDENTITY_SETTLE_MIN_COMMITTED;
   const identity: ConversationIdentity = identitySettled
-    ? { status: "resolved", canonicalId: input.conversationId, authority: "platform_id", claims: [], conflicts: [] }
+    ? {
+        status: "resolved",
+        canonicalId: input.conversationId,
+        authority: "platform_id",
+        claims: [{ authority: "platform_id", conversationId: input.conversationId, strength: 1 }],
+        conflicts: [],
+      }
     : resolveConversationIdentity(obs, loadConversationFingerprints(db));
   const identityUnresolved = identity.status === "unresolved";
+  // Force provisional on an unresolved observation -- but never downgrade an event that a prior
+  // clean observation already committed (M2 invariant: a partial/late signal must not erase
+  // confirmed history). A late-emerging conflict quarantines only the NEW events and records why.
   const allEvents = identityUnresolved
-    ? canonEvents.map((e) => ({ ...e, status: "provisional" as const }))
+    ? canonEvents.map((e) =>
+        priorStatus.get(e.id) === "committed" ? e : { ...e, status: "provisional" as const },
+      )
     : canonEvents;
 
   // The observation only corroborates (promotes, GCs) when it is trustworthy on BOTH axes.
