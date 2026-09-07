@@ -104,7 +104,8 @@ export async function ingestConversation(
   // a no-op resend that is now structurally broken is itself a sensor-health signal. A clean
   // no-op resend carries no signal and is not recorded.
   if (newEventIds.size > 0 || !integrity.ok) {
-    recordEvidence(db, obs, { events: allEvents, integrity });
+    const newMessages = input.messages.filter((m) => newEventIds.has(m.id));
+    recordEvidence(db, obs, { events: allEvents, integrity }, newMessages);
   }
 
   if (newEventIds.size === 0) {

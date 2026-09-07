@@ -304,7 +304,40 @@ describe("evidence layer (THREAD.md §7 -- raw observation below canonical event
       acceptedCount: 2,
       integrityOk: true,
     });
+    // Clean observation -> delta payload -- here both turns are new, so the delta is both.
+    expect(evidence[0]?.payload.form).toBe("delta");
     expect(evidence[0]?.payload.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
+  test("a clean advancing resend stores only the NEW turn in the payload (delta, not O(n^2))", async () => {
+    const db = openDb(":memory:");
+    const base = {
+      conversationId: "conv_delta",
+      source: "fixture" as const,
+      capture: { method: "browser_extension" as const, fidelity: "high" as const },
+    };
+    await ingestConversation(
+      db,
+      { ...base, messages: [{ id: "m1", role: "user", text: "Turn one.", createdAt: "2026-09-07T00:00:00.000Z" }] },
+      providersFor("Turn one.", "m1"),
+    );
+    // Full resend: m1 (already seen) + m2 (new). Only m2 should land in the evidence payload.
+    await ingestConversation(
+      db,
+      {
+        ...base,
+        messages: [
+          { id: "m1", role: "user", text: "Turn one.", createdAt: "2026-09-07T00:00:00.000Z" },
+          { id: "m2", role: "assistant", text: "Turn two.", createdAt: "2026-09-07T00:01:00.000Z" },
+        ],
+      },
+      { extraction: new FakeProvider([extractionResponse([])]), reasoning: new FakeProvider([]) },
+    );
+    const evidence = loadEvidenceForConversation(db, "conv_delta");
+    expect(evidence).toHaveLength(2);
+    expect(evidence[1]?.payload.form).toBe("delta");
+    expect(evidence[1]?.payload.messages.map((m) => m.id)).toEqual(["m2"]); // not ["m1","m2"]
+    expect(evidence[1]).toMatchObject({ observedCount: 2, acceptedCount: 2 }); // counts still describe the whole observation
   });
 
   test("a malformed observation still ingests the valid messages AND records the issue", async () => {
@@ -332,6 +365,9 @@ describe("evidence layer (THREAD.md §7 -- raw observation below canonical event
     expect(evidence).toHaveLength(1);
     expect(evidence[0]).toMatchObject({ observedCount: 2, acceptedCount: 1, integrityOk: false });
     expect(evidence[0]?.integrityIssues[0]?.code).toBe("empty_id");
+    // A broken observation keeps the whole raw transcript, not a delta -- inspect it whole.
+    expect(evidence[0]?.payload.form).toBe("full");
+    expect(evidence[0]?.payload.messages).toHaveLength(2);
   });
 
   test("a clean no-op resend records NO new evidence row; a now-broken resend DOES", async () => {

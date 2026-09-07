@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalize, type RawObservation } from "./canonicalize";
 
-const obs = (messages: RawObservation["messages"]): RawObservation => ({
+const obs = (
+  messages: RawObservation["messages"],
+  sensor: RawObservation["sensor"] = "browser_extension",
+): RawObservation => ({
   conversationId: "conv_1",
   source: "fixture",
-  sensor: "browser_extension",
+  sensor,
   messages,
   sourceUrl: null,
-  capture: { method: "browser_extension", fidelity: "high" },
+  capture: { method: sensor, fidelity: "high" },
 });
 
 const m = (id: string, role: "user" | "assistant", text: string, createdAt = "2026-09-07T00:00:00.000Z") => ({
@@ -89,10 +92,19 @@ describe("canonicalize -- structure validation (THREAD.md §7)", () => {
     expect(r.events).toHaveLength(2);
   });
 
-  test("an all-one-role multi-message observation is advisory single_role, kept", () => {
+  test("an all-one-role multi-message observation from a role-aware sensor is advisory single_role", () => {
     const r = canonicalize(obs([m("a", "user", "one"), m("b", "user", "two"), m("c", "user", "three")]));
     expect(r.integrity.ok).toBe(true);
     expect(r.integrity.issues.map((i) => i.code)).toEqual(["single_role"]);
+    expect(r.events).toHaveLength(3);
+  });
+
+  test("single_role is NOT flagged for a sensor without real role labels (desktop_agent)", () => {
+    const r = canonicalize(
+      obs([m("a", "user", "one"), m("b", "user", "two"), m("c", "user", "three")], "desktop_agent"),
+    );
+    expect(r.integrity.ok).toBe(true);
+    expect(r.integrity.issues).toEqual([]);
     expect(r.events).toHaveLength(3);
   });
 

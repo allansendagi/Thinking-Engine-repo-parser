@@ -77,6 +77,18 @@ const isRole = (r: unknown): r is Role => r === "user" || r === "assistant";
 const blank = (s: unknown): boolean => typeof s !== "string" || s.trim().length === 0;
 
 /**
+ * Sensors that read real role labels -- an all-one-role transcript from one of these means the
+ * sensor genuinely failed to distinguish turns. The desktop-agent scans undocumented on-disk
+ * stores where role labels may be absent entirely (per its README), and OCR/paste never have
+ * them, so `single_role` from those sensors is expected, not an anomaly -- don't flag it.
+ */
+const ROLE_AWARE_SENSORS: ReadonlySet<CaptureMethod> = new Set<CaptureMethod>([
+  "browser_extension",
+  "native_accessibility",
+  "import",
+]);
+
+/**
  * Validate a raw observation's structure and turn it into canonical events. For a clean
  * observation (the overwhelmingly common case) the output is identical to a plain positional
  * map -- same ids, same 0..n-1 indices -- so nothing downstream changes.
@@ -123,9 +135,14 @@ export function canonicalize(obs: RawObservation): CanonicalizeResult {
     }
   }
 
-  // Advisory: a multi-message observation that is entirely one role usually means the sensor
-  // failed to distinguish turns.
-  if (kept.length > 1 && kept.every((m) => m.role === kept[0]!.role)) {
+  // Advisory: a multi-message observation from a role-aware sensor that is entirely one role
+  // usually means the sensor failed to distinguish turns. Skipped for sensors that don't carry
+  // real role labels (desktop_agent, screen_ocr, paste) -- there it's expected, not a signal.
+  if (
+    ROLE_AWARE_SENSORS.has(obs.sensor) &&
+    kept.length > 1 &&
+    kept.every((m) => m.role === kept[0]!.role)
+  ) {
     issues.push({ code: "single_role", detail: `all ${kept.length} messages are "${kept[0]!.role}"` });
   }
 

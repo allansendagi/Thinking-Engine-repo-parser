@@ -9,7 +9,7 @@
 
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import type { CanonicalizeResult, RawObservation } from "../state/canonicalize";
+import type { CanonicalizeResult, ObservedMessage, RawObservation } from "../state/canonicalize";
 
 export interface EvidenceRow {
   id: string;
@@ -21,21 +21,35 @@ export interface EvidenceRow {
   integrityOk: boolean;
   integrityIssues: { code: string; detail: string }[];
   payload: {
+    /**
+     * "delta" -- only the turns new in this observation (the clean common case; the full
+     * transcript is reconstructable from canonical_events). "full" -- the entire raw observation,
+     * kept whenever structure validation failed, so a broken capture can be inspected whole.
+     */
+    form: "delta" | "full";
     messages: { id: string; role: string; text: string; createdAt: string }[];
     sourceUrl: string | null;
     capture: { method: string; fidelity: string } | null;
   };
 }
 
-/** Record one observation. Returns the new row's id. */
+/**
+ * Record one observation. `newMessages` are the turns not already in canonical_events for this
+ * conversation. A clean observation stores just those (bounded: O(total turns) across the life of
+ * a conversation, not O(n^2)); a structurally broken one stores the whole raw transcript so it
+ * can be inspected. Returns the new row's id.
+ */
 export function recordEvidence(
   db: Database,
   obs: RawObservation,
   result: CanonicalizeResult,
+  newMessages: ObservedMessage[],
 ): string {
   const id = randomUUID();
+  const form: "delta" | "full" = result.integrity.ok ? "delta" : "full";
   const payload = JSON.stringify({
-    messages: obs.messages,
+    form,
+    messages: form === "delta" ? newMessages : obs.messages,
     sourceUrl: obs.sourceUrl ?? null,
     capture: obs.capture ?? null,
   });
