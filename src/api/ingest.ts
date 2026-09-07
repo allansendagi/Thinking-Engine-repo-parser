@@ -158,6 +158,14 @@ export async function ingestConversation(
   // the conversation owns its identity and the per-flush fingerprint scan is skipped -- the
   // fabricated verdict still carries the one honest claim (platform_id -> this id) so an evidence
   // row written afterwards stays auditable rather than recording `claims: []`.
+  //
+  // A conversation stuck UNRESOLVED never accrues committed events, so it never crosses the
+  // threshold and is re-scanned on every flush indefinitely. That is deliberate: it is the
+  // recovery path. If the fork later diverges -- its own new turns dilute the fingerprint below
+  // the strong-match ceiling -- the next flush resolves it and promotes everything parked so far.
+  // Freezing it as unresolved to save the scan would forfeit that. The cost is one user's
+  // fingerprint scan per flush of one pathological conversation; every healthy conversation takes
+  // the settled fast path.
   const committedCount = [...priorStatus.values()].filter((s) => s === "committed").length;
   const identitySettled = committedCount >= IDENTITY_SETTLE_MIN_COMMITTED;
   const identity: ConversationIdentity = identitySettled
