@@ -130,10 +130,9 @@ struct IdeaDetailView: View {
                 Section("Continue in") {
                     ForEach(AppState.AITool.allCases) { tool in
                         Button {
-                            Task { await appState.continueThinking(sendTo: tool) }
+                            Task { await appState.continueInNativeApp(tool) }
                         } label: {
-                            Label(tool == .cursor ? "Copy for Cursor" : "Send to \(tool.label)",
-                                  systemImage: tool == .cursor ? "curlybraces" : "arrow.up.forward.app")
+                            Label("Continue in \(tool.label)", systemImage: "arrow.up.forward.app")
                         }
                     }
                 }
@@ -366,7 +365,7 @@ struct IdeaDetailView: View {
     private func continueBlock(_ trace: IdeaTrace) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ContinueThinkingButton {
-                Task { await appState.continueThinking(sendTo: appState.preferredTool) }
+                Task { await appState.continueInNativeApp(appState.preferredTool) }
             }
 
             if let packet = appState.continuationPacket {
@@ -652,12 +651,24 @@ private struct ContinuationPreview: View {
                 Glyph(kind: .idea, size: 12).foregroundStyle(Theme.accent)
                 Text("Resume handoff").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ink(0.6))
                 Spacer(minLength: 0)
-                if let tool = appState.sentToTool {
-                    Label("\(tool.label) opened — press ⌘V", systemImage: "checkmark.circle")
+                switch appState.handoff {
+                case .placedNatively(let tool):
+                    Label("Added to \(tool.label) — review and send", systemImage: "checkmark.circle")
                         .font(.system(size: 10)).foregroundStyle(Theme.accent)
-                } else if appState.continueCopied {
-                    Label("Copied", systemImage: "checkmark.circle")
+                case .readyToPaste(let tool):
+                    Label("\(tool.label) ready — press ⌘V", systemImage: "checkmark.circle")
                         .font(.system(size: 10)).foregroundStyle(Theme.accent)
+                case .draftInTheWay(let tool):
+                    Label("\(tool.label) has an unsent draft — clear it, then ⌘V", systemImage: "exclamationmark.circle")
+                        .font(.system(size: 10)).foregroundStyle(Theme.ink(0.5))
+                case .copied:
+                    Label("Copied — press ⌘V in your AI app", systemImage: "checkmark.circle")
+                        .font(.system(size: 10)).foregroundStyle(Theme.accent)
+                case .none:
+                    if appState.continueCopied {
+                        Label("Copied", systemImage: "checkmark.circle")
+                            .font(.system(size: 10)).foregroundStyle(Theme.accent)
+                    }
                 }
             }
 

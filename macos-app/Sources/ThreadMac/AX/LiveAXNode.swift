@@ -45,5 +45,18 @@ struct LiveAXNode: AXNode {
         guard let arr = raw as? [AXUIElement] else { return [] }
         return arr.map { LiveAXNode($0) }
     }
+
+    // MARK: - write (native continuation only)
+
+    var axIsValueSettable: Bool {
+        var settable: DarwinBoolean = false
+        let err = AXUIElementIsAttributeSettable(element, AXAttribute.value as CFString, &settable)
+        return err == .success && settable.boolValue
+    }
+
+    @discardableResult
+    func setValue(_ string: String) -> Bool {
+        AXUIElementSetAttributeValue(element, AXAttribute.value as CFString, string as CFTypeRef) == .success
+    }
 }
 #endif

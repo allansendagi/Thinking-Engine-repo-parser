@@ -25,6 +25,13 @@ protocol AXNode {
     func axString(_ attribute: String) -> String?
     /// `kAXChildrenAttribute`. Empty, never nil.
     var axChildren: [AXNode] { get }
+
+    /// Native continuation only (writing a checkpoint back into an app's composer). See the
+    /// extension for semantics. A protocol requirement, not just an extension default, so the
+    /// call dispatches to `LiveAXNode` / `FakeAXNode` even through an `AXNode`-typed reference.
+    var axIsValueSettable: Bool { get }
+    @discardableResult
+    func setValue(_ string: String) -> Bool
 }
 
 extension AXNode {
@@ -59,6 +66,18 @@ extension AXNode {
         [axIdentifier, axDescription, axTitle, axSubrole]
             .compactMap { $0 }.joined(separator: " ").lowercased()
     }
+
+    /// Whether `kAXValueAttribute` will actually accept a write on this element -- probed before
+    /// any native-continuation write so a bridged `contenteditable` that only *looks* settable
+    /// doesn't get a silent no-op. Default: not writable. Only `LiveAXNode` answers against the
+    /// real API.
+    var axIsValueSettable: Bool { false }
+
+    /// Write `string` as this element's value; returns whether the API accepted it. Default: a
+    /// no-op that reports failure, so any node that isn't the live one falls straight back to
+    /// the clipboard path.
+    @discardableResult
+    func setValue(_ string: String) -> Bool { false }
 }
 
 /// Raw Accessibility attribute name constants, kept in one place so the fake and the live node

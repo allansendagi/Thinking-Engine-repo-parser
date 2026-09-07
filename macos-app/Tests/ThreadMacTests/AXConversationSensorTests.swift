@@ -33,6 +33,18 @@ final class FakeAXNode: AXNode {
 
     var axChildren: [AXNode] { kids }
 
+    // native-continuation write surface -- opt-in per node, records what was written
+    var settable = false
+    private(set) var written: [String] = []
+    var axIsValueSettable: Bool { settable }
+    @discardableResult
+    func setValue(_ string: String) -> Bool {
+        guard settable else { return false }
+        written.append(string)
+        axValue = string
+        return true
+    }
+
     func axString(_ attribute: String) -> String? {
         switch attribute {
         case AXAttribute.role: return axRole
@@ -287,6 +299,13 @@ final class AXAdapterRegistryTests: XCTestCase {
         XCTAssertEqual(AXAdapters.forBundleID("com.anthropic.claudefordesktop")?.source, "claude")
         XCTAssertEqual(AXAdapters.forBundleID("com.openai.chat")?.source, "chatgpt")
         XCTAssertNil(AXAdapters.forBundleID("com.apple.Safari"))
+    }
+
+    func testRoutesByToolSourceForNativeContinuation() {
+        XCTAssertEqual(AXAdapters.forSource("claude")?.source, "claude")
+        XCTAssertEqual(AXAdapters.forSource("chatgpt")?.source, "chatgpt")
+        XCTAssertEqual(AXAdapters.forSource("cursor")?.source, "cursor")
+        XCTAssertNil(AXAdapters.forSource("gemini"))  // no native app -> caller uses a web chat
     }
 
     func testTheThreeAdaptersShareOneEngineAndDifferOnlyInHints() {
