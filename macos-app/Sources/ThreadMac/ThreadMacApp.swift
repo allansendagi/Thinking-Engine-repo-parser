@@ -78,38 +78,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ambient.start()
         ambientNudge = ambient
 
-        // M4 measurement rig: the generic AX sensor with Cursor as its first adapter. OFF unless
-        // THREAD_AX_SENSOR=1 -- this is a rig to answer "does AX-only capture actually work",
-        // not a shipped capture path. It prompts for Accessibility and needs a running Cursor;
-        // everything it captures is stamped native_accessibility so it's distinguishable from
-        // extension traffic in the evidence store.
+        // Native AX capture across Cursor / Claude / ChatGPT. OFF unless THREAD_AX_SENSOR=1 --
+        // still a measurement rig ("does AX-only capture actually work"), not a shipped path,
+        // until the adapters are verified against real AX trees (THREAD_AX_DUMP=1 prints them).
+        // Everything captured is stamped native_accessibility + its source app so it's
+        // distinguishable in the evidence store and per-app in capture health.
         if ProcessInfo.processInfo.environment["THREAD_AX_SENSOR"] == "1" {
             AXSensorRunner.requestAccessibility()
             let sensor = AXSensorRunner(
-                adapter: CursorAXAdapter(),
-                bundleID: CursorAXAdapter.bundleIDs[0],
-                source: "cursor",
-                ingest: { [weak appState] id, messages, fidelity in
+                adapters: AXAdapters.all,
+                ingest: { [weak appState] source, id, messages, fidelity in
                     guard let appState, appState.isPaired else { return }
                     do {
                         let r = try await appState.client.ingestConversation(
-                            id: id, source: "cursor", messages: messages,
+                            id: id, source: source, messages: messages,
                             capture: (method: "native_accessibility", fidelity: fidelity)
                         )
-                        print("[ThreadMac AX] +\(messages.count) msg fidelity=\(fidelity) -> canonical +\(r.newCanonicalEvents), ideas \(r.ideaCount)")
+                        print("[ThreadMac AX] \(source): +\(messages.count) msg fidelity=\(fidelity) -> canonical +\(r.newCanonicalEvents), ideas \(r.ideaCount)")
                     } catch {
-                        print("[ThreadMac AX] ingest failed: \(error)")
+                        print("[ThreadMac AX] \(source) ingest failed: \(error)")
                     }
                 }
             )
             sensor.onStatusChange = { print("[ThreadMac AX] status: \($0)") }
             sensor.start()
             axSensor = sensor
-            // Cursor may not be up yet at launch -- one delayed retry if we're not watching.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                if case .watching = self?.axSensor?.status { return }
-                self?.axSensor?.start()
-            }
         }
 
         // Flush any thread:// URL that launched us before this point.

@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS evidence (
   -- CaptureMethod: browser_extension | native_accessibility | desktop_agent | screen_ocr |
   -- import | paste.
   sensor TEXT NOT NULL,
+  -- The app the conversation is from (chatgpt | claude | gemini | cursor | ...). Lets native
+  -- AX capture be tracked per-app in capture health -- one app's adapter can drift alone.
+  -- NULL on rows written before this column existed.
+  source TEXT,
   observed_at TEXT NOT NULL,
   -- Messages in the raw observation, and how many became canonical events after validation.
   observed_count INTEGER NOT NULL,

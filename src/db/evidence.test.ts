@@ -13,17 +13,19 @@ function seed(
     issues?: { code: string; detail: string }[];
     conversationId?: string;
     identityStatus?: "resolved" | "unresolved";
+    source?: string;
   },
 ) {
   db.prepare(
     `INSERT INTO evidence
-       (id, conversation_id, sensor, observed_at, observed_count, accepted_count,
+       (id, conversation_id, sensor, source, observed_at, observed_count, accepted_count,
         integrity_ok, integrity_issues, identity, payload)
-     VALUES (?, ?, ?, ?, 2, ?, ?, ?, ?, '{}')`,
+     VALUES (?, ?, ?, ?, ?, 2, ?, ?, ?, ?, '{}')`,
   ).run(
     randomUUID(),
     o.conversationId ?? "c",
     o.sensor,
+    o.source ?? null,
     o.observedAt,
     o.ok ? 2 : 1,
     o.ok ? 1 : 0,
@@ -83,6 +85,17 @@ describe("captureHealthSummary (THREAD.md §17 -- make a broken sensor visible)"
     expect(h.healthy).toBe(false);
     expect(h.sensors.find((s) => s.sensor === "browser_extension")?.degraded).toBe(false);
     expect(h.sensors.find((s) => s.sensor === "desktop_agent")?.degraded).toBe(true);
+  });
+
+  test("native AX capture is tracked per source app -- one adapter drifting doesn't blame the others", () => {
+    const db = openDb(":memory:");
+    for (let i = 0; i < 4; i++) seed(db, { sensor: "native_accessibility", source: "claude", observedAt: iso(i), ok: true });
+    for (let i = 0; i < 4; i++) seed(db, { sensor: "native_accessibility", source: "cursor", observedAt: iso(i), ok: false, issues: [{ code: "no_messages", detail: "" }] });
+    const h = captureHealthSummary(db);
+    expect(h.healthy).toBe(false);
+    expect(h.sensors.find((s) => s.sensor === "native_accessibility:claude")?.degraded).toBe(false);
+    expect(h.sensors.find((s) => s.sensor === "native_accessibility:cursor")?.degraded).toBe(true);
+    expect(h.sensors.find((s) => s.sensor === "native_accessibility:cursor")?.lastFailureIssues).toContain("no_messages");
   });
 
   test("a conversation actively stuck identity-unresolved makes the summary unhealthy, counted once", () => {

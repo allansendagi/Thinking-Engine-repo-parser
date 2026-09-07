@@ -67,7 +67,7 @@ private func cursorTree(_ turns: [(role: String, text: String)], tagged: Bool, k
 // MARK: - tests
 
 final class AXConversationSensorTests: XCTestCase {
-    private let adapter = CursorAXAdapter()
+    private let adapter = AXAdapters.cursor
     private let t0 = Date(timeIntervalSince1970: 1_760_000_000)
 
     private func convo(_ turns: [(role: String, text: String)], tagged: Bool = true, key: String = "chat") -> AXConversationObservation {
@@ -281,22 +281,50 @@ final class AXConversationSensorTests: XCTestCase {
     }
 }
 
+final class AXAdapterRegistryTests: XCTestCase {
+    func testEachNativeAIAppRoutesToItsOwnAdapter() {
+        XCTAssertEqual(AXAdapters.forBundleID("com.todesktop.230313mzl4w4u92")?.source, "cursor")
+        XCTAssertEqual(AXAdapters.forBundleID("com.anthropic.claudefordesktop")?.source, "claude")
+        XCTAssertEqual(AXAdapters.forBundleID("com.openai.chat")?.source, "chatgpt")
+        XCTAssertNil(AXAdapters.forBundleID("com.apple.Safari"))
+    }
+
+    func testTheThreeAdaptersShareOneEngineAndDifferOnlyInHints() {
+        // Same fake Claude-shaped tree, read by the Claude adapter -> same generic extraction.
+        let bubbles = [("user", "how should authority be verified"), ("assistant", "claude says: independently")].map {
+            FakeAXNode("AXGroup", identifier: "message-\($0.0)", children: [FakeAXNode("AXStaticText", value: $0.1)])
+        }
+        let chat = FakeAXNode("AXScrollArea", identifier: "chat-thread", children: bubbles)
+        let app = FakeAXNode("AXApplication", children: [FakeAXNode("AXWindow", children: [chat])])
+        let root = AXAdapters.claude.conversationRoot(appRoot: app)
+        XCTAssertNotNil(root)
+        let blocks = AXAdapters.claude.messageBlocks(root: root!)
+        XCTAssertEqual(blocks.map(\.role), ["user", "assistant"])
+        XCTAssertTrue(blocks.allSatisfy { $0.roleConfidence == .explicit })
+    }
+
+    func testChatGPTAdapterInfersRolesByAlternationWhenUntagged() {
+        let bubbles = ["opening question about capture", "the answer to it", "a follow up question"].map {
+            FakeAXNode("AXGroup", children: [FakeAXNode("AXStaticText", value: $0)])
+        }
+        let chat = FakeAXNode("AXScrollArea", identifier: "conversation-turns", children: bubbles)
+        let app = FakeAXNode("AXApplication", children: [FakeAXNode("AXWindow", children: [chat])])
+        let root = AXAdapters.chatgpt.conversationRoot(appRoot: app)!
+        XCTAssertEqual(AXAdapters.chatgpt.messageBlocks(root: root).map(\.role), ["user", "assistant", "user"])
+    }
+}
+
 #if canImport(ApplicationServices) && canImport(AppKit)
 final class AXSensorRunnerSmokeTests: XCTestCase {
-    /// In CI the test process is not Accessibility-trusted and Cursor isn't running, so `start()`
-    /// must land on a not-watching status and never call `ingest`. This just proves the live
-    /// driver links and its guards hold; real behavior is the manual harness.
+    /// In CI the test process is not Accessibility-trusted and no AI app is running, so `start()`
+    /// must land not-watching and never call `ingest`. Proves the live driver links + its guards.
     @MainActor
     func testStartWithoutPermissionOrAppEmitsNothing() {
         var ingestCalls = 0
-        let runner = AXSensorRunner(
-            adapter: CursorAXAdapter(),
-            bundleID: "com.todesktop.230313mzl4w4u92",
-            ingest: { _, _, _ in ingestCalls += 1 }
-        )
+        let runner = AXSensorRunner(adapters: AXAdapters.all, ingest: { _, _, _, _ in ingestCalls += 1 })
         runner.start()
         switch runner.status {
-        case .needsPermission, .appNotRunning, .error:
+        case .needsPermission, .waiting, .error:
             break  // all acceptable on a headless runner
         default:
             XCTFail("unexpected status \(runner.status)")
