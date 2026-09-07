@@ -33,6 +33,8 @@ function migrate(db: Database): void {
     ["cognitive_events", "persistence TEXT NOT NULL DEFAULT 'high'"],
     ["cognitive_events", "persistence_reason TEXT"],
     ["canonical_events", "source_url TEXT"],
+    ["canonical_events", "capture_method TEXT"],
+    ["canonical_events", "capture_fidelity TEXT"],
   ];
   for (const [table, column] of addColumns) {
     try {

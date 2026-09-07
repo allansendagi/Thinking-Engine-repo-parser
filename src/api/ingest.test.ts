@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { openDb } from "../db/client";
-import { loadIdeas } from "../db/queries";
+import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { ingestConversation } from "./ingest";
 import { FakeProvider } from "../providers/fake";
 
@@ -196,5 +196,53 @@ describe("ingestConversation against a real DB (simulates repeated HTTP calls as
     expect(finalIdeas).toHaveLength(1);
     expect(finalIdeas[0]?.evolution).toHaveLength(2);
     expect(finalIdeas[0]?.currentFormulation).toBe("Boundaries need to be executable.");
+  });
+});
+
+describe("capture provenance (THREAD.md §7)", () => {
+  const oneMessage = (id: string, text: string) => ({
+    conversationId: "conv_cap",
+    source: "fixture" as const,
+    messages: [{ id, role: "user" as const, text, createdAt: "2026-08-17T00:00:00.000Z" }],
+  });
+  const providersFor = (statement: string, sourceId: string) => ({
+    extraction: new FakeProvider([
+      extractionResponse([
+        { type: "new_idea", statement, confidence: 0.9, source_event_id: sourceId, evidence_quote: statement.slice(0, 12) },
+      ]),
+    ]),
+    reasoning: new FakeProvider([]),
+  });
+
+  test("a capture stamp is persisted onto every canonical event of the conversation", async () => {
+    const db = openDb(":memory:");
+    await ingestConversation(
+      db,
+      { ...oneMessage("m1", "Native capture beats an adapter."), capture: { method: "browser_extension", fidelity: "high" } },
+      providersFor("Native capture beats an adapter.", "m1"),
+    );
+    const [event] = loadCanonicalEvents(db);
+    expect(event?.capture).toEqual({ method: "browser_extension", fidelity: "high" });
+  });
+
+  test("a later resend without a capture stamp does NOT clobber the stored one (COALESCE)", async () => {
+    const db = openDb(":memory:");
+    const input = oneMessage("m1", "Fidelity is part of provenance.");
+    await ingestConversation(
+      db,
+      { ...input, capture: { method: "desktop_agent", fidelity: "medium" } },
+      providersFor("Fidelity is part of provenance.", "m1"),
+    );
+    // Resend the same message (no new events, no capture field) -- the medium stamp must stick.
+    await ingestConversation(db, input, { extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
+    const [event] = loadCanonicalEvents(db);
+    expect(event?.capture).toEqual({ method: "desktop_agent", fidelity: "medium" });
+  });
+
+  test("no capture stamp at all stays null -- read downstream as extension/high, not stored as a guess", async () => {
+    const db = openDb(":memory:");
+    await ingestConversation(db, oneMessage("m1", "Legacy client sends nothing."), providersFor("Legacy client sends nothing.", "m1"));
+    const [event] = loadCanonicalEvents(db);
+    expect(event?.capture).toBeNull();
   });
 });

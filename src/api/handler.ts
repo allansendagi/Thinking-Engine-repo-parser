@@ -60,7 +60,7 @@ import {
   searchIdeas,
   traceIdea,
 } from "../mcp/tools";
-import type { IdeaState } from "../types";
+import type { CaptureFidelity, CaptureMethod, CaptureProvenance, IdeaState } from "../types";
 import type { PipelineProviders } from "../state/pipeline";
 
 const VALID_IDEA_STATES: IdeaState[] = [
@@ -118,6 +118,29 @@ function sanitizeSourceUrl(raw: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+const CAPTURE_METHODS: ReadonlySet<CaptureMethod> = new Set([
+  "browser_extension",
+  "native_accessibility",
+  "desktop_agent",
+  "screen_ocr",
+  "import",
+  "paste",
+]);
+const CAPTURE_FIDELITIES: ReadonlySet<CaptureFidelity> = new Set(["high", "medium", "low"]);
+
+/**
+ * A client-supplied `capture` is only trusted if it names a known method AND a known fidelity --
+ * anything partial or unrecognized becomes null (read downstream as browser_extension/high per
+ * THREAD.md §7), never stored half-formed. Exported for direct unit testing.
+ */
+export function sanitizeCapture(raw: unknown): CaptureProvenance | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { method, fidelity } = raw as { method?: unknown; fidelity?: unknown };
+  if (typeof method !== "string" || !CAPTURE_METHODS.has(method as CaptureMethod)) return null;
+  if (typeof fidelity !== "string" || !CAPTURE_FIDELITIES.has(fidelity as CaptureFidelity)) return null;
+  return { method: method as CaptureMethod, fidelity: fidelity as CaptureFidelity };
 }
 
 /** A device label from an explicit `deviceName` in the request body, else the User-Agent. */
@@ -532,6 +555,10 @@ export function createRequestHandler(
         // Accept only a plain http(s) URL; anything else (or absent) is stored as null rather
         // than trusted verbatim into the DB.
         body.sourceUrl = sanitizeSourceUrl(body.sourceUrl);
+        // Likewise validate the capture stamp to a known method+fidelity, else null. A client
+        // that predates this field just omits it; a legacy browser-extension build is read as
+        // browser_extension/high downstream anyway (THREAD.md §7).
+        body.capture = sanitizeCapture(body.capture);
         const result = await ingestConversation(db, body, providers);
         return json(result);
       }
@@ -567,7 +594,13 @@ export function createRequestHandler(
 
         const result = await ingestConversation(
           db,
-          { conversationId, source: "paste", messages },
+          {
+            conversationId,
+            source: "paste",
+            messages,
+            // A human paste: order is preserved but it may be partial or hand-edited.
+            capture: { method: "paste", fidelity: "medium" },
+          },
           providers,
         );
         return json({ conversationId, ...result });

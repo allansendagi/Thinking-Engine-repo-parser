@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { CanonicalEvent, Role } from "../types";
+import type { CanonicalEvent, CaptureProvenance, Role } from "../types";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { runPipeline, persistPipelineResult, type PipelineProviders } from "../state/pipeline";
 import { replayDiscardedEvents } from "../state/replayDiscarded";
@@ -22,6 +22,13 @@ export interface IngestConversationInput {
    * URL a prior call already stored (COALESCE in persistPipelineResult).
    */
   sourceUrl?: string | null;
+  /**
+   * How this conversation was captured + how much to trust that capture. Optional -- an older
+   * client omits it. Applied to every canonical event; a null here never clears a value a prior
+   * call stored (COALESCE in persistPipelineResult). The handler validates the shape before this
+   * point. See THREAD.md §7.
+   */
+  capture?: CaptureProvenance | null;
 }
 
 export interface IngestResult {
@@ -76,6 +83,7 @@ export async function ingestConversation(
     createdAt: m.createdAt,
     index: i,
     sourceUrl: input.sourceUrl ?? null,
+    capture: input.capture ?? null,
   }));
 
   const newEventIds = new Set(allEvents.filter((e) => !existingIds.has(e.id)).map((e) => e.id));

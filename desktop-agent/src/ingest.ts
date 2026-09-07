@@ -23,6 +23,10 @@ export async function sendConversation(
       conversationId: conversation.conversationId,
       source,
       messages: conversation.messages,
+      // Scanned out of a local app's undocumented on-disk store (e.g. Cursor's state.vscdb) via
+      // structural heuristics -- roles and boundaries are inferred, not read exactly. Medium
+      // fidelity. See THREAD.md §7.
+      capture: { method: "desktop_agent", fidelity: "medium" },
     }),
   });
 

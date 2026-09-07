@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRequestHandler } from "./handler";
+import { createRequestHandler, sanitizeCapture } from "./handler";
 import { FakeProvider } from "../providers/fake";
 
 let tmpDir: string;
@@ -33,6 +33,28 @@ async function createTestUser(handler: (req: Request) => Promise<Response>) {
   );
   return (await res.json()) as { userId: string; token: string };
 }
+
+describe("sanitizeCapture (THREAD.md §7)", () => {
+  test("accepts a known method + known fidelity", () => {
+    expect(sanitizeCapture({ method: "browser_extension", fidelity: "high" })).toEqual({
+      method: "browser_extension",
+      fidelity: "high",
+    });
+    expect(sanitizeCapture({ method: "desktop_agent", fidelity: "medium" })).toEqual({
+      method: "desktop_agent",
+      fidelity: "medium",
+    });
+  });
+
+  test("rejects anything partial, unknown, or malformed -> null (never stored half-formed)", () => {
+    expect(sanitizeCapture(null)).toBeNull();
+    expect(sanitizeCapture("browser_extension")).toBeNull();
+    expect(sanitizeCapture({ method: "browser_extension" })).toBeNull(); // no fidelity
+    expect(sanitizeCapture({ fidelity: "high" })).toBeNull(); // no method
+    expect(sanitizeCapture({ method: "telepathy", fidelity: "high" })).toBeNull(); // unknown method
+    expect(sanitizeCapture({ method: "browser_extension", fidelity: "perfect" })).toBeNull(); // unknown fidelity
+  });
+});
 
 describe("HTTP handler (fetch against the pure handler, no network port)", () => {
   test("health check needs no auth", async () => {
