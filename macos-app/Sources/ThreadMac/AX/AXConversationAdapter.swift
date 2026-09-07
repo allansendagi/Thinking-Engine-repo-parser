@@ -87,17 +87,24 @@ struct AXAdapterConfig {
     /// when `userTurnHeadings` is set. Verified against a real AX dump 2026-09-07.
     var assistantTurnHeadings: [String] = []
 
-    /// See `AXConversationAdapter.extractionUnverified`. For ChatGPT this is now PERMANENT, not a
-    /// "not yet" -- two dumps 2026-09-07 settled it: ChatGPT re-renders an assistant turn as it
-    /// streams and drifts UI chrome (status line, attachment banner) through the same subtree, so
-    /// the turn's text is different on every scan and content-derived message ids never dedupe;
-    /// and there is no conversation id anywhere in the tree, so there's no durable identity for a
-    /// long chat. The heading-anchored extractor below is kept as measurement scaffolding (it
-    /// makes a dump legible) but its output must never reach the graph. ChatGPT READ is served by
-    /// the browser extension -- URL-based conversation id, real selectors. THREAD.md §17's
-    /// native > accessibility > browser ladder is a preference; AX lost this app on the merits.
-    /// (ChatGPT native WRITE is unaffected and confirmed working -- the composer is value-settable.)
-    var extractionUnverified: Bool = false
+    /// See `AXConversationAdapter.extractionUnverified`. It is PERMANENTLY set for all three
+    /// adapters -- native AX READ was measured against real dumps of every one on 2026-09-07 and
+    /// failed, each its own way:
+    ///   - ChatGPT: re-renders an assistant turn as it streams and drifts UI chrome (status line,
+    ///     attachment banner) through the same subtree -> the text differs on every scan, so
+    ///     content-derived message ids never dedupe. No conversation id in the tree.
+    ///   - Claude Desktop: `AXApplication` returns ZERO children even after the Chromium
+    ///     `AXManualAccessibility` opt-in -- it doesn't expose its content to Accessibility at all.
+    ///   - Cursor: the tree populates, but it's the agent panel -- "Thought 2s", "Explored N
+    ///     searches", "Fork chat", tool-call/approval rows and status lines interleaved with
+    ///     messages; roles are unrecoverable, the block count swings 1..26 across consecutive
+    ///     scans of one conversation, timestamps mutate, and there's no stable conversation id.
+    /// So the AX READ sensor is a measurement rig, never a shipped capture path. READ is served
+    /// by the browser extension (real selectors, URL conversation id). THREAD.md §17's
+    /// native > accessibility > browser ladder is a preference, and AX lost these apps on the
+    /// merits. Native WRITE (continuation) is a SEPARATE story and works -- the ChatGPT and
+    /// Cursor composers are both `[value-settable]`.
+    var extractionUnverified: Bool = true
 
     static let cursor = AXAdapterConfig(
         bundleIDs: ["com.todesktop.230313mzl4w4u92"],
@@ -125,8 +132,8 @@ struct AXAdapterConfig {
         assistantHints: ["assistant", "chatgpt", "chatgpt said", "gpt", "ai response", "response"],
         chatContainerHints: ["chat", "conversation", "messages", "thread"],
         userTurnHeadings: ["you said:", "you said"],
-        assistantTurnHeadings: ["chatgpt said:", "assistant said:", "chatgpt responded"],
-        extractionUnverified: true
+        assistantTurnHeadings: ["chatgpt said:", "assistant said:", "chatgpt responded"]
+        // extractionUnverified defaults true -- see the field doc for why READ failed on all three.
     )
 }
 

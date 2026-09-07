@@ -412,13 +412,15 @@ final class AXAdapterRegistryTests: XCTestCase {
         XCTAssertEqual(blocks.map(\.role), ["user"])   // the mid-stream assistant turn is held back
     }
 
-    /// ChatGPT native READ is permanently measurement-only -- unstable streamed content defeats
-    /// content-hashed dedup and the tree carries no conversation id. Read is served by the
-    /// browser extension; the heading-anchored code below is kept only to keep dumps legible.
-    func testChatGPTNativeReadIsMeasurementOnly() {
+    /// Native AX READ is permanently measurement-only for ALL THREE apps -- measured against real
+    /// dumps 2026-09-07: ChatGPT streams unstable content with no conversation id, Claude Desktop
+    /// exposes no AX tree at all, Cursor's tree is an agent panel (tool calls / thinking / status
+    /// rows interleaved, roles unrecoverable, block count swinging 1..26 per scan). READ is the
+    /// browser extension's job; the adapters stay a rig. Native WRITE is separate and works.
+    func testNativeReadIsMeasurementOnlyForEveryApp() {
         XCTAssertTrue(AXAdapters.chatgpt.extractionUnverified)
-        XCTAssertFalse(AXAdapters.cursor.extractionUnverified)
-        XCTAssertFalse(AXAdapters.claude.extractionUnverified)
+        XCTAssertTrue(AXAdapters.cursor.extractionUnverified)
+        XCTAssertTrue(AXAdapters.claude.extractionUnverified)
     }
 }
 
