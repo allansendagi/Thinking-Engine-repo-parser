@@ -634,6 +634,71 @@ describe("conversation identity (THREAD.md §9, §17 -- a wrong merge is worse t
     expect(loadIdeas(db)).toHaveLength(1);
   });
 
+  test("a stuck fork keeps being re-checked, and auto-resolves + promotes once its own turns dilute the match", async () => {
+    const db = openDb(":memory:");
+    await ingestConversation(
+      db,
+      { conversationId: "conv_A", source: "fixture", messages: msgs("A", LINES), capture: { method: "browser_extension", fidelity: "high" } },
+      ideaProviders(LINES[0]!, "A_x0"),
+    );
+    expect(loadIdeas(db)).toHaveLength(1);
+
+    // Fork echoes the parent verbatim -> quarantined, 3 parked.
+    const q1 = await ingestConversation(
+      db,
+      { conversationId: "conv_FORK", source: "fixture", messages: msgs("FORK", LINES), capture: { method: "browser_extension", fidelity: "high" } },
+      noExtraction(),
+    );
+    expect(q1.identityStatus).toBe("unresolved");
+
+    // A pure re-echo (no new turn) stays quarantined -- the parked events never committed, so the
+    // conversation never crossed the settle threshold and the resolver still runs every flush.
+    const q2 = await ingestConversation(
+      db,
+      { conversationId: "conv_FORK", source: "fixture", messages: msgs("FORK", LINES), capture: { method: "browser_extension", fidelity: "high" } },
+      noExtraction(),
+    );
+    expect(q2.identityStatus).toBe("unresolved");
+    expect(loadCanonicalEvents(db).filter((e) => e.conversationId === "conv_FORK").every((e) => e.status === "provisional")).toBe(true);
+    expect(loadIdeas(db)).toHaveLength(1);
+
+    // Now it adds two turns of its own -> the fingerprint drops below the strong ceiling. This
+    // flush resolves it and promotes the three turns parked while it was stuck.
+    const r = await ingestConversation(
+      db,
+      {
+        conversationId: "conv_FORK",
+        source: "fixture",
+        messages: msgs("FORK", [
+          ...LINES,
+          "Right, so that earlier framing is settled.",
+          "Switching topic entirely: we should add a deploy-status check to the CLI so merged is never assumed live.",
+        ]),
+        capture: { method: "browser_extension", fidelity: "high" },
+      },
+      {
+        extraction: new FakeProvider([
+          extractionResponse([
+            {
+              type: "new_idea",
+              statement: "The CLI should carry a deploy-status check so a merge is never assumed live.",
+              confidence: 0.9,
+              source_event_id: "FORK_x4",
+              evidence_quote: "deploy-status check",
+            },
+          ]),
+        ]),
+        reasoning: new FakeProvider([
+          JSON.stringify({ matched_idea_id: null, confidence: 0.2, reasoning: "unrelated", also_related_idea_id: null }),
+        ]),
+      },
+    );
+    expect(r.identityStatus).toBe("resolved");
+    expect(r.promotedEvents).toBe(3); // the turns parked while it was quarantined
+    expect(loadCanonicalEvents(db).filter((e) => e.conversationId === "conv_FORK").every((e) => e.status === "committed")).toBe(true);
+    expect(loadIdeas(db).length).toBeGreaterThan(1); // conv_FORK now has thinking of its own
+  });
+
   test("a normal new conversation with no content clash resolves and creates its idea", async () => {
     const db = openDb(":memory:");
     await ingestConversation(
