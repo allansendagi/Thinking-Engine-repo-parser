@@ -8,6 +8,9 @@ struct SettingsView: View {
     @State private var copied = false
     @State private var showAdvanced = false
     @State private var confirmStrandedUnpair = false
+    /// On an anonymous account: switch the email form from "attach to this account" to "sign in to
+    /// a different one". The way back when this Mac is on the wrong (e.g. a stray fresh) account.
+    @State private var signInInstead = false
     /// Re-evaluates the time-based `browserConnected` / `browserReconnecting` while Settings is open.
     @State private var tick = 0
     private let heartbeat = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
@@ -44,6 +47,19 @@ struct SettingsView: View {
                             .controlSize(.small)
                             .help("Revokes every other browser, phone, or Mac signed into this account. This one stays signed in.")
                     }
+                } else if signInInstead {
+                    Text("Sign in to an account you already have. This replaces what's on this Mac — its ideas come from that account.")
+                        .font(.caption).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                    EmailCodeForm(
+                        title: "Sign in to your Thread account",
+                        sendCode: { await appState.sendSignInCode(email: $0) },
+                        verify: { await appState.signIn(email: $0, code: $1) },
+                        onDone: { dismiss() }
+                    )
+                    Button("Add an email to this account instead") { signInInstead = false }
+                        .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
                 } else {
                     Text("Add your email to check out on the website, then sign back in on any device — your ideas stay put.")
                         .font(.caption).foregroundColor(.secondary)
@@ -54,6 +70,8 @@ struct SettingsView: View {
                         sendCode: { await appState.sendClaimCode(email: $0) },
                         verify: { await appState.claimEmail(email: $0, code: $1) }
                     )
+                    Button("Already have a Thread account? Sign in") { signInInstead = true }
+                        .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
                 }
             }
 
