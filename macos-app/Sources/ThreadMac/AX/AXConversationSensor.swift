@@ -23,7 +23,8 @@ struct AXSensorStep: Equatable {
 
 /// Per-conversation accumulator the sensor carries between observations. In-memory only: a restart
 /// replays whatever is on screen once, and the backend -- which dedupes on message id -- absorbs
-/// the repeat.
+/// the repeat. Same story for switching to another chat and back: `emittedIDs` is reset on the
+/// switch, so the first chat's visible transcript is re-sent once on return. Correct, just chatty.
 struct AXSensorState {
     var conversationKey: String?
     var emittedIDs: Set<String> = []

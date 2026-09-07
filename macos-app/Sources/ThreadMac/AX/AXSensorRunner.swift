@@ -30,6 +30,7 @@ final class AXSensorRunner {
     private var appElement: AXUIElement?
     private var state = AXSensorState()
     private var debounce: DispatchWorkItem?
+    private var tailSettle: DispatchWorkItem?
     private let iso = ISO8601DateFormatter()
 
     private(set) var status: AXSensorStatus = .idle {
@@ -97,6 +98,7 @@ final class AXSensorRunner {
 
     func stop() {
         debounce?.cancel(); debounce = nil
+        tailSettle?.cancel(); tailSettle = nil
         if let obs = observer, let el = appElement {
             for note in [
                 kAXValueChangedNotification, kAXCreatedNotification, kAXUIElementDestroyedNotification,
@@ -122,6 +124,19 @@ final class AXSensorRunner {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
+    /// One follow-up scan a bit past the settle interval, so a trailing turn that stopped
+    /// streaming still gets emitted even though the last AX notification already fired. Not a
+    /// poll: it is only ever scheduled while a tail is being held, and it stops as soon as the
+    /// tail settles.
+    private func scheduleTailSettle() {
+        tailSettle?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.scan() }
+        tailSettle = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + AXConversationSensor.defaultSettleInterval + 0.3, execute: work
+        )
+    }
+
     private func scan() {
         guard let appElement else { return }
         let appRoot = LiveAXNode(appElement)
@@ -135,6 +150,7 @@ final class AXSensorRunner {
             now: Date(),
             state: &state
         )
+        if step.holdingStreamingTail { scheduleTailSettle() }
         guard !step.settled.isEmpty else { return }
 
         let conversationID = "\(source)::ax::\(key)"
