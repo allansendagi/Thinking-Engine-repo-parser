@@ -225,18 +225,38 @@ describe("capture provenance (THREAD.md §7)", () => {
     expect(event?.capture).toEqual({ method: "browser_extension", fidelity: "high" });
   });
 
-  test("a later resend without a capture stamp does NOT clobber the stored one (COALESCE)", async () => {
+  test("a later call without a capture stamp does NOT clobber an already-stamped row (COALESCE)", async () => {
     const db = openDb(":memory:");
-    const input = oneMessage("m1", "Fidelity is part of provenance.");
+    // First call: m1, stamped desktop_agent/medium.
     await ingestConversation(
       db,
-      { ...input, capture: { method: "desktop_agent", fidelity: "medium" } },
+      {
+        conversationId: "conv_cap",
+        source: "fixture" as const,
+        messages: [{ id: "m1", role: "user" as const, text: "Fidelity is part of provenance.", createdAt: "2026-08-17T00:00:00.000Z" }],
+        capture: { method: "desktop_agent", fidelity: "medium" },
+      },
       providersFor("Fidelity is part of provenance.", "m1"),
     );
-    // Resend the same message (no new events, no capture field) -- the medium stamp must stick.
-    await ingestConversation(db, input, { extraction: new FakeProvider([]), reasoning: new FakeProvider([]) });
-    const [event] = loadCanonicalEvents(db);
-    expect(event?.capture).toEqual({ method: "desktop_agent", fidelity: "medium" });
+    // Second call adds m2 and carries NO capture field. persistPipelineResult REPLACEs every row
+    // of the conversation, so this is the real COALESCE path -- m1's stamp must survive.
+    await ingestConversation(
+      db,
+      {
+        conversationId: "conv_cap",
+        source: "fixture" as const,
+        messages: [
+          { id: "m1", role: "user" as const, text: "Fidelity is part of provenance.", createdAt: "2026-08-17T00:00:00.000Z" },
+          { id: "m2", role: "user" as const, text: "So the pipeline can weight it.", createdAt: "2026-08-19T00:00:00.000Z" },
+        ],
+      },
+      // Extraction finds nothing new worth promoting -- keeps the test on the persist/COALESCE
+      // path without also needing a scripted identity-resolution response.
+      { extraction: new FakeProvider([extractionResponse([])]), reasoning: new FakeProvider([]) },
+    );
+    const byId = Object.fromEntries(loadCanonicalEvents(db).map((e) => [e.id, e]));
+    expect(byId.m1?.capture).toEqual({ method: "desktop_agent", fidelity: "medium" }); // survived
+    expect(byId.m2?.capture).toBeNull(); // this call carried no stamp
   });
 
   test("no capture stamp at all stays null -- read downstream as extension/high, not stored as a guess", async () => {
