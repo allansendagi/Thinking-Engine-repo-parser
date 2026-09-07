@@ -187,12 +187,22 @@ switch (command) {
       console.log("No user DBs found.");
       break;
     }
+    const { captureHealthSummary } = await import("./db/evidence");
     for (const uid of users) {
       const db = openUserDb(uid);
       try {
         const rows = loadRecentEvidence(db, limit);
         if (rows.length === 0) continue;
-        console.log(`\n${uid}`);
+        const health = captureHealthSummary(db);
+        console.log(`\n${uid}   capture ${health.healthy ? "healthy" : "DEGRADED"}`);
+        for (const s of health.sensors) {
+          const mark = s.degraded ? "⚠ " : "  ";
+          console.log(
+            `  ${mark}${s.sensor.padEnd(18)} ${s.observations} obs · ${s.failed} failed` +
+              (s.degraded ? `  (${(s.failureRate * 100).toFixed(0)}% -- ${s.lastFailureIssues.join(", ")})` : ""),
+          );
+        }
+        console.log("");
         for (const r of rows) {
           const flag = r.integrityOk ? "  " : "⚠ ";
           console.log(
@@ -310,7 +320,8 @@ Commands:
                                            today, 7d/30d, per-day bars, by version/country).
   waitlist                                 Print the /waitlist signups -- total, today, last 7d,
                                            and every entry (email, name, note) newest first.
-  evidence [--user=<id>] [--limit=50]       Print recent raw sensor observations -- which sensor,
+  evidence [--user=<id>] [--limit=50]       Print per-sensor capture health (healthy / DEGRADED)
+                                           then recent raw sensor observations -- which sensor,
                                            the conversation, accepted/observed message counts,
                                            and any structure-validation issues (⚠). Read-only.
   grant --email=<addr>|--user=<id> [--plan=pro|free] [--status=active]

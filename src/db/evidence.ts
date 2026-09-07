@@ -113,3 +113,82 @@ export function loadRecentEvidence(db: Database, limit = 50): EvidenceRow[] {
     .all(limit) as EvidenceDbRow[];
   return rows.map(mapRow);
 }
+
+export interface SensorHealth {
+  sensor: string;
+  /** Observations from this sensor in the window. */
+  observations: number;
+  /** How many failed structure validation (integrity_ok = 0). */
+  failed: number;
+  /** failed / observations, 0..1. */
+  failureRate: number;
+  /** Most recent failing observation, or null. */
+  lastFailureAt: string | null;
+  /** Issue codes from that most recent failure. */
+  lastFailureIssues: string[];
+  /**
+   * `degraded` when the sensor has enough observations to judge AND is failing more than half
+   * of them -- the "the extension broke and everything is parking provisional" case.
+   */
+  degraded: boolean;
+}
+
+export interface CaptureHealthSummary {
+  windowDays: number;
+  /** True when no sensor is degraded. */
+  healthy: boolean;
+  sensors: SensorHealth[];
+}
+
+const HEALTH_MIN_SAMPLES = 3;
+const HEALTH_DEGRADED_RATE = 0.5;
+
+/**
+ * Per-sensor capture health over a recent window, derived from the evidence store. The signal
+ * behind "some of your recent thinking couldn't be confidently connected" -- a broken sensor
+ * otherwise fails silently (every observation parks provisional, no ideas appear, no error).
+ */
+export function captureHealthSummary(db: Database, windowDays = 7, now = new Date()): CaptureHealthSummary {
+  const since = new Date(now.getTime() - windowDays * 86_400_000).toISOString();
+  const rows = db
+    .query(
+      `SELECT sensor,
+              COUNT(*) AS observations,
+              SUM(CASE WHEN integrity_ok = 0 THEN 1 ELSE 0 END) AS failed,
+              MAX(CASE WHEN integrity_ok = 0 THEN observed_at END) AS last_failure_at
+       FROM evidence WHERE observed_at >= ?
+       GROUP BY sensor ORDER BY sensor ASC`,
+    )
+    .all(since) as {
+    sensor: string;
+    observations: number;
+    failed: number;
+    last_failure_at: string | null;
+  }[];
+
+  const sensors: SensorHealth[] = rows.map((r) => {
+    let lastFailureIssues: string[] = [];
+    if (r.last_failure_at) {
+      const issueRow = db
+        .query(
+          "SELECT integrity_issues FROM evidence WHERE sensor = ? AND observed_at = ? AND integrity_ok = 0 LIMIT 1",
+        )
+        .get(r.sensor, r.last_failure_at) as { integrity_issues: string | null } | null;
+      if (issueRow?.integrity_issues) {
+        lastFailureIssues = (JSON.parse(issueRow.integrity_issues) as { code: string }[]).map((i) => i.code);
+      }
+    }
+    const failureRate = r.observations ? r.failed / r.observations : 0;
+    return {
+      sensor: r.sensor,
+      observations: r.observations,
+      failed: r.failed,
+      failureRate,
+      lastFailureAt: r.last_failure_at,
+      lastFailureIssues,
+      degraded: r.observations >= HEALTH_MIN_SAMPLES && failureRate >= HEALTH_DEGRADED_RATE,
+    };
+  });
+
+  return { windowDays, healthy: !sensors.some((s) => s.degraded), sensors };
+}
