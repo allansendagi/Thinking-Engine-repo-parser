@@ -161,9 +161,14 @@ struct HeuristicAXAdapter: AXConversationAdapter {
     }
 
     func composerElement(appRoot: AXNode) -> AXNode? {
+        // A hint match is required -- no role-only escape. This element gets WRITTEN to for native
+        // continuation; a bare AXTextArea in a real window is just as likely to be the editor, the
+        // find bar, or the terminal, and writing a checkpoint into a source file is the exact
+        // data-loss shape the draft guard exists to prevent. Nil (-> clipboard fallback) is the
+        // safe answer until the dump pass shows which hints these apps actually expose.
         appRoot.flattened().first { node in
             config.composerRoles.contains(node.axRole)
-                && (config.composerHints.contains { node.axHints.contains($0) } || node.axRole == "AXTextArea")
+                && config.composerHints.contains { node.axHints.contains($0) }
         }
     }
 
@@ -220,5 +225,11 @@ enum AXAdapters {
 
     static func forBundleID(_ id: String) -> (any AXConversationAdapter)? {
         all.first { $0.bundleIDs.contains(id) }
+    }
+
+    /// Route by `Source` raw value ("claude" | "chatgpt" | "cursor"). nil for a tool with no
+    /// native app (e.g. Gemini) -- the caller then falls back to a web chat.
+    static func forSource(_ source: String) -> (any AXConversationAdapter)? {
+        all.first { $0.source == source }
     }
 }

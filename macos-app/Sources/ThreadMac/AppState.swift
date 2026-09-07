@@ -1389,7 +1389,7 @@ final class AppState: ObservableObject {
             continuationText = nil
             nextStepDraft = ""
             continueCopied = false
-            sentToTool = nil
+            handoff = .none
         }
         selectedIdeaId = id
         errorMessage = nil
@@ -1428,7 +1428,7 @@ final class AppState: ObservableObject {
         continuationText = nil
         nextStepDraft = ""
         continueCopied = false
-        sentToTool = nil
+        handoff = .none
     }
 
     // MARK: - Local-first edits
@@ -1555,8 +1555,18 @@ final class AppState: ObservableObject {
     }
 
     @Published var continueCopied = false
-    /// Set briefly after "Send to X" so the view can show "Context ready — press ⌘V".
-    @Published var sentToTool: AITool?
+
+    /// Where the most recent "Continue in <tool>" handoff ended up, so the resume card can say
+    /// which of the three things actually happened -- a silent clipboard copy after the user
+    /// picked "Continue in Claude" reads as broken.
+    enum HandoffOutcome: Equatable {
+        case none
+        case copied                  // on the clipboard; nothing was brought forward (e.g. app not running)
+        case readyToPaste(AITool)    // the app or a web chat is now frontmost -- press ⌘V
+        case draftInTheWay(AITool)   // app is frontmost but its composer already holds unsent text
+        case placedNatively(AITool)  // written straight into the app's composer via Accessibility
+    }
+    @Published var handoff: HandoffOutcome = .none
 
     enum AITool: String, CaseIterable, Identifiable {
         case claude, chatgpt, gemini, cursor
@@ -1690,7 +1700,7 @@ final class AppState: ObservableObject {
         guard let trace = selectedTrace else { return }
         continueResult = "Thinking…"
         continueCopied = false
-        sentToTool = nil
+        handoff = .none
         continuationPacket = nil
         continuationText = nil
         continuationEngine = .none
@@ -1752,8 +1762,64 @@ final class AppState: ObservableObject {
 
         if let tool {
             preferredTool = tool
-            if let url = tool.newChatURL { NSWorkspace.shared.open(url) }
-            sentToTool = tool
+            if let url = tool.newChatURL {
+                NSWorkspace.shared.open(url)
+                handoff = .readyToPaste(tool)
+            } else {
+                handoff = .copied
+            }
+        }
+    }
+
+    /// The page's dominant action, native-first. Builds the handoff exactly as `continueThinking`
+    /// does (which also primes the clipboard), then tries to place it straight into `tool`'s
+    /// native app composer via Accessibility. Any failure -- no native app for this tool, the app
+    /// isn't running, Accessibility isn't granted, or a composer that won't take a value write --
+    /// falls back to the clipboard that's already set, and brings the app (or a web chat) forward
+    /// so the user just presses ⌘V. Never automatic: only a "Continue in <tool>" menu pick or the
+    /// page's Continue button calls this.
+    func continueInNativeApp(_ tool: AITool) async {
+        await continueThinking(sendTo: nil)                 // fetch packet, copy text, no web open
+        guard let text = continuationCopyText else { return }  // packet build failed -- error already shown
+        preferredTool = tool
+
+        if let adapter = AXAdapters.forSource(tool.rawValue),
+           let app = adapter.bundleIDs
+               .compactMap({ NSRunningApplication.runningApplications(withBundleIdentifier: $0).first })
+               .first {
+            // The app is running -- bring it forward regardless. Activation needs no permission,
+            // and a running-and-visible app that stays put is the "reads as broken" case.
+            app.activate(options: [.activateIgnoringOtherApps])
+
+            guard AXSensorRunner.accessibilityGranted else {
+                // Can't write without Accessibility, but the app is up front and the clipboard
+                // is primed -- ⌘V is the right instruction, no mention of the permission gap.
+                handoff = .readyToPaste(tool)
+                return
+            }
+            switch NativeContinuation.place(
+                text: text,
+                appRoot: LiveAXNode.application(pid: app.processIdentifier),
+                adapter: adapter
+            ) {
+            case .delivered:
+                handoff = .placedNatively(tool)
+            case .draftPresent:
+                // The user has unsent text in the composer. Don't tell them to paste over it.
+                handoff = .draftInTheWay(tool)
+            case .noComposer, .notWritable, .writeRejected:
+                handoff = .readyToPaste(tool)   // clipboard primed, app frontmost, ⌘V is correct
+            }
+            return
+        }
+
+        // No native adapter, or the app isn't running: open a web chat if the tool has one,
+        // otherwise the clipboard is the whole handoff.
+        if let url = tool.newChatURL {
+            NSWorkspace.shared.open(url)
+            handoff = .readyToPaste(tool)
+        } else {
+            handoff = .copied
         }
     }
 

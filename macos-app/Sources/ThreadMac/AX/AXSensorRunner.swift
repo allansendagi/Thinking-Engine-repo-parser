@@ -212,7 +212,11 @@ final class AXSensorRunner {
             let text = n.axText.map { "\"\($0.prefix(50))\"" } ?? ""
             let id = n.axIdentifier.map { " id=\($0)" } ?? ""
             let desc = n.axDescription.map { " desc=\($0.prefix(30))" } ?? ""
-            print("[ThreadMac AX] " + String(repeating: "  ", count: d) + "\(n.axRole)\(id)\(desc) \(text)")
+            // Whether a composer would actually accept a native-continuation write -- the one
+            // fact the measurement pass needs to decide if `setValue` is the right mechanism.
+            let settable = (n.axRole == "AXTextArea" || n.axRole == "AXTextField") && n.axIsValueSettable
+                ? " [value-settable]" : ""
+            print("[ThreadMac AX] " + String(repeating: "  ", count: d) + "\(n.axRole)\(id)\(desc)\(settable) \(text)")
             for c in n.axChildren.reversed() { stack.append((c, d + 1)) }
         }
         if depth == 0 { print("[ThreadMac AX] ===== end dump =====") }
