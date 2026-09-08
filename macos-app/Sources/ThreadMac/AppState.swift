@@ -1216,6 +1216,9 @@ final class AppState: ObservableObject {
             let created = try await APIClient.createUser(baseURL: apiBaseUrl)
             CredentialStore.save(userId: created.userId, token: created.token)
             userId = created.userId
+            // The account under any paired browser just changed -- give the extension a window to
+            // re-adopt (it follows a different loopback identity within a minute).
+            openPairingWindow(seconds: 120)
             await refresh()
             checkForBackfill()   // first run -- this is where "Recover my thinking" matters most
         } catch {
