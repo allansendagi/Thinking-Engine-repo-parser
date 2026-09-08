@@ -1,4 +1,12 @@
-import type { Credentials, PairingState, Settings } from "./types";
+import type {
+  AccountInfo,
+  CaptureHealth,
+  CaptureReport,
+  Credentials,
+  PairingState,
+  Settings,
+  SourceHealth,
+} from "./types";
 
 export const DEFAULT_API_BASE_URL = "https://thinking-engine-repo-parser-production.up.railway.app";
 
@@ -23,6 +31,93 @@ export async function setCredentials(credentials: Credentials): Promise<void> {
 export async function clearCredentials(): Promise<void> {
   await chrome.storage.local.remove("credentials");
 }
+
+// --- Account identity (shown in the popup) --------------------------------------------------
+
+export async function getAccountInfo(): Promise<AccountInfo | null> {
+  const { accountInfo } = await chrome.storage.local.get("accountInfo");
+  return (accountInfo as AccountInfo | undefined) ?? null;
+}
+
+export async function setAccountInfo(info: AccountInfo | null): Promise<void> {
+  if (info) await chrome.storage.local.set({ accountInfo: info });
+  else await chrome.storage.local.remove("accountInfo");
+}
+
+// --- Capture health ------------------------------------------------------------------------
+//
+// Folds each content-script `CaptureReport` into a per-source verdict the popup can render.
+// The point: a broken adapter (site redesign) otherwise fails completely silently -- capture
+// just stops and nothing says so.
+
+/** Two consecutive "conversation open, container in the DOM, extracted nothing" passes before
+ *  we call a source degraded -- one empty pass is normal (between turns, mid-render). */
+const DEGRADE_AFTER_EMPTY = 2;
+
+export async function getCaptureHealth(): Promise<CaptureHealth> {
+  const { captureHealth } = await chrome.storage.local.get("captureHealth");
+  return (captureHealth as CaptureHealth | undefined) ?? {};
+}
+
+function foldReport(prev: SourceHealth | undefined, r: CaptureReport): SourceHealth {
+  const base: SourceHealth = prev ?? {
+    source: r.source,
+    state: "idle",
+    lastCaptureAt: null,
+    lastSeenAt: null,
+    lastError: null,
+    emptyStreak: 0,
+    detail: "",
+  };
+  const next: SourceHealth = { ...base, source: r.source, lastSeenAt: r.at };
+
+  if (r.error) {
+    next.state = "error";
+    next.lastError = r.error;
+    next.emptyStreak = 0;
+    next.detail = `Last capture failed: ${r.error}`;
+    return next;
+  }
+  if (!r.onConversation) {
+    next.state = "idle";
+    next.emptyStreak = 0;
+    next.lastError = null;
+    next.detail = "No conversation open";
+    return next;
+  }
+  if (r.extracted > 0) {
+    next.state = "ok";
+    next.emptyStreak = 0;
+    next.lastError = null;
+    if (r.sent > 0) next.lastCaptureAt = r.at;
+    next.detail = r.sent > 0 ? "Captured just now" : "Up to date";
+    return next;
+  }
+  // On a conversation, extracted nothing.
+  if (!r.containerPresent) {
+    // Page still mounting -- not a failure, just say nothing changed.
+    next.detail = base.state === "ok" ? "Up to date" : "Waiting for the page to load";
+    return next;
+  }
+  next.emptyStreak = base.emptyStreak + 1;
+  if (next.emptyStreak >= DEGRADE_AFTER_EMPTY) {
+    next.state = "degraded";
+    next.detail = "The page changed and Thread can't read it — reload the tab; if it sticks, update Thread.";
+  } else {
+    next.detail = base.state === "degraded" ? next.detail : "Up to date";
+  }
+  return next;
+}
+
+export async function recordCaptureReport(report: CaptureReport): Promise<CaptureHealth> {
+  const health = await getCaptureHealth();
+  health[report.source] = foldReport(health[report.source], report);
+  await chrome.storage.local.set({ captureHealth: health });
+  return health;
+}
+
+/** Exposed for tests -- the pure fold, no storage. */
+export const _foldReport = foldReport;
 
 const DEFAULT_PAIRING_STATE: PairingState = {
   status: "unpaired",

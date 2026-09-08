@@ -93,6 +93,52 @@
       [hidden] {
         display: none !important;
       }
+      .capture {
+        margin-top: 12px;
+      }
+      .chdr {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 7px;
+      }
+      .srow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+        font-size: 12px;
+      }
+      .sdot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex: none;
+        background: var(--muted);
+      }
+      .sdot.ok {
+        background: #1e8e3e;
+      }
+      .sdot.bad {
+        background: #d93025;
+      }
+      .sdot.muted {
+        background: color-mix(in srgb, var(--muted) 60%, transparent);
+      }
+      .sname {
+        font-weight: 500;
+        min-width: 62px;
+      }
+      .sdetail {
+        color: var(--muted);
+        margin-left: auto;
+        text-align: right;
+      }
+      .sdetail.warn {
+        color: #d93025;
+      }
       .foot {
         margin-top: 14px;
         padding-top: 10px;
@@ -127,6 +173,9 @@
       <!-- Prominent only when NOT connected. When connected, JS swaps in the quiet #reconnect link. -->
       <button id="connect" class="primary block" style="margin-top: 10px">Connect to Thread for Mac</button>
       <button id="reconnect" class="textbtn" hidden style="margin-top: 6px">Reconnect</button>
+
+      <!-- Per-source capture health. Filled by popup.ts; hidden until connected. -->
+      <div id="capture" class="capture" hidden></div>
 
       <details id="codeSection">
         <summary>Pair with a code instead</summary>

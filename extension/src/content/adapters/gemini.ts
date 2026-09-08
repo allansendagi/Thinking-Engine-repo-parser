@@ -57,7 +57,7 @@ export const geminiAdapter: SiteAdapter = {
 
     const all = [...userNodes, ...assistantNodes];
     if (all.length === 0) {
-      if (document.querySelector("main")) {
+      if (this.conversationContainerPresent?.(root)) {
         console.warn(
           "[Thread] gemini adapter found a conversation page but zero messages -- selectors need updating against the live DOM",
         );
@@ -75,6 +75,15 @@ export const geminiAdapter: SiteAdapter = {
     return all
       .map(({ el, role }) => ({ role, text: stripChrome(el.textContent ?? "") }))
       .filter((m) => m.text.length > 0);
+  },
+
+  conversationContainerPresent(root: ParentNode): boolean {
+    // Gemini's Angular shell renders <chat-window> (and the rich-textarea composer) once a
+    // conversation view is mounted.
+    return (
+      (!!root.querySelector("chat-window") || !!root.querySelector("main")) &&
+      !!root.querySelector("rich-textarea, .ql-editor")
+    );
   },
 
   insertIntoComposer(text: string, root: ParentNode = document): boolean {

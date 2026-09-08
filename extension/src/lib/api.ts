@@ -25,6 +25,20 @@ export async function verifyCredentials(): Promise<void> {
   await request("/v1/thinking-state");
 }
 
+export interface AccountResponse {
+  userId: string;
+  email: string | null;
+  plan: string;
+  isPro: boolean;
+  ideaCount: number;
+}
+
+/** Who this browser is capturing as -- id, email, plan. Shown in the popup so a user can tell
+ *  they're pointed at the right account. */
+export function getAccount(): Promise<AccountResponse> {
+  return request("/v1/account");
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const { apiBaseUrl, credentials } = await getSettings();
   const headers = new Headers(init.headers);

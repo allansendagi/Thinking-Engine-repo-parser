@@ -1,5 +1,5 @@
 import { addSentIds, getSentIds } from "../../lib/storage";
-import type { CaptureMessage, CapturedMessage } from "../../lib/types";
+import type { CaptureMessage, CaptureReport, CapturedMessage, HealthMessage } from "../../lib/types";
 import type { SiteAdapter } from "./siteAdapter";
 
 /**
@@ -29,18 +29,39 @@ export interface CaptureOptions {
    */
   backstopMs?: number;
   /** Injectable for tests -- defaults to the real chrome.runtime.sendMessage. */
-  sendMessage?: (message: CaptureMessage) => Promise<unknown>;
+  sendMessage?: (message: CaptureMessage | HealthMessage) => Promise<unknown>;
   now?: () => string;
 }
 
 export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: CaptureOptions = {}): () => void {
   const debounceMs = options.debounceMs ?? 2000;
   const backstopMs = options.backstopMs ?? 4000;
-  const sendMessage = options.sendMessage ?? ((m: CaptureMessage) => chrome.runtime.sendMessage(m));
+  const sendMessage =
+    options.sendMessage ?? ((m: CaptureMessage | HealthMessage) => chrome.runtime.sendMessage(m));
   const now = options.now ?? (() => new Date().toISOString());
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  /** Last health report sent -- so an unchanged situation (idle, or steadily-broken) reports once,
+   *  not on every mutation/backstop tick. */
+  let lastHealthKey = "";
+
+  function containerPresent(): boolean {
+    if (adapter.conversationContainerPresent) return adapter.conversationContainerPresent(doc);
+    const q = (doc as Document).querySelector?.bind(doc) ?? (doc as Element).querySelector?.bind(doc);
+    return !!q?.("main");
+  }
+
+  async function reportHealth(report: CaptureReport): Promise<void> {
+    const key = `${report.onConversation}|${report.containerPresent}|${report.extracted > 0}|${report.sent > 0}|${report.error ?? ""}`;
+    if (key === lastHealthKey && report.sent === 0) return; // nothing changed -- don't spam
+    lastHealthKey = key;
+    try {
+      await sendMessage({ type: "thread:health", report });
+    } catch {
+      /* health is best-effort; a failed report never affects capture */
+    }
+  }
 
   /**
    * After the extension is reloaded/updated, the content script already injected into an open
@@ -57,14 +78,23 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
 
   async function flush(): Promise<void> {
     if (stopped) return;
+    const at = now();
     try {
       const conversationId = adapter.getConversationId();
-      if (!conversationId) return;
+      if (!conversationId) {
+        await reportHealth({
+          source: adapter.source,
+          onConversation: false,
+          containerPresent: containerPresent(),
+          extracted: 0,
+          sent: 0,
+          at,
+        });
+        return;
+      }
 
       const raw = adapter.extractMessages(doc);
-      if (raw.length === 0) return;
-
-      const capturedAt = now();
+      const capturedAt = at;
       const messages: CapturedMessage[] = raw.map((m, i) => ({
         id: `${conversationId}::${i}`,
         role: m.role,
@@ -72,16 +102,26 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
         createdAt: capturedAt,
       }));
 
-      const sentIds = await getSentIds(conversationId);
-      const hasNew = messages.some((m) => !sentIds.has(m.id));
-      if (!hasNew) return;
+      const sentIds = raw.length > 0 ? await getSentIds(conversationId) : new Set<string>();
+      const fresh = messages.filter((m) => !sentIds.has(m.id));
 
-      const sourceUrl = adapter.getConversationUrl?.() ?? null;
-      await sendMessage({ type: "thread:capture", source: adapter.source, conversationId, sourceUrl, messages });
-      await addSentIds(
-        conversationId,
-        messages.map((m) => m.id),
-      );
+      if (fresh.length > 0) {
+        const sourceUrl = adapter.getConversationUrl?.() ?? null;
+        await sendMessage({ type: "thread:capture", source: adapter.source, conversationId, sourceUrl, messages });
+        await addSentIds(
+          conversationId,
+          messages.map((m) => m.id),
+        );
+      }
+
+      await reportHealth({
+        source: adapter.source,
+        onConversation: true,
+        containerPresent: containerPresent(),
+        extracted: raw.length,
+        sent: fresh.length,
+        at,
+      });
     } catch (err) {
       if (isContextInvalidated(err)) {
         console.info("[Thread] extension was reloaded -- detaching capture from this tab. Reload the tab to resume.");
@@ -89,6 +129,15 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
         return;
       }
       console.warn("[Thread] capture flush failed, will retry on next change", err);
+      await reportHealth({
+        source: adapter.source,
+        onConversation: adapter.getConversationId() != null,
+        containerPresent: containerPresent(),
+        extracted: 0,
+        sent: 0,
+        at,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

@@ -66,7 +66,7 @@ export const claudeAdapter: SiteAdapter = {
     const all = [...userNodes, ...assistantNodes];
 
     if (all.length === 0) {
-      if (document.querySelector("main")) {
+      if (this.conversationContainerPresent?.(root)) {
         console.warn(
           "[Thread] claude adapter found a conversation page but zero messages -- selectors need updating against the live DOM",
         );
@@ -85,6 +85,12 @@ export const claudeAdapter: SiteAdapter = {
     return all
       .map(({ el, role }) => ({ role, text: stripChrome(el.textContent ?? "") }))
       .filter((m) => m.text.length > 0);
+  },
+
+  conversationContainerPresent(root: ParentNode): boolean {
+    // A live thread renders <main> and the ProseMirror composer; the new-chat screen has the
+    // composer but the URL check (onConversation) already excludes that case.
+    return !!root.querySelector("main") && !!firstMatch(root, COMPOSER_SELECTORS);
   },
 
   insertIntoComposer(text: string, root: ParentNode = document): boolean {
