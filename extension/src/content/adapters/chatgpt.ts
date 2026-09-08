@@ -62,13 +62,18 @@ export const chatGptAdapter: SiteAdapter = {
       messages.push({ role, text });
     }
 
-    if (messages.length === 0 && document.querySelector("main")) {
+    if (messages.length === 0 && this.conversationContainerPresent?.(root)) {
       console.warn(
         "[Thread] chatgpt adapter found a conversation page but zero messages -- selectors likely need updating",
       );
     }
 
     return messages;
+  },
+
+  conversationContainerPresent(root: ParentNode): boolean {
+    // The turn list lives in <main>; a thread also always renders the composer form.
+    return !!root.querySelector("main") && !!root.querySelector("form");
   },
 
   insertIntoComposer(text: string, root: ParentNode = document): boolean {

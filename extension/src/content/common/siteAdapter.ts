@@ -18,6 +18,13 @@ export interface SiteAdapter {
   /** All currently-rendered messages, in conversation order. Empty array if none found. */
   extractMessages(root: ParentNode): RawMessage[];
   /**
+   * Is the site's conversation surface actually rendered? Lets capture health tell "the page is
+   * still loading" (container absent, `extractMessages` empty -> stay quiet) from "the page is up
+   * but extraction found nothing" (container present, empty -> the selectors have drifted, say
+   * so). Optional: without it, health falls back to "is there a <main>".
+   */
+  conversationContainerPresent?(root: ParentNode): boolean;
+  /**
    * Put `text` into this tool's message composer -- caret at the end, NOT submitted. Returns
    * false when the composer element can't be found (selectors drifted, or this isn't a chat
    * surface). Optional: an adapter without it just can't offer "continue here", only the

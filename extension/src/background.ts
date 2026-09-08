@@ -1,10 +1,14 @@
 import {
   clearCredentials,
+  getAccountInfo,
+  getCaptureHealth,
   getPairingState,
   getResumeShown,
   getResumeSnooze,
   getSettings,
   noteResumeShown,
+  recordCaptureReport,
+  setAccountInfo,
   setApiBaseUrl,
   setCredentials,
   setPairingState,
@@ -13,6 +17,7 @@ import {
 import {
   ApiError,
   continueFromIdea,
+  getAccount,
   getThinkingState,
   ingestConversation,
   isPaymentRequired,
@@ -22,7 +27,7 @@ import {
 } from "./lib/api";
 import { fetchDesktopPairing, PAIRING_PORT } from "./lib/pairing";
 import { suggestionFromState, type ResumeSuggestion } from "./lib/resume";
-import type { CaptureMessage, PairingState } from "./lib/types";
+import type { CaptureMessage, ExtensionStatus, HealthMessage, PairingState } from "./lib/types";
 
 /**
  * Identity model: Thread for Mac is the account authority. It creates and owns the account and,
@@ -70,6 +75,7 @@ async function ensurePaired(trigger: string, opts: { force?: boolean } = {}): Pr
         return true;
       }
       await clearCredentials();
+      await setAccountInfo(null);
       await setPairingState({ status: "rejected", detail: "Saved credentials were rejected. Re-pairing…" });
     }
   }
@@ -103,7 +109,32 @@ async function ensurePaired(trigger: string, opts: { force?: boolean } = {}): Pr
 async function markPaired(userId: string, detail: string): Promise<PairingState> {
   await setBadge(false);
   void pingDesktop(userId);
+  void refreshAccountInfo(userId);
   return setPairingState({ status: "paired", userId, lastAttemptAt: new Date().toISOString(), detail });
+}
+
+/**
+ * Pull the account this browser is now capturing as -- id, email, plan -- so the popup can name
+ * it. Best-effort: cleared if the id no longer matches, left stale on a network blip.
+ */
+async function refreshAccountInfo(userId: string): Promise<void> {
+  try {
+    const a = await getAccount();
+    if (a.userId !== userId) {
+      await setAccountInfo(null);
+      return;
+    }
+    await setAccountInfo({
+      userId: a.userId,
+      email: a.email ?? null,
+      plan: a.plan,
+      isPro: a.isPro,
+      ideaCount: a.ideaCount,
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch {
+    // keep whatever's cached
+  }
 }
 
 /**
@@ -196,6 +227,18 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     return true;
   }
 
+  if (isHealthMessage(message)) {
+    void recordCaptureReport(message.report);
+    return false; // fire-and-forget
+  }
+
+  if (isStatusQuery(message)) {
+    buildStatus()
+      .then((status) => sendResponse({ ok: true, status }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
   if (isAnnounceMessage(message)) {
     // Popup pasted a pairing string -- tell the Mac right away so it shows "Browser connected".
     getSettings()
@@ -280,6 +323,21 @@ async function resumeSuggestion(): Promise<ResumeSuggestion | null> {
   }
 }
 
+/** One round-trip for the popup: pairing, which account, per-source capture health. */
+async function buildStatus(): Promise<ExtensionStatus> {
+  const [pairing, account, health] = await Promise.all([
+    getPairingState(),
+    getAccountInfo(),
+    getCaptureHealth(),
+  ]);
+  // Opportunistically refresh the account name if we're paired and it's missing/stale (>1h).
+  if (pairing.status === "paired" && pairing.userId) {
+    const stale = !account || Date.now() - Date.parse(account.fetchedAt) > 60 * 60 * 1000;
+    if (stale) void refreshAccountInfo(pairing.userId);
+  }
+  return { pairing, account, health };
+}
+
 async function handleCapture(
   message: CaptureMessage,
 ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
@@ -297,6 +355,7 @@ async function handleCapture(
   } catch (err) {
     if (isUnauthorized(err)) {
       await clearCredentials();
+      await setAccountInfo(null);
       await setPairingState({ status: "rejected", detail: "Credentials rejected mid-capture. Re-pairing…" });
       const repaired = await ensurePaired("capture-401");
       if (repaired) {
@@ -326,6 +385,14 @@ function isCaptureMessage(message: unknown): message is CaptureMessage {
 
 function isPairNowMessage(message: unknown): message is { type: "thread:pair-now" } {
   return typeof message === "object" && message !== null && (message as { type?: unknown }).type === "thread:pair-now";
+}
+
+function isHealthMessage(message: unknown): message is HealthMessage {
+  return typeof message === "object" && message !== null && (message as { type?: unknown }).type === "thread:health";
+}
+
+function isStatusQuery(message: unknown): message is { type: "thread:status" } {
+  return typeof message === "object" && message !== null && (message as { type?: unknown }).type === "thread:status";
 }
 
 function isAnnounceMessage(message: unknown): message is { type: "thread:announce" } {
