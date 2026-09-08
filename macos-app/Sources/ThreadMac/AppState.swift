@@ -925,6 +925,10 @@ final class AppState: ObservableObject {
 
     @Published var authBusy = false
     @Published var authError: String?
+    /// Set when "Add your email" hits a 409 -- the email is already on another (non-empty)
+    /// account. The Account UI reads this to offer "Sign in to that account instead" with the
+    /// address prefilled, instead of leaving the user at a dead-end error.
+    @Published var claimEmailInUse: String?
 
     func refreshAccount() async {
         guard isPaired, reconnect == nil else { return }
@@ -984,6 +988,10 @@ final class AppState: ObservableObject {
             userId = created.userId
             reconnect = nil
             isOffline = false
+            claimEmailInUse = nil
+            // The account just changed under any paired browser -- reopen the pairing window so
+            // the extension re-adopts the new credentials on its own instead of going stale.
+            openPairingWindow(seconds: 120)
             await refresh()
             await refreshAccount()
             await persistAccountEmailIfKnown()
@@ -1046,7 +1054,10 @@ final class AppState: ObservableObject {
             account = try await client.accountEmailVerify(email: email, code: code)
             return true
         } catch let APIError.http(status, _) where status == 409 {
-            authError = "That email is already on another account. Sign in with it instead."
+            // The email is on another account that has ideas in it. Don't dead-end -- hand the
+            // Account UI everything it needs to pivot to "sign in to that account".
+            claimEmailInUse = email
+            authError = "That email is already on your other Thread account — sign in to it instead."
             return false
         } catch {
             authError = "That code is wrong or expired."
@@ -1135,13 +1146,18 @@ final class AppState: ObservableObject {
             enterReconnect(knownEmail: CredentialStore.lastKnownEmail)
 
         case .absent:
-            let hadAnAccount = LocalStore.mostRecentSnapshot() != nil || CredentialStore.lastKnownEmail != nil
-            if hadAnAccount && !CredentialStore.deliberatelySignedOut {
+            if CredentialStore.deliberatelySignedOut {
+                // Signed out on purpose. Do NOT silently mint a throwaway account -- that buried
+                // the real one and sent post-sign-out captures somewhere the user would never
+                // find. Stay unpaired; RootView -> WelcomeView shows sign-in (prefilled with the
+                // last email), with "start a new account instead" as the explicit choice.
+                break
+            }
+            if LocalStore.mostRecentSnapshot() != nil || CredentialStore.lastKnownEmail != nil {
                 // This Mac had an account; the credential is simply gone. Reconnect, don't start over.
                 enterReconnect(knownEmail: CredentialStore.lastKnownEmail)
             } else {
-                // Genuine first run, or a deliberate sign-out -- auto-create so capture works
-                // with zero setup.
+                // Genuine first run -- auto-create so capture works with zero setup.
                 await pairNewAccount()
             }
         }

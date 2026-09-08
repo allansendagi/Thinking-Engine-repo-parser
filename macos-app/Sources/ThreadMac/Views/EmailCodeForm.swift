@@ -11,6 +11,9 @@ struct EmailCodeForm: View {
     /// Verifies the code. Return true on success.
     let verify: (_ email: String, _ code: String) async -> Bool
     var onDone: () -> Void = {}
+    /// Filled into the email field on first appearance -- the last-known email, so signing back
+    /// in after a sign-out is one tap.
+    var prefillEmail: String = ""
 
     @State private var email = ""
     @State private var code = ""
@@ -54,5 +57,6 @@ struct EmailCodeForm: View {
                 Text(e).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
         }
+        .onAppear { if email.isEmpty { email = prefillEmail } }
     }
 }

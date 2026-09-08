@@ -60,13 +60,15 @@ final class CredentialStoreTests: XCTestCase {
         }
     }
 
-    func testClearRemovesPrimaryAndBackupAndEmailMirrorAndFlagsSignOut() {
+    func testClearRemovesCredentialAndBackupAndFlagsSignOutButKeepsTheEmail() {
         CredentialStore.save(userId: "user_cccccccccccccccccccccccc", token: "t", email: "c@d.com")
         XCTAssertFalse(CredentialStore.deliberatelySignedOut)
         CredentialStore.clear()
         guard case .absent = CredentialStore.load() else { return XCTFail("expected .absent after clear") }
         XCTAssertFalse(FileManager.default.fileExists(atPath: backup.path))
-        XCTAssertNil(CredentialStore.lastKnownEmail)
+        // The email mirror is deliberately KEPT so the sign-in screen prefills and getting back
+        // in is one tap -- losing it was half of why a mis-clicked sign-out stranded people.
+        XCTAssertEqual(CredentialStore.lastKnownEmail, "c@d.com")
         XCTAssertTrue(CredentialStore.deliberatelySignedOut)
 
         // A fresh pair clears the sign-out flag again.
