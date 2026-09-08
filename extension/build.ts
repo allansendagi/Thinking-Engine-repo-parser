@@ -25,7 +25,12 @@ async function build(entrypoints: string[], format: "esm" | "iife") {
 
 // Content scripts: IIFE, no module system needed or declared in the manifest.
 const contentResult = await build(
-  ["src/content-chatgpt.ts", "src/content-claude.ts", "src/content-gemini.ts"],
+  [
+    "src/content-chatgpt.ts",
+    "src/content-claude.ts",
+    "src/content-gemini.ts",
+    "src/content-perplexity.ts",
+  ],
   "iife",
 );
 

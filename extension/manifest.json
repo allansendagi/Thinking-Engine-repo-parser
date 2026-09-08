@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Thread \u2014 Continuity Layer",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Captures the ideas you develop in ChatGPT, Claude, and Gemini, and lets you recover and continue your thinking.",
   "icons": {
     "16": "icons/icon16.png",
@@ -22,7 +22,9 @@
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://claude.ai/*",
-    "https://gemini.google.com/*"
+    "https://gemini.google.com/*",
+    "https://www.perplexity.ai/*",
+    "https://perplexity.ai/*"
   ],
   "background": {
     "service_worker": "dist/background.js",
@@ -54,6 +56,16 @@
       ],
       "js": [
         "dist/content-gemini.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.perplexity.ai/*",
+        "https://perplexity.ai/*"
+      ],
+      "js": [
+        "dist/content-perplexity.js"
       ],
       "run_at": "document_idle"
     }
