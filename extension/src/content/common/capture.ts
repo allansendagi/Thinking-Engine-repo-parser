@@ -1,4 +1,5 @@
 import { addSentIds, getSentIds } from "../../lib/storage";
+import { textHash } from "./domUtils";
 import type { CaptureMessage, CaptureReport, CapturedMessage, HealthMessage } from "../../lib/types";
 import type { SiteAdapter } from "./siteAdapter";
 
@@ -8,14 +9,21 @@ import type { SiteAdapter } from "./siteAdapter";
  * happy-dom fixtures) -- the site-specific selectors in each adapter are NOT, and are the part
  * most likely to need adjustment against the real, current DOM. See extension/README.md.
  *
- * Message ids are position-based (`${conversationId}::${index}`), not derived from message text.
- * That's deliberate: an assistant reply's text grows token-by-token while streaming, and hashing
- * text into the id would make the id change on every partial render, defeating deduplication
- * entirely. A stable position-based id means a still-streaming message may occasionally be
- * captured with truncated text if the debounce window closes mid-stream -- a real, accepted
- * limitation, not silently ignored: it only affects context completeness for future extraction
- * calls, not correctness, because only user turns are ever extracted from (see the backend's
- * extraction prompt) and a truncated assistant reply can't produce a fabricated user statement.
+ * Message ids:
+ *   user turns      -- position-based (`${conversationId}::${index}`). A user turn is submitted
+ *                      whole, so its content is stable from the first capture; keeping the id
+ *                      positional means an extension update doesn't re-key turns the backend has
+ *                      already extracted from. (An edited/branched user turn still shifts here --
+ *                      that needs a backend content-fingerprint match to fix properly.)
+ *   assistant turns -- content-derived (`${conversationId}::a${textHash(text)}`). A regenerated
+ *                      answer is different words at the same position, so a positional id would
+ *                      silently drop it; a content id captures it. Virtualized scrollback that
+ *                      re-renders a turn at a shifted position keeps the same id. Assistant turns
+ *                      are never extracted from, so id churn costs only canonical-event rows.
+ *
+ * Streaming: the last turn, when it's an assistant reply, may still be growing token-by-token.
+ * It's HELD OUT of the payload until its text is byte-stable for `assistantStableMs` OR a newer
+ * turn appears after it -- so what's captured is the finished reply, not a mid-stream fragment.
  */
 export interface CaptureOptions {
   debounceMs?: number;
@@ -31,17 +39,25 @@ export interface CaptureOptions {
   /** Injectable for tests -- defaults to the real chrome.runtime.sendMessage. */
   sendMessage?: (message: CaptureMessage | HealthMessage) => Promise<unknown>;
   now?: () => string;
+  /** How long a trailing assistant turn's text must stay byte-identical before it's considered
+   *  finished and allowed into the payload. Default 2500ms (> a debounce window). */
+  assistantStableMs?: number;
 }
 
 export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: CaptureOptions = {}): () => void {
   const debounceMs = options.debounceMs ?? 2000;
   const backstopMs = options.backstopMs ?? 4000;
+  const assistantStableMs = options.assistantStableMs ?? 2500;
   const sendMessage =
     options.sendMessage ?? ((m: CaptureMessage | HealthMessage) => chrome.runtime.sendMessage(m));
   const now = options.now ?? (() => new Date().toISOString());
+  const clock = () => Date.now();
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  /** The trailing assistant turn's text and when it last changed -- the streaming-tail guard. */
+  let tailText = "";
+  let tailChangedAt = 0;
   /** Last health report sent -- so an unchanged situation (idle, or steadily-broken) reports once,
    *  not on every mutation/backstop tick. */
   let lastHealthKey = "";
@@ -96,23 +112,41 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
       const raw = adapter.extractMessages(doc);
       const capturedAt = at;
       const messages: CapturedMessage[] = raw.map((m, i) => ({
-        id: `${conversationId}::${i}`,
+        id: m.role === "assistant" ? `${conversationId}::a${textHash(m.text)}` : `${conversationId}::${i}`,
         role: m.role,
         text: m.text,
         createdAt: capturedAt,
       }));
 
-      const sentIds = raw.length > 0 ? await getSentIds(conversationId) : new Set<string>();
-      const fresh = messages.filter((m) => !sentIds.has(m.id));
+      // Streaming-tail guard: if the last turn is an assistant reply that's still changing, hold
+      // it back until it's been byte-stable for `assistantStableMs`. A newer turn after it (last
+      // turn is a user message, or an assistant turn that isn't last) proves it's finished.
+      const tail = raw[raw.length - 1];
+      let holdTail = false;
+      if (tail && tail.role === "assistant") {
+        if (tail.text !== tailText) {
+          tailText = tail.text;
+          tailChangedAt = clock();
+        }
+        holdTail = clock() - tailChangedAt < assistantStableMs;
+      }
+      const toSend = holdTail ? messages.slice(0, -1) : messages;
+
+      const sentIds = toSend.length > 0 ? await getSentIds(conversationId) : new Set<string>();
+      const fresh = toSend.filter((m) => !sentIds.has(m.id));
 
       if (fresh.length > 0) {
         const sourceUrl = adapter.getConversationUrl?.() ?? null;
-        await sendMessage({ type: "thread:capture", source: adapter.source, conversationId, sourceUrl, messages });
+        await sendMessage({ type: "thread:capture", source: adapter.source, conversationId, sourceUrl, messages: toSend });
         await addSentIds(
           conversationId,
-          messages.map((m) => m.id),
+          toSend.map((m) => m.id),
         );
       }
+
+      // A held tail must keep the loop alive so it gets sent once it settles -- MutationObserver
+      // may not fire again if the stream has stopped painting.
+      if (holdTail) scheduleFlush();
 
       await reportHealth({
         source: adapter.source,

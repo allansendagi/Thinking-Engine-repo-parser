@@ -3,6 +3,22 @@ export function cleanText(raw: string | null | undefined): string {
   return (raw ?? "").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * A short, stable hash of a string (FNV-1a, base36). Used to derive a message id from an
+ * assistant turn's text, so a regenerated answer -- same position, different words -- gets a new
+ * id and is captured, and a turn re-rendered at a shifted position after virtualized scrollback
+ * keeps the same id. Not cryptographic; a collision within one conversation is vanishingly rare
+ * and at worst merges two identical turns.
+ */
+export function textHash(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(36);
+}
+
 /** First capturing group of the first pattern that matches `pathname`, or null. */
 export function matchFirst(pathname: string, patterns: RegExp[]): string | null {
   for (const pattern of patterns) {
