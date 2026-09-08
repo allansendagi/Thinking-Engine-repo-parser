@@ -38,7 +38,10 @@ export type CanonicalEventStatus = "committed" | "provisional";
 export interface CanonicalEvent {
   id: string;
   conversationId: string;
-  source: "chatgpt" | "claude" | "gemini" | "cursor" | "paste" | "fixture";
+  // Browser-captured AI tools, the local desktop store (cursor), a human paste, and test
+  // fixtures. Adding a new browser source: extend this union, add a label in mcp/tools.ts
+  // `SOURCE_LABELS`, and ship the extension adapter.
+  source: "chatgpt" | "claude" | "gemini" | "perplexity" | "cursor" | "paste" | "fixture";
   role: Role;
   text: string;
   createdAt: string; // ISO 8601

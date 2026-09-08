@@ -133,6 +133,7 @@ const SOURCE_LABELS: Record<string, string> = {
   chatgpt: "ChatGPT",
   claude: "Claude",
   gemini: "Gemini",
+  perplexity: "Perplexity",
   cursor: "Cursor",
   paste: "pasted",
   fixture: "fixture",
