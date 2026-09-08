@@ -70,6 +70,18 @@ async function ensurePaired(trigger: string, opts: { force?: boolean } = {}): Pr
   if (credentials) {
     try {
       await verifyCredentials();
+      // Verified -- but if Thread for Mac is up with a pairing window open AND now serving a
+      // DIFFERENT account (the user switched accounts on the Mac), follow it. Without this the
+      // extension stays on the old account until that token is actually revoked. Cheap: the
+      // loopback 404s in the common case (no window open) with a 1.5s timeout.
+      const peek = await fetchDesktopPairing().catch(() => null);
+      if (peek && peek.credentials.userId !== credentials.userId) {
+        await setApiBaseUrl(peek.apiBaseUrl);
+        await setCredentials(peek.credentials);
+        await setAccountInfo(null);
+        await markPaired(peek.credentials.userId, `Followed Thread for Mac to a different account (${trigger}).`);
+        return true;
+      }
       await markPaired(credentials.userId, `Verified (${trigger}).`);
       return true;
     } catch (err) {

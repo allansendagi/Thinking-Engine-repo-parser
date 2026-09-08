@@ -27,6 +27,14 @@ export function attachResumeNudge(adapter: SiteAdapter, doc: Document): () => vo
   let lastHandledUrl: string | null = null;
   let lastSeenUrl = location.href;
 
+  /** Remove any live card and run its listener/timer cleanup (the render closure parks a
+   *  `__threadCleanup` on the host so URL changes / teardown don't leak a keydown handler). */
+  function removeCard(): void {
+    const el = doc.getElementById(HOST_ID) as (HTMLElement & { __threadCleanup?: () => void }) | null;
+    el?.__threadCleanup?.();
+    el?.remove();
+  }
+
   function contextGone(): boolean {
     return typeof chrome === "undefined" || !("runtime" in chrome) || !chrome.runtime?.id;
   }
@@ -79,14 +87,25 @@ export function attachResumeNudge(adapter: SiteAdapter, doc: Document): () => vo
     root.innerHTML = `
       <style>
         :host { all: initial; }
+        @keyframes thread-nudge-in {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
         .card {
-          position: fixed; right: 20px; bottom: 20px; z-index: 2147483647;
+          position: fixed; right: 20px; bottom: 84px; z-index: 2147483647;
           width: 320px; box-sizing: border-box; padding: 14px 14px 12px;
           font: 13px/1.45 -apple-system, "SF Pro Text", system-ui, sans-serif;
           color: #1d1d1f; background: rgba(250,250,252,0.98);
           border: 0.5px solid rgba(0,0,0,0.12); border-radius: 12px;
           box-shadow: 0 12px 32px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.08);
           backdrop-filter: saturate(180%) blur(20px);
+          animation: thread-nudge-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .card.leaving { opacity: 0; transform: translateY(8px);
+          transition: opacity 140ms ease, transform 140ms ease; }
+        @media (prefers-reduced-motion: reduce) {
+          .card { animation: none; }
+          .card.leaving { transition: none; }
         }
         .eyebrow { display:flex; align-items:center; gap:6px;
           font-size: 10px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase;
@@ -124,7 +143,35 @@ export function attachResumeNudge(adapter: SiteAdapter, doc: Document): () => vo
     root.querySelector(".title")!.textContent = s.title;
 
     const rowEl = root.querySelector(".row")!;
-    const teardown = () => host.remove();
+    const cardEl = root.querySelector(".card") as HTMLElement;
+
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      doc.removeEventListener("keydown", onKey, true);
+      host.remove();
+    };
+    // So an outer URL change / teardown can clear our listener + timer, not just the DOM node.
+    (host as HTMLElement & { __threadCleanup?: () => void }).__threadCleanup = cleanup;
+    /** Slide out, then remove. Used for every dismissal so nothing just vanishes. */
+    const teardown = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      doc.removeEventListener("keydown", onKey, true);
+      cardEl.classList.add("leaving");
+      setTimeout(cleanup, 180);
+    };
+    /** Leave quietly WITHOUT recording a dismissal -- Escape and the idle timeout just clear the
+     *  card; the same idea can nudge again on the next fresh surface. */
+    const hideWithoutSnooze = () => teardown();
+    function onKey(e: KeyboardEvent): void {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        hideWithoutSnooze();
+      }
+    }
+    doc.addEventListener("keydown", onKey, true);
+    // A nudge that's sat untouched for a while is clutter -- fade it, but don't snooze it.
+    idleTimer = setTimeout(hideWithoutSnooze, 25_000);
 
     /** Hand off to the Mac app -- inside a user gesture so the OS protocol prompt is allowed. */
     const openInThread = () => {
@@ -186,7 +233,7 @@ export function attachResumeNudge(adapter: SiteAdapter, doc: Document): () => vo
     if (stopped || contextGone()) return;
     if (location.href !== lastSeenUrl) {
       lastSeenUrl = location.href;
-      doc.getElementById(HOST_ID)?.remove(); // stale card from the previous view
+      removeCard(); // stale card from the previous view
       setTimeout(() => void maybeShow(), 800);
     }
   }, URL_POLL_MS);
@@ -195,6 +242,6 @@ export function attachResumeNudge(adapter: SiteAdapter, doc: Document): () => vo
     stopped = true;
     clearTimeout(initial);
     clearInterval(poll);
-    doc.getElementById(HOST_ID)?.remove();
+    removeCard();
   };
 }
