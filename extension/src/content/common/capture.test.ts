@@ -59,7 +59,7 @@ describe("startCapture (debounce + dedup, no real browser or network)", () => {
     delete (globalThis as { chrome?: unknown }).chrome;
   });
 
-  test("sends once after the debounce window; user id positional, assistant id content-derived", async () => {
+  test("sends once after the debounce window, with content-derived ids", async () => {
     const window = new Window({ url: "https://chatgpt.com/c/conv_1" });
     installMutationObserver(window);
     const sent: AnyMsg[] = [];
@@ -80,7 +80,7 @@ describe("startCapture (debounce + dedup, no real browser or network)", () => {
 
     expect(captures(sent)).toHaveLength(1);
     expect(lastCapture(sent)).toEqual([
-      { id: "conv_1::0", role: "user", text: "Hello", createdAt: "2026-08-17T00:00:00.000Z" },
+      { id: `conv_1::u${textHash("Hello")}`, role: "user", text: "Hello", createdAt: "2026-08-17T00:00:00.000Z" },
       { id: `conv_1::a${textHash("Hi")}`, role: "assistant", text: "Hi", createdAt: "2026-08-17T00:00:00.000Z" },
     ]);
     const r = reports(sent).at(-1);
@@ -168,6 +168,41 @@ describe("startCapture (debounce + dedup, no real browser or network)", () => {
     expect(captures(sent).length).toBeGreaterThanOrEqual(2);
     expect(lastCapture(sent)?.at(-1)?.text).toBe("Completely different second take on X.");
     expect(lastCapture(sent)?.at(-1)?.id).toBe(`conv_1::a${textHash("Completely different second take on X.")}`);
+  });
+
+  test("a turn that shifts position keeps its id, and only the genuinely new turn is fresh", async () => {
+    const window = new Window({ url: "https://chatgpt.com/c/conv_1" });
+    installMutationObserver(window);
+    const sent: AnyMsg[] = [];
+    let messages: RawMessage[] = [
+      { role: "user", text: "second thought" },
+      { role: "assistant", text: "reply to second" },
+    ];
+    const adapter = makeAdapter(() => messages);
+
+    const stop = startCapture(adapter, window.document as unknown as ParentNode, {
+      debounceMs: 10,
+      assistantStableMs: 0,
+      sendMessage: async (m) => void sent.push(m),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    const firstIds = new Set(lastCapture(sent)?.map((m) => m.id));
+
+    // Older turns load in above (virtualized scrollback): the same two turns shift down.
+    messages = [
+      { role: "user", text: "first thought" },
+      { role: "assistant", text: "reply to first" },
+      { role: "user", text: "second thought" },
+      { role: "assistant", text: "reply to second" },
+    ];
+    poke(window);
+    await new Promise((r) => setTimeout(r, 30));
+    stop();
+
+    const payload = lastCapture(sent)!;
+    // The two originally-captured turns keep the exact ids they had, despite moving position.
+    expect(payload.find((m) => m.text === "second thought")?.id).toBe(`conv_1::u${textHash("second thought")}`);
+    expect([...firstIds].every((id) => payload.some((m) => m.id === id))).toBe(true);
   });
 
   test("a still-streaming trailing assistant turn is held until its text settles", async () => {
