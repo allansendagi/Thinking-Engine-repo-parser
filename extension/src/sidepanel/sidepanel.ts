@@ -2,6 +2,7 @@ import {
   continueThinking,
   deleteIdea,
   getThinkingState,
+  isUnauthorized,
   pasteConversation,
   renameIdea,
   searchIdeas,
@@ -11,6 +12,7 @@ import {
   ApiError,
   type IdeaTrace,
 } from "../lib/api";
+import { getSettings } from "../lib/storage";
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -26,6 +28,14 @@ function escapeHtml(s: string): string {
 async function renderList(query: string): Promise<void> {
   const ideaListEl = $("ideaList");
   const openLoopsEl = $("openLoops");
+
+  const { credentials } = await getSettings();
+  if (!credentials) {
+    openLoopsEl.parentElement!.style.display = "none";
+    ideaListEl.innerHTML =
+      '<p class="muted">Not connected. Open Thread for Mac, then click the Thread toolbar icon to pair this browser.</p>';
+    return;
+  }
 
   try {
     if (query.trim().length > 0) {
@@ -55,7 +65,15 @@ async function renderList(query: string): Promise<void> {
           : state.currentIdeas.map((i) => ideaRowHtml(i.id, i.title, i.state)).join("");
     }
   } catch (err) {
-    ideaListEl.innerHTML = `<p class="error">${err instanceof ApiError ? escapeHtml(err.message) : "Failed to load. Is the API server running?"}</p>`;
+    if (isUnauthorized(err)) {
+      openLoopsEl.parentElement!.style.display = "none";
+      ideaListEl.innerHTML =
+        '<p class="muted">This browser\'s pairing expired. Open Thread for Mac and click the Thread toolbar icon to reconnect.</p>';
+      return;
+    }
+    ideaListEl.innerHTML = `<p class="error">${
+      err instanceof ApiError ? escapeHtml(err.message) : "Can't reach Thread right now — it'll load once you're back online."
+    }</p>`;
   }
 }
 

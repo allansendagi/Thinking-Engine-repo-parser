@@ -1,7 +1,8 @@
 import {
   DEFAULT_API_BASE_URL,
-  getCaptureHealth,
   getAccountInfo,
+  getCaptureHealth,
+  getCaptureQueue,
   getPairingState,
   getSettings,
   setApiBaseUrl,
@@ -62,7 +63,7 @@ function renderConnection(state: PairingState, account: AccountInfo | null): voi
   ($("codeSection") as HTMLDetailsElement).hidden = paired;
 }
 
-function renderCapture(health: CaptureHealth, paired: boolean): void {
+function renderCapture(health: CaptureHealth, paired: boolean, queued: number): void {
   const wrap = $("capture");
   wrap.hidden = !paired;
   if (!paired) return;
@@ -88,12 +89,16 @@ function renderCapture(health: CaptureHealth, paired: boolean): void {
       </div>`;
   }).join("");
 
-  wrap.innerHTML = `<div class="chdr">Capture</div>${rows}`;
+  const backlog =
+    queued > 0
+      ? `<div class="srow"><span class="sdot muted"></span><span class="sdetail">${queued} conversation${queued === 1 ? "" : "s"} waiting to retry</span></div>`
+      : "";
+  wrap.innerHTML = `<div class="chdr">Capture</div>${rows}${backlog}`;
 }
 
 function render(status: ExtensionStatus): void {
   renderConnection(status.pairing, status.account);
-  renderCapture(status.health, status.pairing.status === "paired");
+  renderCapture(status.health, status.pairing.status === "paired", status.queued);
 }
 
 /** Ask the worker for the whole picture; fall back to reading storage directly if it's asleep. */
@@ -110,6 +115,7 @@ async function loadStatus(): Promise<ExtensionStatus> {
     pairing: await getPairingState(),
     account: await getAccountInfo(),
     health: await getCaptureHealth(),
+    queued: (await getCaptureQueue()).length,
   };
 }
 

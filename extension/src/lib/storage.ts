@@ -2,9 +2,12 @@ import type {
   AccountInfo,
   CaptureHealth,
   CaptureReport,
+  CapturedMessage,
   Credentials,
   PairingState,
+  QueuedCapture,
   Settings,
+  Source,
   SourceHealth,
 } from "./types";
 
@@ -118,6 +121,42 @@ export async function recordCaptureReport(report: CaptureReport): Promise<Captur
 
 /** Exposed for tests -- the pure fold, no storage. */
 export const _foldReport = foldReport;
+
+// --- Capture retry queue -----------------------------------------------------------------------
+//
+// A transient ingest failure (offline, 5xx) used to mark the messages as "sent" anyway, dropping
+// the turn unless a later mutation happened to re-send. Now the background worker parks the full
+// transcript here and drains it on the pairing alarm / after any successful capture.
+
+/** Cap the queue so a long outage can't grow storage without bound. Newest conversations win. */
+export const CAPTURE_QUEUE_MAX = 25;
+/** Give up on an entry after this many failed drains -- it's not transient any more. */
+export const CAPTURE_MAX_ATTEMPTS = 8;
+
+export async function getCaptureQueue(): Promise<QueuedCapture[]> {
+  const { captureQueue } = await chrome.storage.local.get("captureQueue");
+  return (captureQueue as QueuedCapture[] | undefined) ?? [];
+}
+
+export async function setCaptureQueue(queue: QueuedCapture[]): Promise<void> {
+  await chrome.storage.local.set({ captureQueue: queue });
+}
+
+/** Park (or refresh) one conversation's transcript for retry. Newest transcript replaces any
+ *  older queued one for the same conversation -- it's a superset. Attempts/queuedAt carry over. */
+export async function enqueueCapture(
+  c: Pick<QueuedCapture, "conversationId" | "source" | "sourceUrl" | "messages">,
+): Promise<void> {
+  const q = await getCaptureQueue();
+  const prev = q.find((e) => e.conversationId === c.conversationId);
+  const entry: QueuedCapture = {
+    ...c,
+    queuedAt: prev?.queuedAt ?? new Date().toISOString(),
+    attempts: prev?.attempts ?? 0,
+  };
+  const rest = q.filter((e) => e.conversationId !== c.conversationId);
+  await setCaptureQueue([...rest, entry].slice(-CAPTURE_QUEUE_MAX));
+}
 
 const DEFAULT_PAIRING_STATE: PairingState = {
   status: "unpaired",

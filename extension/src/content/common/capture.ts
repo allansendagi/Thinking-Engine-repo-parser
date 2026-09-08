@@ -133,11 +133,22 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
 
       if (fresh.length > 0) {
         const sourceUrl = adapter.getConversationUrl?.() ?? null;
-        await sendMessage({ type: "thread:capture", source: adapter.source, conversationId, sourceUrl, messages: toSend });
-        await addSentIds(
+        const res = (await sendMessage({
+          type: "thread:capture",
+          source: adapter.source,
           conversationId,
-          toSend.map((m) => m.id),
-        );
+          sourceUrl,
+          messages: toSend,
+        })) as { ok?: boolean; queued?: boolean; retry?: boolean } | undefined;
+        // Mark sent UNLESS the worker explicitly said to retry from here (not paired, or 401
+        // before a re-pair landed). A transient backend failure comes back `queued: true` -- the
+        // worker owns retrying it from durable storage, so this tab must not also re-send.
+        if (res?.retry !== true) {
+          await addSentIds(
+            conversationId,
+            toSend.map((m) => m.id),
+          );
+        }
       }
 
       // A held tail must keep the loop alive so it gets sent once it settles -- MutationObserver
