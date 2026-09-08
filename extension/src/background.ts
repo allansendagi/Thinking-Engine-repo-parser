@@ -1,7 +1,10 @@
 import {
+  CAPTURE_MAX_ATTEMPTS,
   clearCredentials,
+  enqueueCapture,
   getAccountInfo,
   getCaptureHealth,
+  getCaptureQueue,
   getPairingState,
   getResumeShown,
   getResumeSnooze,
@@ -10,6 +13,7 @@ import {
   recordCaptureReport,
   setAccountInfo,
   setApiBaseUrl,
+  setCaptureQueue,
   setCredentials,
   setPairingState,
   setResumeSnooze,
@@ -215,6 +219,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // done by pasted code, and a Mac app that started after the extension).
     void pingDesktop(state.userId);
   }
+  await drainQueue(); // retry any captures parked by a transient failure
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
@@ -323,60 +328,113 @@ async function resumeSuggestion(): Promise<ResumeSuggestion | null> {
   }
 }
 
-/** One round-trip for the popup: pairing, which account, per-source capture health. */
+/** One round-trip for the popup: pairing, which account, per-source capture health, queue depth. */
 async function buildStatus(): Promise<ExtensionStatus> {
-  const [pairing, account, health] = await Promise.all([
+  const [pairing, account, health, queue] = await Promise.all([
     getPairingState(),
     getAccountInfo(),
     getCaptureHealth(),
+    getCaptureQueue(),
   ]);
   // Opportunistically refresh the account name if we're paired and it's missing/stale (>1h).
   if (pairing.status === "paired" && pairing.userId) {
     const stale = !account || Date.now() - Date.parse(account.fetchedAt) > 60 * 60 * 1000;
     if (stale) void refreshAccountInfo(pairing.userId);
   }
-  return { pairing, account, health };
+  // Opening the popup is a good moment to drain -- the user's here, likely online.
+  if (queue.length > 0) void drainQueue();
+  return { pairing, account, health, queued: queue.length };
+}
+
+type Capture = Pick<CaptureMessage, "conversationId" | "source" | "sourceUrl" | "messages">;
+type SendOutcome =
+  | { kind: "ok"; result: unknown }
+  | { kind: "unauthorized" } // creds gone -- re-pair, then a fresh mutation retries
+  | { kind: "capped" } // 402 -- account is fine, just at the Free cap; don't retry
+  | { kind: "transient"; error: string }; // offline / 5xx -- worth queueing
+
+/** One ingest attempt. Refreshes "Capturing." on success; classifies the failure so the caller
+ *  can decide between queue / re-pair / give up. Does NOT itself queue or clear credentials. */
+async function sendCapture(c: Capture): Promise<SendOutcome> {
+  try {
+    const result = await ingestConversation(c.conversationId, c.source, c.messages, c.sourceUrl);
+    const { credentials } = await getSettings();
+    if (credentials) await markPaired(credentials.userId, "Capturing.");
+    return { kind: "ok", result };
+  } catch (err) {
+    if (isUnauthorized(err)) return { kind: "unauthorized" };
+    if (isPaymentRequired(err)) return { kind: "capped" };
+    return { kind: "transient", error: err instanceof ApiError ? `${err.status} ${err.message}` : String(err) };
+  }
+}
+
+/**
+ * Retry every queued conversation once. Stops the whole pass on `unauthorized` (nothing will
+ * work until re-paired) and on `capped` (hammering a Free-cap account is pointless). A `transient`
+ * failure bumps `attempts` and is dropped past `CAPTURE_MAX_ATTEMPTS`. Called from the retry
+ * alarm and after any successful live capture.
+ */
+async function drainQueue(): Promise<void> {
+  const queue = await getCaptureQueue();
+  if (queue.length === 0) return;
+  const { credentials } = await getSettings();
+  if (!credentials) return;
+
+  const keep: typeof queue = [];
+  for (let i = 0; i < queue.length; i++) {
+    const entry = queue[i]!;
+    const outcome = await sendCapture(entry);
+    if (outcome.kind === "ok") continue; // done -- drop it
+    if (outcome.kind === "unauthorized" || outcome.kind === "capped") {
+      keep.push(...queue.slice(i)); // stop the pass; leave this and the rest for next time
+      break;
+    }
+    if (entry.attempts + 1 < CAPTURE_MAX_ATTEMPTS) keep.push({ ...entry, attempts: entry.attempts + 1 });
+    // else: give it up -- it isn't transient any more
+  }
+  await setCaptureQueue(keep);
+  await setBadge(keep.length > 0 || (await getPairingState()).status !== "paired");
 }
 
 async function handleCapture(
   message: CaptureMessage,
-): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
+): Promise<{ ok: true; result: unknown } | { ok: false; error: string; queued?: boolean; retry?: boolean }> {
   const { credentials } = await getSettings();
   if (!credentials) {
     const paired = await ensurePaired("capture");
-    if (!paired) return { ok: false, error: "Not paired -- open Thread for Mac." };
+    if (!paired) return { ok: false, error: "Not paired -- open Thread for Mac.", retry: true };
   }
 
-  try {
-    const result = await ingestConversation(message.conversationId, message.source, message.messages, message.sourceUrl);
-    console.log(`[Thread] ingested ${message.conversationId}:`, result);
-    await markPaired((await getSettings()).credentials!.userId, "Capturing.");
-    return { ok: true, result };
-  } catch (err) {
-    if (isUnauthorized(err)) {
-      await clearCredentials();
-      await setAccountInfo(null);
-      await setPairingState({ status: "rejected", detail: "Credentials rejected mid-capture. Re-pairing…" });
-      const repaired = await ensurePaired("capture-401");
-      if (repaired) {
-        const result = await ingestConversation(message.conversationId, message.source, message.messages, message.sourceUrl);
-        return { ok: true, result };
-      }
-      return { ok: false, error: "Credentials expired -- reconnect Thread for Mac." };
-    }
-    if (isPaymentRequired(err)) {
-      // Account is fine, just at the Free plan's idea cap -- keep credentials, surface it, stop hammering.
-      await setPairingState({
-        status: "paired",
-        detail: "Free plan limit reached. Upgrade to Pro from your Thread account to keep capturing.",
-      });
-      await setBadge(true);
-      return { ok: false, error: "Free plan limit reached -- upgrade to Pro from your Thread account." };
-    }
-    const detail = err instanceof ApiError ? `${err.status} ${err.message}` : String(err);
-    console.error(`[Thread] ingest failed for ${message.conversationId}:`, detail);
-    return { ok: false, error: detail };
+  const outcome = await sendCapture(message);
+  if (outcome.kind === "ok") {
+    console.log(`[Thread] ingested ${message.conversationId}`);
+    void drainQueue(); // a working connection is a good moment to flush anything parked
+    return { ok: true, result: outcome.result };
   }
+  if (outcome.kind === "unauthorized") {
+    await clearCredentials();
+    await setAccountInfo(null);
+    await setPairingState({ status: "rejected", detail: "Credentials rejected mid-capture. Re-pairing…" });
+    const repaired = await ensurePaired("capture-401");
+    if (repaired) {
+      const retry = await sendCapture(message);
+      if (retry.kind === "ok") return { ok: true, result: retry.result };
+    }
+    return { ok: false, error: "Credentials expired -- reconnect Thread for Mac.", retry: true };
+  }
+  if (outcome.kind === "capped") {
+    await setPairingState({
+      status: "paired",
+      detail: "Free plan limit reached. Upgrade to Pro from your Thread account to keep capturing.",
+    });
+    await setBadge(true);
+    return { ok: false, error: "Free plan limit reached -- upgrade to Pro from your Thread account." };
+  }
+  // transient -- park the full transcript so it survives the worker being killed and retries later
+  console.error(`[Thread] ingest failed for ${message.conversationId}, queued for retry:`, outcome.error);
+  await enqueueCapture(message);
+  await setBadge(true);
+  return { ok: false, error: outcome.error, queued: true };
 }
 
 function isCaptureMessage(message: unknown): message is CaptureMessage {

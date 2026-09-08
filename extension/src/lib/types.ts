@@ -111,4 +111,18 @@ export interface ExtensionStatus {
   pairing: PairingState;
   account: AccountInfo | null;
   health: CaptureHealth;
+  /** How many conversations are waiting on a retry (a transient ingest failure). */
+  queued: number;
+}
+
+/** A capture that failed to reach the backend for a transient reason (offline, 5xx). The
+ *  background worker owns retrying it from `chrome.storage.local`, so it survives the service
+ *  worker being killed. One entry per conversation -- the newest full transcript wins. */
+export interface QueuedCapture {
+  conversationId: string;
+  source: Source;
+  sourceUrl: string | null;
+  messages: CapturedMessage[];
+  queuedAt: string;
+  attempts: number;
 }
