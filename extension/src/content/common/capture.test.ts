@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { startCapture } from "./capture";
+import { textHash } from "./domUtils";
 import type { SiteAdapter, RawMessage } from "./siteAdapter";
 import type { CaptureMessage, CaptureReport, HealthMessage } from "../../lib/types";
 
@@ -9,6 +10,7 @@ const captures = (msgs: AnyMsg[]): CaptureMessage[] =>
   msgs.filter((m): m is CaptureMessage => m.type === "thread:capture");
 const reports = (msgs: AnyMsg[]): CaptureReport[] =>
   msgs.filter((m): m is HealthMessage => m.type === "thread:health").map((m) => m.report);
+const lastCapture = (msgs: AnyMsg[]): CaptureMessage["messages"] | undefined => captures(msgs).at(-1)?.messages;
 
 /** Minimal in-memory fake of chrome.storage.local -- enough for storage.ts's get/set/remove. */
 function installFakeChromeStorage(): void {
@@ -46,13 +48,18 @@ function makeAdapter(messagesPerCall: () => RawMessage[]): SiteAdapter {
   };
 }
 
+/** Nudge the MutationObserver so the next flush re-extracts. */
+function poke(window: Window): void {
+  window.document.body.appendChild(window.document.createElement("div"));
+}
+
 describe("startCapture (debounce + dedup, no real browser or network)", () => {
   beforeEach(() => installFakeChromeStorage());
   afterEach(() => {
     delete (globalThis as { chrome?: unknown }).chrome;
   });
 
-  test("sends once after the debounce window, with position-based ids", async () => {
+  test("sends once after the debounce window; user id positional, assistant id content-derived", async () => {
     const window = new Window({ url: "https://chatgpt.com/c/conv_1" });
     installMutationObserver(window);
     const sent: AnyMsg[] = [];
@@ -63,9 +70,8 @@ describe("startCapture (debounce + dedup, no real browser or network)", () => {
 
     const stop = startCapture(adapter, window.document as unknown as ParentNode, {
       debounceMs: 10,
-      sendMessage: async (m) => {
-        sent.push(m);
-      },
+      assistantStableMs: 0, // don't hold the trailing assistant turn in this test
+      sendMessage: async (m) => void sent.push(m),
       now: () => "2026-08-17T00:00:00.000Z",
     });
 
@@ -73,11 +79,10 @@ describe("startCapture (debounce + dedup, no real browser or network)", () => {
     stop();
 
     expect(captures(sent)).toHaveLength(1);
-    expect(captures(sent)[0]?.messages).toEqual([
+    expect(lastCapture(sent)).toEqual([
       { id: "conv_1::0", role: "user", text: "Hello", createdAt: "2026-08-17T00:00:00.000Z" },
-      { id: "conv_1::1", role: "assistant", text: "Hi", createdAt: "2026-08-17T00:00:00.000Z" },
+      { id: `conv_1::a${textHash("Hi")}`, role: "assistant", text: "Hi", createdAt: "2026-08-17T00:00:00.000Z" },
     ]);
-    // A health report rides along, saying it's on a conversation and extraction is working.
     const r = reports(sent).at(-1);
     expect(r?.onConversation).toBe(true);
     expect(r?.extracted).toBe(2);
@@ -98,8 +103,6 @@ describe("startCapture (debounce + dedup, no real browser or network)", () => {
     stop1();
     expect(captures(sent)).toHaveLength(1);
 
-    // A second capture pass over the SAME unchanged conversation (e.g. a fresh content-script
-    // instance after navigation) should not re-send what's already recorded as sent.
     const stop2 = startCapture(adapter, window.document as unknown as ParentNode, {
       debounceMs: 10,
       sendMessage: async (m) => void sent.push(m),
@@ -118,6 +121,7 @@ describe("startCapture (debounce + dedup, no real browser or network)", () => {
 
     const stop = startCapture(adapter, window.document as unknown as ParentNode, {
       debounceMs: 10,
+      assistantStableMs: 0,
       sendMessage: async (m) => void sent.push(m),
     });
 
@@ -125,14 +129,102 @@ describe("startCapture (debounce + dedup, no real browser or network)", () => {
     expect(captures(sent)).toHaveLength(1);
 
     messages = [...messages, { role: "assistant", text: "Hi there" }];
-    // MutationObserver only fires on a real DOM mutation -- this is what triggers re-extraction.
-    window.document.body.appendChild(window.document.createElement("div"));
+    poke(window);
 
     await new Promise((r) => setTimeout(r, 30));
     stop();
 
     expect(captures(sent)).toHaveLength(2);
-    expect(captures(sent)[1]?.messages).toHaveLength(2);
+    expect(lastCapture(sent)).toHaveLength(2);
+  });
+
+  test("a regenerated assistant answer -- same position, different text -- is captured", async () => {
+    const window = new Window({ url: "https://chatgpt.com/c/conv_1" });
+    installMutationObserver(window);
+    const sent: AnyMsg[] = [];
+    let messages: RawMessage[] = [
+      { role: "user", text: "explain X" },
+      { role: "assistant", text: "First take on X." },
+    ];
+    const adapter = makeAdapter(() => messages);
+
+    const stop = startCapture(adapter, window.document as unknown as ParentNode, {
+      debounceMs: 10,
+      assistantStableMs: 0,
+      sendMessage: async (m) => void sent.push(m),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(lastCapture(sent)?.at(-1)?.text).toBe("First take on X.");
+
+    // Regenerate: same slot, new words. A positional id would silently drop this.
+    messages = [
+      { role: "user", text: "explain X" },
+      { role: "assistant", text: "Completely different second take on X." },
+    ];
+    poke(window);
+    await new Promise((r) => setTimeout(r, 30));
+    stop();
+
+    expect(captures(sent).length).toBeGreaterThanOrEqual(2);
+    expect(lastCapture(sent)?.at(-1)?.text).toBe("Completely different second take on X.");
+    expect(lastCapture(sent)?.at(-1)?.id).toBe(`conv_1::a${textHash("Completely different second take on X.")}`);
+  });
+
+  test("a still-streaming trailing assistant turn is held until its text settles", async () => {
+    const window = new Window({ url: "https://chatgpt.com/c/conv_1" });
+    installMutationObserver(window);
+    const sent: AnyMsg[] = [];
+    let messages: RawMessage[] = [
+      { role: "user", text: "go" },
+      { role: "assistant", text: "part" },
+    ];
+    const adapter = makeAdapter(() => messages);
+
+    const stop = startCapture(adapter, window.document as unknown as ParentNode, {
+      debounceMs: 10,
+      assistantStableMs: 60,
+      sendMessage: async (m) => void sent.push(m),
+    });
+
+    // First flush: the assistant tail is fresh/unstable -> only the user turn goes.
+    await new Promise((r) => setTimeout(r, 25));
+    expect(lastCapture(sent)?.map((m) => m.role)).toEqual(["user"]);
+
+    // Stream grows, then stops.
+    messages = [
+      { role: "user", text: "go" },
+      { role: "assistant", text: "part two done" },
+    ];
+    poke(window);
+
+    // After it's been byte-stable for assistantStableMs, the finished reply is sent.
+    await new Promise((r) => setTimeout(r, 120));
+    stop();
+
+    const finalTexts = lastCapture(sent)?.map((m) => m.text);
+    expect(finalTexts).toEqual(["go", "part two done"]);
+  });
+
+  test("an assistant turn that is no longer last is sent right away (a newer turn proves it's done)", async () => {
+    const window = new Window({ url: "https://chatgpt.com/c/conv_1" });
+    installMutationObserver(window);
+    const sent: AnyMsg[] = [];
+    const adapter = makeAdapter(() => [
+      { role: "user", text: "q1" },
+      { role: "assistant", text: "a1" },
+      { role: "user", text: "q2" },
+    ]);
+
+    const stop = startCapture(adapter, window.document as unknown as ParentNode, {
+      debounceMs: 10,
+      assistantStableMs: 9999, // even with a long hold window...
+      sendMessage: async (m) => void sent.push(m),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    stop();
+
+    // ...the assistant turn isn't the tail, so nothing is held.
+    expect(lastCapture(sent)?.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
   });
 
   test("no capture message when not on a conversation page -- but a health report saying so", async () => {
