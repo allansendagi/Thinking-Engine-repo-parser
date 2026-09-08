@@ -56,9 +56,10 @@ struct SettingsView: View {
                         title: "Sign in to your Thread account",
                         sendCode: { await appState.sendSignInCode(email: $0) },
                         verify: { await appState.signIn(email: $0, code: $1) },
-                        onDone: { dismiss() }
+                        onDone: { dismiss() },
+                        prefillEmail: appState.claimEmailInUse ?? CredentialStore.lastKnownEmail ?? ""
                     )
-                    Button("Add an email to this account instead") { signInInstead = false }
+                    Button("Add an email to this account instead") { signInInstead = false; appState.claimEmailInUse = nil }
                         .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
                 } else {
                     Text("Add your email to check out on the website, then sign back in on any device — your ideas stay put.")
@@ -70,8 +71,16 @@ struct SettingsView: View {
                         sendCode: { await appState.sendClaimCode(email: $0) },
                         verify: { await appState.claimEmail(email: $0, code: $1) }
                     )
-                    Button("Already have a Thread account? Sign in") { signInInstead = true }
-                        .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
+                    if appState.claimEmailInUse != nil {
+                        Button("Sign in to that account instead") {
+                            appState.authError = nil
+                            signInInstead = true
+                        }
+                        .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
+                    } else {
+                        Button("Already have a Thread account? Sign in") { signInInstead = true }
+                            .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
 

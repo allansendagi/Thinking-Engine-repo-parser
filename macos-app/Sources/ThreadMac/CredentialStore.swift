@@ -139,13 +139,16 @@ enum CredentialStore {
     }
 
     /// Wipe the credential. Only `unpair()` calls this, so it also records that the user chose to
-    /// sign out -- `bootstrap()` reads that to show onboarding, not the reconnect screen, on the
-    /// next launch even if a stale snapshot from an old account is still on disk.
+    /// sign out -- `bootstrap()` reads that to show sign-in, not the reconnect screen or a silent
+    /// new account, on the next launch.
+    ///
+    /// `lastKnownEmail` is deliberately KEPT: it's just an address, it's what the sign-in screen
+    /// prefills so getting back in is one tap, and losing it was half of why a mis-clicked sign
+    /// out stranded people. A genuinely fresh account overwrites it on the next `save()`.
     static func clear() {
         try? FileManager.default.removeItem(at: fileURL)
         try? FileManager.default.removeItem(at: backupURL)
         UserDefaults.standard.removeObject(forKey: legacyUserIdKey)
-        UserDefaults.standard.removeObject(forKey: lastKnownEmailKey)
         UserDefaults.standard.set(true, forKey: deliberateSignOutKey)
     }
 

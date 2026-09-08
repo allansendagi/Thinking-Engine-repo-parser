@@ -49,7 +49,8 @@ struct WelcomeView: View {
             EmailCodeForm(
                 title: "Sign in to your Thread account",
                 sendCode: { await appState.sendSignInCode(email: $0) },
-                verify: { await appState.signIn(email: $0, code: $1) }
+                verify: { await appState.signIn(email: $0, code: $1) },
+                prefillEmail: CredentialStore.lastKnownEmail ?? ""
             )
 
             Divider().padding(.top, 2)
@@ -73,7 +74,8 @@ struct WelcomeView: View {
             EmailCodeForm(
                 title: "Sign in to your Thread account",
                 sendCode: { await appState.sendSignInCode(email: $0) },
-                verify: { await appState.signIn(email: $0, code: $1) }
+                verify: { await appState.signIn(email: $0, code: $1) },
+                prefillEmail: CredentialStore.lastKnownEmail ?? ""
             )
         } else {
             Button("Already use Thread on another Mac? Sign in") {
