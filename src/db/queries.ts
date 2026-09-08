@@ -212,6 +212,18 @@ export function loadCanonicalStatuses(
   return new Map(rows.map((r) => [r.id, r.status === "provisional" ? "provisional" : "committed"]));
 }
 
+/** id / role / text for one conversation's canonical events, in order -- so an incoming message
+ *  can be matched to the event that already carries its content regardless of the client's
+ *  message-id scheme. See `remapToExistingIds` in api/ingest.ts. */
+export function loadCanonicalIdentity(
+  db: Database,
+  conversationId: string,
+): { id: string; role: string; text: string }[] {
+  return db
+    .query("SELECT id, role, text FROM canonical_events WHERE conversation_id = ? ORDER BY idx ASC")
+    .all(conversationId) as { id: string; role: string; text: string }[];
+}
+
 /** Every known conversation with its content fingerprint (verbatim-normalized message texts) and
  *  URL -- the corpus the conversation-identity resolver checks an observation against
  *  (state/resolveConversationIdentity.ts). The fingerprint is computed via the resolver's own

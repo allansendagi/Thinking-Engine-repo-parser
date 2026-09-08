@@ -9,17 +9,13 @@ import type { SiteAdapter } from "./siteAdapter";
  * happy-dom fixtures) -- the site-specific selectors in each adapter are NOT, and are the part
  * most likely to need adjustment against the real, current DOM. See extension/README.md.
  *
- * Message ids:
- *   user turns      -- position-based (`${conversationId}::${index}`). A user turn is submitted
- *                      whole, so its content is stable from the first capture; keeping the id
- *                      positional means an extension update doesn't re-key turns the backend has
- *                      already extracted from. (An edited/branched user turn still shifts here --
- *                      that needs a backend content-fingerprint match to fix properly.)
- *   assistant turns -- content-derived (`${conversationId}::a${textHash(text)}`). A regenerated
- *                      answer is different words at the same position, so a positional id would
- *                      silently drop it; a content id captures it. Virtualized scrollback that
- *                      re-renders a turn at a shifted position keeps the same id. Assistant turns
- *                      are never extracted from, so id churn costs only canonical-event rows.
+ * Message ids are content-derived: `${conversationId}::${role[0]}${textHash(text)}`. So a turn
+ * that shifts position -- an upstream edit, a branch switch, virtualized scrollback re-rendering
+ * an older turn -- keeps its id, and a regenerated answer (new words, same slot) gets a new id
+ * and is captured instead of silently dropped by a stale positional id. The backend matches an
+ * incoming message to the canonical event that already carries its `(role, text)` regardless of
+ * id (api/ingest.ts `remapToExistingIds`), so this scheme -- and any later change to it -- costs
+ * no re-extraction of turns it has already seen.
  *
  * Streaming: the last turn, when it's an assistant reply, may still be growing token-by-token.
  * It's HELD OUT of the payload until its text is byte-stable for `assistantStableMs` OR a newer
@@ -111,8 +107,8 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
 
       const raw = adapter.extractMessages(doc);
       const capturedAt = at;
-      const messages: CapturedMessage[] = raw.map((m, i) => ({
-        id: m.role === "assistant" ? `${conversationId}::a${textHash(m.text)}` : `${conversationId}::${i}`,
+      const messages: CapturedMessage[] = raw.map((m) => ({
+        id: `${conversationId}::${m.role[0]}${textHash(m.text)}`,
         role: m.role,
         text: m.text,
         createdAt: capturedAt,

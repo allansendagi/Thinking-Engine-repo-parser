@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { CanonicalEvent, CaptureProvenance, Role } from "../types";
 import {
   dropRetractedProvisional,
+  loadCanonicalIdentity,
   loadCanonicalStatuses,
   loadConversationFingerprints,
   loadIdeas,
@@ -96,12 +97,51 @@ export interface IngestResult {
   identityConflicts: IdentityConflict[];
 }
 
+const normText = (t: string) => t.replace(/\s+/g, " ").trim();
+
+/**
+ * Re-key incoming messages to the canonical events that already carry their content.
+ *
+ * A client's message-id scheme is an implementation detail. What makes two observations "the same
+ * turn" is `(role, normalized text)` within the conversation. Without this, a turn re-sent under
+ * a different id -- the extension changed how it derives ids, or a turn shifted position after an
+ * edit / virtualized scrollback -- reads as brand new and gets re-extracted, duplicating work and
+ * sometimes ideas.
+ *
+ * Matching is order-preserving and one-to-one: the Nth incoming "ok" claims the Nth existing
+ * "ok", so genuinely repeated turns aren't collapsed and an extra repeat past what's stored keeps
+ * its own (new) id. Text that matches nothing stored keeps its id -- that's a real new turn (or a
+ * real edit; the pre-edit event is left untouched, never GC'd).
+ */
+export function remapToExistingIds(
+  db: Database,
+  conversationId: string,
+  messages: IncomingMessage[],
+): IncomingMessage[] {
+  const existing = loadCanonicalIdentity(db, conversationId);
+  if (existing.length === 0) return messages;
+
+  const pools = new Map<string, string[]>();
+  for (const e of existing) {
+    const key = `${e.role}\x1f${normText(e.text)}`;
+    const q = pools.get(key);
+    if (q) q.push(e.id);
+    else pools.set(key, [e.id]);
+  }
+
+  return messages.map((m) => {
+    const claimed = pools.get(`${m.role}\x1f${normText(m.text)}`)?.shift();
+    return claimed && claimed !== m.id ? { ...m, id: claimed } : m;
+  });
+}
+
 /**
  * Incremental ingestion for one conversation. Safe to call repeatedly with a growing message list
  * -- e.g. every time a browser extension observes a new turn, it resends the full transcript it
- * has so far, not a diff. Already-seen messages (by id, checked against this user's DB) are sent
- * to extraction as context only, never re-extracted -- so calling this 50 times as a conversation
- * grows produces the same result as calling it once at the end, not 50x duplicated ideas.
+ * has so far, not a diff. Already-seen messages (by content, matched against this user's DB) are
+ * sent to extraction as context only, never re-extracted -- so calling this 50 times as a
+ * conversation grows produces the same result as calling it once at the end, not 50x duplicated
+ * ideas.
  */
 export async function ingestConversation(
   db: Database,
@@ -135,13 +175,17 @@ export async function ingestConversation(
   // plain positional map would; a malformed one loses only the messages that genuinely can't be
   // canonical events (no id/text, unknown role, a dup id) and records why. Every event comes back
   // tagged committed | provisional (canonicalize.ts / provisionalReason).
+  // Content-stable ids: a turn re-sent under a different client id is recognized as the event it
+  // already is, not re-extracted. A no-op for a brand-new conversation (nothing stored to match).
+  const messages = remapToExistingIds(db, input.conversationId, input.messages);
+
   const obs: RawObservation = {
     conversationId: input.conversationId,
     source: input.source,
     // CaptureMethod doubles as the sensor identity. Null (a legacy client) => the extension,
     // which is what all early live capture was (THREAD.md §7).
     sensor: input.capture?.method ?? "browser_extension",
-    messages: input.messages,
+    messages,
     sourceUrl: input.sourceUrl ?? null,
     capture: input.capture ?? null,
   };
@@ -219,7 +263,7 @@ export async function ingestConversation(
   // Record the observation when it advanced, promoted, failed structure validation, or came back
   // identity-unresolved. A clean no-op resend carries no signal.
   if (newToCanonical.size > 0 || promoting.size > 0 || !integrity.ok || identityUnresolved) {
-    const newMessages = input.messages.filter((m) => newToCanonical.has(m.id));
+    const newMessages = messages.filter((m) => newToCanonical.has(m.id));
     recordEvidence(db, obs, { events: allEvents, integrity }, newMessages, identity);
   }
 

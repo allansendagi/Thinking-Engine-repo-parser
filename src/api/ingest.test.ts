@@ -42,6 +42,38 @@ describe("ingestConversation against a real DB (simulates repeated HTTP calls as
     expect(loadIdeas(db)).toHaveLength(1); // still exactly one idea, not duplicated
   });
 
+  test("re-sending the same turn under a DIFFERENT message id is still a no-op (content-stable ids)", async () => {
+    const db = openDb(":memory:");
+    const providers = {
+      extraction: new FakeProvider([
+        extractionResponse([
+          { type: "new_idea", statement: "Authority needs explicit boundaries.", confidence: 0.9, source_event_id: "m1", evidence_quote: "explicit boundaries" },
+        ]),
+      ]),
+      reasoning: new FakeProvider([]),
+    };
+    const text = "Authority needs explicit boundaries.";
+
+    const first = await ingestConversation(db, {
+      conversationId: "conv_1",
+      source: "fixture" as const,
+      messages: [{ id: "m1", role: "user" as const, text, createdAt: "2026-08-17T00:00:00.000Z" }],
+    }, providers);
+    expect(first.newCanonicalEvents).toBe(1);
+    expect(loadIdeas(db)).toHaveLength(1);
+
+    // The client re-derives ids (e.g. the extension switched schemes) -- same text, new id.
+    // Nothing scripted is left, so a re-extraction would throw. It must map back to m1.
+    const relabelled = await ingestConversation(db, {
+      conversationId: "conv_1",
+      source: "fixture" as const,
+      messages: [{ id: "totally-different-id", role: "user" as const, text, createdAt: "2026-08-17T00:00:00.000Z" }],
+    }, providers);
+    expect(relabelled.newCanonicalEvents).toBe(0);
+    expect(loadIdeas(db)).toHaveLength(1);
+    expect(loadCanonicalEvents(db)).toHaveLength(1); // not a second row under the new id
+  });
+
   test("a medium claim discarded for lack of a match is replayed once its idea arrives on a later call", async () => {
     const db = openDb(":memory:");
 
