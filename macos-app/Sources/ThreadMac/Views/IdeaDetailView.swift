@@ -771,11 +771,21 @@ private struct ContinuationPreview: View {
                 }
             }
 
-            HStack {
+            HStack(spacing: 14) {
                 Spacer()
+                // The standard macOS share sheet: Messages, Mail, Notes, AirDrop, any share extension.
+                if let text = appState.continuationCopyText {
+                    ShareLink(item: text) {
+                        Text("Share…").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Send this handoff to Messages, Mail, Notes, or another app")
+                }
                 Button("Copy") { appState.recopyContinuation() }
                     .buttonStyle(.plain).font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Theme.accent)
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .help("Copy the handoff (⇧⌘C)")
             }
         }
         .padding(13).frame(maxWidth: .infinity, alignment: .leading)

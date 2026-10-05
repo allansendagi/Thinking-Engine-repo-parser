@@ -53,6 +53,9 @@ export function openRegistry(): Database {
   db.exec("PRAGMA busy_timeout = 5000;");
   const { user_version } = db.query("PRAGMA user_version").get() as { user_version: number };
   if (user_version < REGISTRY_SCHEMA_VERSION) {
+    // Persistent per file; readers never block the writer (and backups snapshot consistently).
+    // Can't be changed inside a transaction, so it's set just before the migration.
+    db.exec("PRAGMA journal_mode = WAL;");
     db.transaction(() => migrateRegistry(db))();
     db.exec(`PRAGMA user_version = ${REGISTRY_SCHEMA_VERSION};`);
   }
