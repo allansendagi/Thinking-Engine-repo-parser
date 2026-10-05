@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var ambientNudge: AmbientNudge?
     private var axSensor: AXSensorRunner?
     private var cursorWatch: CursorLiveWatch?
+    private var connectivity: ConnectivityWatcher?
+    let updater = Updater()
     private let setupNotifier = SetupNotifier()
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
     private var pendingURLs: [URL] = []
@@ -52,13 +54,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = item
         panel.anchorButton = item.button
 
-        // Cmd+Shift+T opens the same panel.
-        hotKey = GlobalHotKey(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(cmdKey | shiftKey)) { [weak panel] in
-            panel?.toggle()
+        // The recall shortcut (⌘⇧T by default; Settings ▸ General) opens the same panel.
+        registerRecallShortcut()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(registerRecallShortcut), name: .threadRecallShortcutChanged, object: nil
+        )
+
+        // Come back online by itself after launch-before-Wi-Fi, sleep, or a dropped network.
+        let watcher = ConnectivityWatcher(appState: appState)
+        watcher.start()
+        connectivity = watcher
+        panel.onShow = { [weak appState] in
+            Task { await appState?.refreshIfStale() }
         }
-        if hotKey == nil {
-            print("[ThreadMac] Failed to register the global hotkey (Cmd+Shift+T) -- it may be in use by another app.")
-        }
+
+        // Keep running across restarts (capture depends on it). Once, on first launch only.
+        LaunchAtLogin.enableOnFirstLaunchIfNeeded()
+
+        // Sparkle auto-updates -- inert unless the bundle carries a feed URL + public key.
+        updater.start()
 
         let state = appState
         let server = PairingServer(
@@ -183,6 +197,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appState.perform(action)
     }
 
+    @objc private func registerRecallShortcut() {
+        let shortcut = RecallShortcut.current
+        hotKey = nil  // unregister the old combo first (deinit), or re-registering the same one fails
+        hotKey = GlobalHotKey(keyCode: shortcut.keyCode, modifiers: shortcut.carbonModifiers) {
+            [weak panel = quickRecallPanel] in panel?.toggle()
+        }
+        if hotKey == nil {
+            print("[ThreadMac] Failed to register the global hotkey (\(shortcut.symbol)) -- it may be in use by another app.")
+        }
+    }
+
     // MARK: - Status-item menu
 
     private lazy var statusMenu: NSMenu = {
@@ -199,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = add("Open Thread", #selector(presentPanel), "", [])
         _ = add("Open in Window", #selector(openMainWindowFromMenu), "w", [.command, .shift])
         _ = add("Settings…", #selector(openSettingsFromMenu), ",", [.command])
+        checkForUpdatesMenuItem = add("Check for Updates…", #selector(checkForUpdatesFromMenu), "", [])
         menu.addItem(.separator())
         signOutMenuItem = add("Sign Out", #selector(signOutFromMenu), "", [])
         menu.addItem(.separator())
@@ -207,6 +233,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }()
 
     private weak var signOutMenuItem: NSMenuItem?
+    private weak var checkForUpdatesMenuItem: NSMenuItem?
+
+    @objc private func checkForUpdatesFromMenu() { updater.checkForUpdates() }
 
     @objc private func presentPanel() { quickRecallPanel?.show() }
     @objc private func openMainWindowFromMenu() {
@@ -241,6 +270,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// pending (so "Start fresh" is reachable from the menu too).
     func menuNeedsUpdate(_ menu: NSMenu) {
         signOutMenuItem?.isEnabled = appState.isPaired || appState.needsReconnect
+        checkForUpdatesMenuItem?.isHidden = !updater.isConfigured
+        checkForUpdatesMenuItem?.isEnabled = updater.canCheckForUpdates
     }
 
     /// `statusItem.menu` is set so right-click reliably drops the menu. But a plain LEFT click
@@ -273,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         pairingServer?.stop()
+        connectivity?.stop()
     }
 }
 

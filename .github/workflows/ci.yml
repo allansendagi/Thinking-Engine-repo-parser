@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, world-class-loop, production-hardening, continuity-sources-resume-eval]
+    branches: [main, world-class-loop, production-hardening, continuity-sources-resume-eval, "claude/**"]
   pull_request:
     branches: [main]
 
@@ -73,3 +73,12 @@ jobs:
       - uses: actions/checkout@v4
       - run: swift build
       - run: swift test
+      # Assemble the real .app the way a release does (universal, Sparkle embedded; ad-hoc signed
+      # since CI has no Developer ID) and check it's structurally a launchable bundle.
+      - run: ./package.sh
+      - run: |
+          lipo -archs dist/ThreadMac.app/Contents/MacOS/ThreadMac
+          test -d dist/ThreadMac.app/Contents/Frameworks/Sparkle.framework
+          otool -l dist/ThreadMac.app/Contents/MacOS/ThreadMac | grep -A2 LC_RPATH | grep -q '@executable_path/../Frameworks'
+          codesign --verify --deep --strict dist/ThreadMac.app
+          plutil -lint dist/ThreadMac.app/Contents/Info.plist

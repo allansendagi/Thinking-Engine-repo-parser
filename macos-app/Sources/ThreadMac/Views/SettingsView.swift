@@ -86,6 +86,10 @@ struct SettingsView: View {
 
             Divider()
 
+            GeneralSection()
+
+            Divider()
+
             AppearanceSection()
 
             Divider()
@@ -280,6 +284,65 @@ private struct HelpSection: View {
 }
 
 /// Settings ▸ Appearance — accent colour, row density, snippet lines. Matches the design mock.
+/// Open at login, the recall shortcut, and updates -- the "does it just work every day" settings.
+private struct GeneralSection: View {
+    @State private var launchAtLogin = LaunchAtLogin.isEnabled
+    @State private var loginNeedsApproval = LaunchAtLogin.needsApproval
+    @State private var shortcut = RecallShortcut.current
+    @State private var autoUpdate = AppDelegate.shared?.updater.automaticallyChecks ?? false
+
+    private var updater: Updater? { AppDelegate.shared?.updater }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("General", systemImage: "gearshape")
+                .font(.subheadline).fontWeight(.medium)
+
+            Toggle("Open Thread at login", isOn: $launchAtLogin)
+                .font(.caption)
+                .onChange(of: launchAtLogin) { _, on in
+                    LaunchAtLogin.setEnabled(on)
+                    launchAtLogin = LaunchAtLogin.isEnabled
+                    loginNeedsApproval = LaunchAtLogin.needsApproval
+                }
+            if loginNeedsApproval {
+                Button("Allow in System Settings…") { LaunchAtLogin.openSystemSettings() }
+                    .font(.caption2)
+            }
+
+            HStack(spacing: 10) {
+                Text("Recall").font(.caption).foregroundColor(.secondary).frame(width: 70, alignment: .leading)
+                Picker("", selection: $shortcut) {
+                    ForEach(RecallShortcut.allCases) { Text($0.symbol).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).frame(width: 150)
+                .onChange(of: shortcut) { _, new in RecallShortcut.current = new }
+                Spacer(minLength: 0)
+            }
+            if let note = shortcut.note {
+                Text(note).font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let updater, updater.isConfigured {
+                HStack(spacing: 12) {
+                    Toggle("Update automatically", isOn: $autoUpdate)
+                        .font(.caption)
+                        .onChange(of: autoUpdate) { _, on in updater.automaticallyChecks = on }
+                    Button("Check Now") { updater.checkForUpdates() }
+                        .controlSize(.small)
+                }
+            }
+            Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+        .onAppear {
+            launchAtLogin = LaunchAtLogin.isEnabled
+            loginNeedsApproval = LaunchAtLogin.needsApproval
+        }
+    }
+}
+
 private struct AppearanceSection: View {
     @EnvironmentObject var appState: AppState
 

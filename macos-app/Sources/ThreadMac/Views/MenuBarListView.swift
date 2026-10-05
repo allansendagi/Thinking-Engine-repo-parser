@@ -313,7 +313,7 @@ private struct EmptyState: View {
                     .font(.system(size: 11.5)).foregroundStyle(Theme.ink(0.5))
                     .multilineTextAlignment(.center).frame(maxWidth: 250)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Press ⌘⇧T anywhere to recall.")
+                Text("Press \(RecallShortcut.current.symbol) anywhere to recall.")
                     .font(.system(size: 11)).foregroundStyle(Theme.ink(0.35))
             }
             Spacer()

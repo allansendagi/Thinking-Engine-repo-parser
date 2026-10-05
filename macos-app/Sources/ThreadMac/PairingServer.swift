@@ -17,6 +17,12 @@ import Network
 /// a cross-origin web page read the body -- which is what stops any page the user visits from
 /// `fetch`-ing this endpoint and walking off with the token.
 ///
+/// CORS alone doesn't stop DNS rebinding: a page on `evil.example` that re-resolves its own name
+/// to 127.0.0.1 is *same-origin* with this server and could read the body. So every request must
+/// also name this server in `Host` (127.0.0.1 / localhost on our port), and any `Origin` a browser
+/// attaches must be the extension's own (`chrome-extension://…`, `moz-extension://…`,
+/// `safari-web-extension://…`) -- web origins are refused outright. See `isTrusted(headers:)`.
+///
 /// Deliberately tiny: enough HTTP/1.1 to answer one GET. No routing framework, no dependencies.
 final class PairingServer {
     static let port: UInt16 = 43917
@@ -76,9 +82,12 @@ final class PairingServer {
         conn.start(queue: queue)
         conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
             guard let self else { conn.cancel(); return }
-            let requestLine = data.flatMap { String(data: $0, encoding: .utf8) }?
-                .split(separator: "\r\n").first.map(String.init) ?? ""
-            let response = self.response(for: requestLine)
+            let lines = data.flatMap { String(data: $0, encoding: .utf8) }?
+                .components(separatedBy: "\r\n") ?? []
+            let requestLine = lines.first ?? ""
+            let response = Self.isTrusted(headers: Self.headers(from: lines.dropFirst()))
+                ? self.response(for: requestLine)
+                : Self.raw(status: "403 Forbidden", body: Data(#"{"error":"forbidden"}"#.utf8))
             conn.send(content: response, completion: .contentProcessed { _ in conn.cancel() })
         }
     }
@@ -100,6 +109,31 @@ final class PairingServer {
         }
         onServed()
         return Self.raw(status: "200 OK", body: body)
+    }
+
+    /// Lower-cased header name -> value, up to the blank line that ends the header block.
+    static func headers<S: Sequence>(from lines: S) -> [String: String] where S.Element == String {
+        var out: [String: String] = [:]
+        for line in lines {
+            if line.isEmpty { break }
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            out[name] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        return out
+    }
+
+    /// DNS-rebinding guard (see the type doc). `Host` must be loopback on our port; an `Origin`,
+    /// when present, must be a browser-extension origin. A missing `Origin` is fine -- that's a
+    /// native client or the extension's service worker on browsers that omit it for GETs.
+    static func isTrusted(headers: [String: String]) -> Bool {
+        let allowedHosts: Set<String> = ["127.0.0.1:\(port)", "localhost:\(port)", "[::1]:\(port)"]
+        guard let host = headers["host"]?.lowercased(), allowedHosts.contains(host) else { return false }
+        if let origin = headers["origin"]?.lowercased(), origin != "null" {
+            let extensionSchemes = ["chrome-extension://", "moz-extension://", "safari-web-extension://"]
+            return extensionSchemes.contains { origin.hasPrefix($0) }
+        }
+        return true
     }
 
     /// Pull `?key=value` out of a request path. Minimal -- enough for the one param `/thread/hello`
