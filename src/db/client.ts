@@ -5,10 +5,40 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+const SCHEMA_SQL = readFileSync(join(__dirname, "schema.sql"), "utf-8");
+
+const ADD_COLUMNS: [table: string, column: string][] = [
+  ["cognitive_events", "persistence TEXT NOT NULL DEFAULT 'high'"],
+  ["cognitive_events", "persistence_reason TEXT"],
+  ["canonical_events", "source_url TEXT"],
+  ["canonical_events", "capture_method TEXT"],
+  ["canonical_events", "capture_fidelity TEXT"],
+  ["canonical_events", "status TEXT NOT NULL DEFAULT 'committed'"],
+  ["evidence", "identity TEXT"],
+  ["evidence", "source TEXT"],
+];
+
+/**
+ * A fingerprint of schema.sql + the column migrations, stored in each file's `PRAGMA
+ * user_version`. The API opens a user's DB on every request; re-running the whole schema plus
+ * every ALTER each time was pure overhead. Now it runs only when the file is new or the schema
+ * changed -- and because the version is derived from the schema text itself, editing schema.sql
+ * or ADD_COLUMNS re-applies automatically with no number to remember to bump.
+ */
+const SCHEMA_VERSION = (() => {
+  let h = 0x811c9dc5; // FNV-1a, 32-bit
+  for (const ch of SCHEMA_SQL + JSON.stringify(ADD_COLUMNS)) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h | 0) || 1; // user_version is a signed 32-bit int; 0 means "never initialized"
+})();
+
 export function openDb(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true });
   db.exec("PRAGMA foreign_keys = ON;");
+  db.exec("PRAGMA busy_timeout = 5000;");
   // WAL mode: readers don't block writers and vice versa. Default (rollback journal) mode
   // serializes all access to a file and is fine for a single local user, but this backend now
   // opens/closes a connection per HTTP request against the same per-user file -- under real
@@ -16,9 +46,12 @@ export function openDb(path: string): Database {
   // would surface as intermittent "database is locked" errors. Not applicable to ":memory:" (used
   // only in tests), which has no journal file to configure.
   if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL;");
-  const schema = readFileSync(join(__dirname, "schema.sql"), "utf-8");
-  db.exec(schema);
-  migrate(db);
+  const { user_version } = db.query("PRAGMA user_version").get() as { user_version: number };
+  if (user_version !== SCHEMA_VERSION) {
+    db.exec(SCHEMA_SQL);
+    migrate(db);
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+  }
   return db;
 }
 
@@ -29,17 +62,7 @@ export function openDb(path: string): Database {
  * handled by schema.sql itself.
  */
 function migrate(db: Database): void {
-  const addColumns: [table: string, column: string][] = [
-    ["cognitive_events", "persistence TEXT NOT NULL DEFAULT 'high'"],
-    ["cognitive_events", "persistence_reason TEXT"],
-    ["canonical_events", "source_url TEXT"],
-    ["canonical_events", "capture_method TEXT"],
-    ["canonical_events", "capture_fidelity TEXT"],
-    ["canonical_events", "status TEXT NOT NULL DEFAULT 'committed'"],
-    ["evidence", "identity TEXT"],
-    ["evidence", "source TEXT"],
-  ];
-  for (const [table, column] of addColumns) {
+  for (const [table, column] of ADD_COLUMNS) {
     try {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column};`);
     } catch {
