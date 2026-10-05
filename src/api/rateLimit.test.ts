@@ -40,9 +40,16 @@ test("keys are independent", () => {
   expect(rateLimit("b", rule, t0 + 1)).toBe(false);
 });
 
-test("clientKey reads the left-most x-forwarded-for entry, scoped", () => {
-  const req = new Request("https://x/y", { headers: { "x-forwarded-for": "203.0.113.9, 10.0.0.1" } });
+test("clientKey reads the right-most x-forwarded-for entry (the one our proxy appended), scoped", () => {
+  const req = new Request("https://x/y", { headers: { "x-forwarded-for": "198.51.100.7, 203.0.113.9" } });
   expect(clientKey(req, "users")).toBe("users:203.0.113.9");
+});
+
+test("clientKey can't be steered by a client-supplied x-forwarded-for prefix", () => {
+  // A client rotating a fake left-most "IP" every request must still land in one bucket.
+  const a = new Request("https://x/y", { headers: { "x-forwarded-for": "1.1.1.1, 203.0.113.9" } });
+  const b = new Request("https://x/y", { headers: { "x-forwarded-for": "2.2.2.2, 203.0.113.9" } });
+  expect(clientKey(a, "users")).toBe(clientKey(b, "users"));
 });
 
 test("clientKey falls back when no proxy headers are present", () => {

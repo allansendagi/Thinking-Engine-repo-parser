@@ -107,6 +107,46 @@ Thread.entitlements`, signs the DMG, submits it to `notarytool --wait`, and stap
 of the keychain profile you can pass `THREAD_NOTARY_APPLE_ID` + `THREAD_NOTARY_PASSWORD` +
 `THREAD_NOTARY_TEAM_ID`.
 
+## Releases: signed, notarized, auto-updating (the path for a public launch)
+
+Ad-hoc builds trip Gatekeeper on macOS 15, where right-click → Open no longer works and users
+have to approve the app under System Settings ▸ Privacy & Security. A public download needs a
+Developer ID signature, notarization, and auto-updates. All three are wired up; they just need
+credentials.
+
+**One-time setup** (on your Mac, with Xcode):
+
+1. Join the Apple Developer Program, then create a **Developer ID Application** certificate in
+   Xcode ▸ Settings ▸ Accounts ▸ Manage Certificates. Export it from Keychain Access as a `.p12`.
+2. Create an app-specific password at appleid.apple.com for notarization.
+3. Generate the Sparkle update-signing keys (once, ever; **back up the private key**: losing it
+   means existing installs can never auto-update again):
+   ```
+   swift build   # fetches Sparkle
+   ./.build/artifacts/sparkle/Sparkle/bin/generate_keys      # prints the public key
+   ./.build/artifacts/sparkle/Sparkle/bin/generate_keys -x sparkle_private_key.txt
+   ```
+4. In GitHub ▸ Settings ▸ Secrets and variables ▸ Actions, add the secrets
+   `MACOS_CERT_P12_BASE64` (`base64 -i cert.p12 | pbcopy`), `MACOS_CERT_PASSWORD`,
+   `MACOS_SIGN_IDENTITY` (`security find-identity -v -p codesigning`), `APPLE_ID`,
+   `APPLE_APP_PASSWORD`, `APPLE_TEAM_ID` and `SPARKLE_PRIVATE_KEY`, plus the **variable**
+   `SPARKLE_PUBLIC_KEY`.
+
+**Each release:** `git tag mac-v0.3.0 && git push origin mac-v0.3.0`.
+`.github/workflows/release-mac.yml` runs the tests, then builds a universal (Apple Silicon +
+Intel) app, signs it with the hardened runtime, notarizes and staples the DMG, checks it with
+`spctl`, signs it for Sparkle and publishes a GitHub Release containing `Thread.dmg` and
+`appcast.xml`. Installed copies find the release through
+`…/releases/latest/download/appcast.xml` and update themselves. Copy the DMG to the website's
+`public/downloads/Thread.dmg`, or point the site's download route at the release asset.
+
+**Locally**, the same build: `THREAD_SIGN_IDENTITY="Developer ID Application: …"
+THREAD_NOTARY_PROFILE=thread THREAD_SPARKLE_PUBLIC_KEY=… ./package.sh`
+(`THREAD_UNIVERSAL=0` for a faster native-only build).
+
+**Note:** a DMG built before Sparkle was added has no updater, so people on those builds have to
+download one signed release by hand. After that, updates arrive on their own.
+
 ## Setup
 
 ```

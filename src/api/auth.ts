@@ -35,11 +35,31 @@ function registryPath(): string {
  */
 export const TRIAL_DAYS = 14;
 
-/** Opens the shared account/token registry, upgrading its schema in place. */
+/**
+ * Bump when `migrateRegistry` changes. Stored in the file's `PRAGMA user_version`, so the schema
+ * work runs once per registry file -- not on every open. `openRegistry()` is called several times
+ * per request (auth, last-seen, account lookups), and re-running ~15 statements each time,
+ * including full-table backfills over `users`, cost every request time proportional to the user
+ * count.
+ */
+const REGISTRY_SCHEMA_VERSION = 2;
+
+/** Opens the shared account/token registry, upgrading its schema in place when needed. */
 export function openRegistry(): Database {
   const path = registryPath();
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true });
+  // Concurrent writers (two server processes during a deploy overlap) wait instead of failing.
+  db.exec("PRAGMA busy_timeout = 5000;");
+  const { user_version } = db.query("PRAGMA user_version").get() as { user_version: number };
+  if (user_version < REGISTRY_SCHEMA_VERSION) {
+    db.transaction(() => migrateRegistry(db))();
+    db.exec(`PRAGMA user_version = ${REGISTRY_SCHEMA_VERSION};`);
+  }
+  return db;
+}
+
+function migrateRegistry(db: Database): void {
   db.exec(
     `CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -69,13 +89,9 @@ export function openRegistry(): Database {
   }
   // One account per email (case-insensitive). Partial index so the many email-less accounts
   // don't collide on NULL.
-  try {
-    db.exec(
-      "CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower ON users(lower(email)) WHERE email IS NOT NULL;",
-    );
-  } catch {
-    // index already exists
-  }
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower ON users(lower(email)) WHERE email IS NOT NULL;",
+  );
 
   // Per-device tokens. An account can have several live tokens at once (the Mac app, the
   // website, the desktop agent) -- signing in on one device must not knock the others offline.
@@ -88,7 +104,7 @@ export function openRegistry(): Database {
   );
   db.exec("CREATE INDEX IF NOT EXISTS auth_tokens_user ON auth_tokens(user_id);");
   // A human label ("Thread for Mac", "Website", "Chrome extension") + a throttled last-seen, so a
-  // Settings screen can list your devices and revoke one. Added idempotently for existing rows.
+  // Settings screen can list your devices and revoke one.
   for (const col of ["label TEXT", "last_seen_at TEXT"]) {
     try {
       db.exec(`ALTER TABLE auth_tokens ADD COLUMN ${col};`);
@@ -96,21 +112,21 @@ export function openRegistry(): Database {
       // column already exists
     }
   }
-  // Backfill from the original single-token column for accounts that predate this table.
+  // One-time move of the original single-token column into auth_tokens, then blank it. This
+  // used to run on EVERY open, which silently re-inserted an account's first token right after
+  // it was revoked ("sign out this device" / "sign out other devices" / a session revoke) -- so
+  // that token could never actually be signed out. `users.token_hash` is now always '' (the
+  // column is NOT NULL); auth_tokens is the only source of truth.
   db.exec(
     `INSERT OR IGNORE INTO auth_tokens (token_hash, user_id, created_at)
-     SELECT token_hash, id, created_at FROM users WHERE token_hash IS NOT NULL;`,
+     SELECT token_hash, id, created_at FROM users WHERE token_hash IS NOT NULL AND token_hash <> '';`,
   );
+  db.exec("UPDATE users SET token_hash = '' WHERE token_hash <> '';");
 
   // Trial-era rows carry a subscription_status like 'trialing' / 'active' from before the Paddle
   // migration. On a free-plan account that's meaningless and leaks to the client (the Mac app
   // shows "trialing"). Normalize once.
-  try {
-    db.exec("UPDATE users SET subscription_status = 'free' WHERE plan = 'free' AND subscription_status <> 'free';");
-  } catch {
-    // columns not present yet on a very old DB -- the ALTERs above add them; next open normalizes
-  }
-  return db;
+  db.exec("UPDATE users SET subscription_status = 'free' WHERE plan = 'free' AND subscription_status <> 'free';");
 }
 
 /** A short, safe device label. Falls back to a rough parse of a User-Agent, then "Unknown device". */
@@ -334,8 +350,8 @@ export async function createUser(email?: string, label?: string): Promise<Create
     const now = new Date().toISOString();
     db.prepare(
       `INSERT INTO users (id, token_hash, created_at, subscription_status, plan, email, email_verified_at)
-       VALUES (?, ?, ?, 'free', 'free', ?, ?)`,
-    ).run(userId, tokenHash, now, email ?? null, email ? now : null);
+       VALUES (?, '', ?, 'free', 'free', ?, ?)`,
+    ).run(userId, now, email ?? null, email ? now : null);
     db.prepare("INSERT INTO auth_tokens (token_hash, user_id, created_at, label, last_seen_at) VALUES (?, ?, ?, ?, ?)").run(
       tokenHash,
       userId,

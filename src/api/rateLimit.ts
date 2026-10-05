@@ -50,13 +50,18 @@ export function rateLimit(key: string, rule: RateRule, now: number = Date.now())
 }
 
 /**
- * Best-effort client identifier for keying. Railway (and every other proxy in front of this API)
- * sets `x-forwarded-for`; the left-most entry is the original client. Falls back to `x-real-ip`
- * and finally a constant, so local/test traffic all shares one bucket.
+ * Best-effort client identifier for keying. Railway's edge (like every proxy in front of this API)
+ * APPENDS the address it actually saw to `x-forwarded-for`, so the RIGHT-most entry is the one a
+ * client can't forge. The left-most is whatever the client sent -- keying on it let anyone pick a
+ * fresh "IP" per request and walk straight past every limit here (e.g. unlimited anonymous
+ * accounts). Falls back to `x-real-ip`, then a constant, so local/test traffic shares one bucket.
  */
 export function clientKey(req: Request, scope: string): string {
-  const xff = req.headers.get("x-forwarded-for") ?? "";
-  const ip = xff.split(",")[0]!.trim() || req.headers.get("x-real-ip")?.trim() || "unknown";
+  const hops = (req.headers.get("x-forwarded-for") ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+  const ip = hops[hops.length - 1] || req.headers.get("x-real-ip")?.trim() || "unknown";
   return `${scope}:${ip}`;
 }
 

@@ -94,11 +94,19 @@ Respond with JSON matching this shape exactly, and nothing else -- no commentary
  * included only as context (e.g. already-processed history in an incremental/live-capture call).
  * If omitted, every event is treated as new (the original whole-conversation-at-once behavior).
  */
+/** One very long message (a pasted file, a generated document) is cut to this many characters in
+ *  the prompt. Grounding still matches quotes against the message's full text. */
+export const MAX_PROMPT_MESSAGE_CHARS = 8_000;
+
 export function buildTranscriptPrompt(events: CanonicalEvent[], newEventIds?: Set<string>): string {
   const validIds = events.map((e) => e.id).join(", ");
   const lines = events.map((e) => {
     const marker = !newEventIds || newEventIds.has(e.id) ? "[NEW]" : "[ALREADY PROCESSED]";
-    return `${marker} [${e.id}] (${e.role}, ${e.createdAt}): ${e.text}`;
+    const text =
+      e.text.length > MAX_PROMPT_MESSAGE_CHARS
+        ? `${e.text.slice(0, MAX_PROMPT_MESSAGE_CHARS)} […message truncated]`
+        : e.text;
+    return `${marker} [${e.id}] (${e.role}, ${e.createdAt}): ${text}`;
   });
   return `This transcript contains exactly ${events.length} message(s), no more. The only valid ids are: ${validIds}.\n\nConversation transcript:\n\n${lines.join("\n\n")}`;
 }

@@ -26,6 +26,8 @@ final class QuickRecallPanel: NSObject, NSWindowDelegate {
     private let panel: FloatingPanel
     /// The menu-bar status button, if opened from the menu bar — anchors the panel under it.
     weak var anchorButton: NSStatusBarButton?
+    /// Called each time the panel is presented -- the app uses it to re-sync if the data is stale.
+    var onShow: (() -> Void)?
 
     private var lastDismissedAt = Date.distantPast
     private var isDismissing = false
@@ -79,6 +81,7 @@ final class QuickRecallPanel: NSObject, NSWindowDelegate {
         position()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        onShow?()
     }
 
     func dismiss() {

@@ -109,7 +109,7 @@ struct WelcomeView: View {
                     "It picks up your thinking in Cursor on its own. For ChatGPT and Claude, paste a conversation in — Thread takes it from there."
                 )
                 HStack(spacing: 6) {
-                    Text("⌘⇧T").font(.system(size: 11, weight: .semibold, design: .rounded))
+                    Text(RecallShortcut.current.symbol).font(.system(size: 11, weight: .semibold, design: .rounded))
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Theme.ink(0.06), in: RoundedRectangle(cornerRadius: 5))
                     Text("Recall anything you've thought about").font(.system(size: 11)).foregroundStyle(Theme.ink(0.5))

@@ -1,6 +1,13 @@
 #!/bin/sh
 # Builds a real, double-clickable ThreadMac.app and zips it for distribution.
 #
+# Environment (all optional):
+#   THREAD_VERSION             version string (default below; the release workflow sets it from the tag)
+#   THREAD_UNIVERSAL=0         build only this Mac's architecture
+#   THREAD_SIGN_IDENTITY       "Developer ID Application: NAME (TEAMID)" -> hardened, notarizable build
+#   THREAD_NOTARY_PROFILE      notarytool keychain profile (or the APPLE_ID/PASSWORD/TEAM_ID trio)
+#   THREAD_SPARKLE_PUBLIC_KEY  Sparkle EdDSA public key -> turns on auto-updates
+#
 # This produces an UNSIGNED (ad-hoc signed only, by swift build's default behavior) app.
 # Gatekeeper will show an "unidentified developer" warning on first launch after download --
 # the user needs to right-click -> Open once per downloaded build to bypass it. That's a real,
@@ -13,12 +20,22 @@ cd "$(dirname "$0")"
 
 APP_NAME="ThreadMac"
 BUNDLE_ID="com.thread.mac"
-VERSION="0.2.13"
-BUILD_DIR=".build/release"
+VERSION="${THREAD_VERSION:-0.2.13}"
 APP_DIR="dist/${APP_NAME}.app"
 
-echo "Building release binary..."
-swift build -c release
+# Universal (Apple Silicon + Intel) by default -- an arm64-only build won't launch on Intel Macs.
+# THREAD_UNIVERSAL=0 builds just this machine's architecture (faster local iteration).
+if [ "${THREAD_UNIVERSAL:-1}" = 1 ]; then
+  ARCH_FLAGS="--arch arm64 --arch x86_64"
+else
+  ARCH_FLAGS=""
+fi
+
+echo "Building release binary (${ARCH_FLAGS:-native arch})..."
+# shellcheck disable=SC2086
+swift build -c release ${ARCH_FLAGS}
+# shellcheck disable=SC2086
+BUILD_DIR="$(swift build -c release ${ARCH_FLAGS} --show-bin-path)"
 
 echo "Building app icon..."
 ./icon.sh
@@ -28,6 +45,27 @@ rm -rf "${APP_DIR}" "dist/${APP_NAME}-${VERSION}-macos.zip"
 mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
 cp "${BUILD_DIR}/${APP_NAME}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 cp "dist/AppIcon.icns" "${APP_DIR}/Contents/Resources/AppIcon.icns"
+
+# Sparkle (auto-updates). ditto keeps the framework's Versions/ symlinks intact; the binary finds
+# it through the @executable_path/../Frameworks rpath set in Package.swift.
+mkdir -p "${APP_DIR}/Contents/Frameworks"
+ditto "${BUILD_DIR}/Sparkle.framework" "${APP_DIR}/Contents/Frameworks/Sparkle.framework"
+
+# Updates are switched on only when a Sparkle EdDSA public key is supplied (generate the pair
+# once with Sparkle's generate_keys -- see README). Without it the updater stays inert.
+FEED_URL="${THREAD_SPARKLE_FEED_URL:-https://github.com/allansendagi/thinking-engine-repo-parser/releases/latest/download/appcast.xml}"
+if [ -n "${THREAD_SPARKLE_PUBLIC_KEY:-}" ]; then
+  SPARKLE_PLIST="    <key>SUFeedURL</key>
+    <string>${FEED_URL}</string>
+    <key>SUPublicEDKey</key>
+    <string>${THREAD_SPARKLE_PUBLIC_KEY}</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>"
+  echo "Auto-updates: ON (${FEED_URL})"
+else
+  SPARKLE_PLIST=""
+  echo "Auto-updates: off (set THREAD_SPARKLE_PUBLIC_KEY to enable)"
+fi
 
 cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -58,6 +96,7 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Thread</string>
+${SPARKLE_PLIST}
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
@@ -141,6 +180,16 @@ fi
 ENTITLEMENTS="${PWD}/Thread.entitlements"
 if [ -n "${THREAD_SIGN_IDENTITY:-}" ]; then
   echo "Signing: ${THREAD_SIGN_IDENTITY}"
+  # Inside-out: Sparkle's helpers, then the framework, then our binary, then the bundle
+  # (the order Sparkle's docs give for a Developer ID + hardened-runtime build).
+  SPK="${APP_DIR}/Contents/Frameworks/Sparkle.framework/Versions/B"
+  for helper in "${SPK}/XPCServices/Installer.xpc" "${SPK}/Autoupdate" "${SPK}/Updater.app"; do
+    codesign --force --options runtime --timestamp --sign "${THREAD_SIGN_IDENTITY}" "${helper}"
+  done
+  codesign --force --options runtime --timestamp --preserve-metadata=entitlements \
+    --sign "${THREAD_SIGN_IDENTITY}" "${SPK}/XPCServices/Downloader.xpc"
+  codesign --force --options runtime --timestamp --sign "${THREAD_SIGN_IDENTITY}" \
+    "${APP_DIR}/Contents/Frameworks/Sparkle.framework"
   codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" \
     --sign "${THREAD_SIGN_IDENTITY}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
   codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" \

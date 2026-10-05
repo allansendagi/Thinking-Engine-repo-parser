@@ -1,0 +1,139 @@
+name: Release Mac app
+
+# Push a tag like `mac-v0.3.0` to build a universal, Developer ID-signed, notarized Thread.dmg,
+# sign it for Sparkle, and publish it as a GitHub Release with the appcast the app polls
+# (https://github.com/<repo>/releases/latest/download/appcast.xml).
+#
+# Repository secrets (Settings ▸ Secrets and variables ▸ Actions):
+#   MACOS_CERT_P12_BASE64     Developer ID Application certificate + key, exported as .p12, base64'd
+#   MACOS_CERT_PASSWORD       password for that .p12
+#   MACOS_SIGN_IDENTITY       e.g. "Developer ID Application: Your Name (TEAMID)"
+#   APPLE_ID / APPLE_APP_PASSWORD / APPLE_TEAM_ID   notarytool credentials (app-specific password)
+#   SPARKLE_PRIVATE_KEY       EdDSA private key from Sparkle's generate_keys -x
+# Repository variable:
+#   SPARKLE_PUBLIC_KEY        the matching public key (baked into the app's Info.plist)
+
+on:
+  push:
+    tags: ["mac-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 0.3.0 (creates/uses tag mac-v<version>)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: macos-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: v
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then V="${{ inputs.version }}"; else V="${GITHUB_REF_NAME#mac-v}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=mac-v$V" >> "$GITHUB_OUTPUT"
+
+      - name: Check signing secrets
+        env:
+          P12: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+        run: |
+          missing=""
+          [ -n "$P12" ] || missing="$missing MACOS_CERT_P12_BASE64"
+          [ -n "$IDENTITY" ] || missing="$missing MACOS_SIGN_IDENTITY"
+          [ -n "$APPLE_ID" ] || missing="$missing APPLE_ID"
+          [ -n "$SPARKLE_PRIVATE_KEY" ] || missing="$missing SPARKLE_PRIVATE_KEY"
+          [ -n "$SPARKLE_PUBLIC_KEY" ] || missing="$missing SPARKLE_PUBLIC_KEY(variable)"
+          if [ -n "$missing" ]; then
+            echo "::error::A public release must be signed, notarized and update-signed. Missing:$missing"
+            exit 1
+          fi
+
+      - name: Import Developer ID certificate
+        env:
+          P12: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          KC_PW="$(uuidgen)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KC_PW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KC_PW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$KC_PW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+
+      - name: Test
+        run: swift test
+
+      - name: Build, sign, notarize
+        env:
+          THREAD_VERSION: ${{ steps.v.outputs.version }}
+          THREAD_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          THREAD_NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+          THREAD_NOTARY_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          THREAD_NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          THREAD_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+        run: ./package.sh
+
+      - name: Verify Gatekeeper accepts the build
+        run: |
+          spctl --assess --type execute --verbose=2 dist/ThreadMac.app
+          xcrun stapler validate dist/Thread.dmg
+          lipo -archs dist/ThreadMac.app/Contents/MacOS/ThreadMac
+
+      - name: Sign update + write appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          VERSION: ${{ steps.v.outputs.version }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          SIGN_UPDATE="$(find .build/artifacts -type f -name sign_update -perm -u+x | head -1)"
+          [ -x "$SIGN_UPDATE" ] || { echo "::error::sign_update not found in .build/artifacts"; exit 1; }
+          KEY_FILE="$RUNNER_TEMP/sparkle_key"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
+          SIG="$("$SIGN_UPDATE" --ed-key-file "$KEY_FILE" dist/Thread.dmg)"   # sparkle:edSignature="…" length="…"
+          rm "$KEY_FILE"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/Thread.dmg"
+          cat > dist/appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Thread</title>
+              <item>
+                <title>Thread ${VERSION}</title>
+                <pubDate>$(date -R)</pubDate>
+                <sparkle:version>${VERSION}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+                <sparkle:releaseNotesLink>https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}</sparkle:releaseNotesLink>
+                <enclosure url="${URL}" type="application/octet-stream" ${SIG} />
+              </item>
+            </channel>
+          </rss>
+          XML
+          sed -i '' 's/^          //' dist/appcast.xml
+          cat dist/appcast.xml
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            dist/Thread.dmg dist/appcast.xml "dist/ThreadMac-${VERSION}-macos.zip" \
+            --title "Thread for Mac ${VERSION}" --generate-notes --latest --target "$GITHUB_SHA"

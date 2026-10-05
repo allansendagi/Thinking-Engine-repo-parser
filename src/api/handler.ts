@@ -451,6 +451,16 @@ export function createRequestHandler(
       }
       const email = (body.email ?? "").trim();
       if (!EMAIL_RE.test(email)) return error(400, "A valid email is required");
+      // Same per-IP ceiling as /v1/auth/start: anonymous accounts are free to mint, so without it
+      // this route could be used to send code emails to arbitrary addresses from our domain.
+      if (
+        !rateLimit(clientKey(req, "auth-start"), {
+          limit: 20,
+          windowMs: 3_600_000,
+        })
+      ) {
+        return error(429, "Too many attempts from here. Try again later.");
+      }
       try {
         const code = await issueCode(email);
         await sendEmail({ to: email, ...signInCodeEmail(code) });

@@ -1,6 +1,6 @@
 import type { CanonicalEvent, CognitiveEvent } from "../types";
 import type { CompletionProvider } from "../providers/types";
-import { EXTRACTION_SYSTEM_PROMPT, buildTranscriptPrompt } from "./prompt";
+import { EXTRACTION_SYSTEM_PROMPT, MAX_PROMPT_MESSAGE_CHARS, buildTranscriptPrompt } from "./prompt";
 import { extractionResultSchema, type ExtractedEvent } from "./schema";
 
 function parseJsonResponse(text: string): unknown {
@@ -64,6 +64,95 @@ export interface ExtractionOutcome {
  * duplicate cognitive event for something already processed.
  */
 export async function extractCognitiveEvents(
+  contextEvents: CanonicalEvent[],
+  provider: CompletionProvider,
+  newEventIds?: Set<string>,
+): Promise<ExtractionOutcome> {
+  const calls = planExtractionCalls(contextEvents, newEventIds);
+  if (calls.length === 1 && calls[0]!.context === contextEvents) {
+    return extractOnce(contextEvents, provider, newEventIds);
+  }
+  const merged: ExtractionOutcome = { events: [], rejected: [] };
+  for (const call of calls) {
+    const outcome = await extractOnce(call.context, provider, call.newIds);
+    merged.events.push(...outcome.events);
+    merged.rejected.push(...outcome.rejected);
+  }
+  return merged;
+}
+
+/**
+ * Size budget for one extraction call. The live capture path re-sends the whole transcript on
+ * every turn, so an unbounded prompt made cost grow with the square of conversation length, and
+ * a long chat (pasted code, documents) eventually exceeded the model's context window -- after
+ * which every later turn of that conversation failed to extract at all. Characters are a cheap,
+ * conservative proxy for tokens (~4 chars/token).
+ */
+export const EXTRACTION_CHAR_BUDGET = 60_000;
+/** Portion of the budget the NEW messages of one call may use; the rest is preceding context. */
+const NEW_SHARE = 0.6;
+
+/** What one message costs in the prompt -- matches the per-message cap in buildTranscriptPrompt. */
+function promptChars(e: CanonicalEvent): number {
+  return Math.min(e.text.length, MAX_PROMPT_MESSAGE_CHARS) + e.id.length + 64;
+}
+
+interface PlannedCall {
+  context: CanonicalEvent[];
+  newIds: Set<string> | undefined;
+}
+
+/**
+ * Split extraction into calls that each fit EXTRACTION_CHAR_BUDGET. Small transcripts (the common
+ * case) stay one call with the original arguments, so behavior there is unchanged. Otherwise the
+ * new (eligible) messages are chunked in order, and each chunk is preceded by as much of the
+ * transcript just before it as still fits -- the model always sees the recent context a
+ * refinement depends on, never the whole history. Grounding still checks against the FULL
+ * message text (eventsById is built per call from the original events), so prompt truncation
+ * can't let a fabricated quote through.
+ */
+export function planExtractionCalls(events: CanonicalEvent[], newEventIds?: Set<string>): PlannedCall[] {
+  const total = events.reduce((n, e) => n + promptChars(e), 0);
+  if (total <= EXTRACTION_CHAR_BUDGET) return [{ context: events, newIds: newEventIds }];
+
+  const isNew = (e: CanonicalEvent) => !newEventIds || newEventIds.has(e.id);
+  const newBudget = EXTRACTION_CHAR_BUDGET * NEW_SHARE;
+  const calls: PlannedCall[] = [];
+
+  let i = 0;
+  while (i < events.length) {
+    if (!isNew(events[i]!)) { i++; continue; }
+    // Gather a chunk of new messages (always at least one) within the new-message budget.
+    const chunkStart = i;
+    const chunk: CanonicalEvent[] = [];
+    let used = 0;
+    while (i < events.length) {
+      const e = events[i]!;
+      const cost = promptChars(e);
+      if (isNew(e)) {
+        if (chunk.length > 0 && used + cost > newBudget) break;
+        chunk.push(e);
+        used += cost;
+      }
+      i++;
+    }
+    // Fill the rest of the budget with the messages immediately before the chunk.
+    const context: CanonicalEvent[] = [];
+    for (let j = chunkStart - 1; j >= 0; j--) {
+      const cost = promptChars(events[j]!);
+      if (used + cost > EXTRACTION_CHAR_BUDGET) break;
+      context.unshift(events[j]!);
+      used += cost;
+    }
+    const chunkIds = new Set(chunk.map((e) => e.id));
+    // Old messages interleaved inside the chunk's span stay in the transcript for coherence.
+    const span = events.slice(chunkStart, i).filter((e) => chunkIds.has(e.id) || !isNew(e));
+    calls.push({ context: [...context, ...span], newIds: chunkIds });
+  }
+  return calls.length > 0 ? calls : [{ context: events, newIds: newEventIds }];
+}
+
+async function extractOnce(
   contextEvents: CanonicalEvent[],
   provider: CompletionProvider,
   newEventIds?: Set<string>,
