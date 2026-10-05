@@ -182,6 +182,24 @@ CredentialStore.swift        Keychain for the token, UserDefaults for non-secret
 Views (`Views/*.swift`) are pure SwiftUI reading/writing `AppState` -- no view owns its own
 network or storage logic.
 
+## Native macOS integration
+
+- **Spotlight:** every idea is indexed on this Mac (Core Spotlight, never uploaded). Press ⌘Space,
+  type a few words, and choosing the result opens the idea in Thread. Settings ▸ General has a
+  toggle to turn it off, and signing out removes the ideas from the index.
+- **Keychain:** Developer ID builds keep the account credential in the login Keychain and move an
+  existing file credential into it on first launch. Unsigned builds use a 0600 file, so they
+  don't trigger a password prompt on every launch.
+- **Open at login** (`SMAppService`), **auto-updates** (Sparkle) and a **configurable recall
+  shortcut**: all in Settings ▸ General.
+- **Share sheet:** the "continue where you left off" handoff can go to Messages, Mail, Notes,
+  AirDrop or any share extension.
+- **Back online automatically:** the app re-syncs when the network returns, after wake, and when
+  the panel opens with stale data (`Connectivity.swift`).
+- **First run leads with recovery:** "Recover my thinking" brings in Cursor history in one tap, or
+  a ChatGPT/Claude export by file picker, drag-and-drop or the Downloads watcher. Empty states
+  offer the same actions, so a new user is never stuck on a blank panel.
+
 ## Driving Thread from outside its own UI
 
 Three entry points, all routed through `AppState.perform(_ :ThreadAction)` so there is one code
