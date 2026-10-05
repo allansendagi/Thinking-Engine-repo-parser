@@ -232,3 +232,27 @@ export async function noteResumeShown(ideaId: string, lastActivityIso: string): 
   const next = { ...all, [ideaId]: { count: moved ? 1 : prev.count + 1, sinceActivity: lastActivityIso } };
   await chrome.storage.local.set({ resumeShown: next });
 }
+
+/**
+ * History sync bookkeeping, per source: which conversations were imported at which `updatedAt`
+ * (so a re-run only does new or grown conversations), and the latest progress for the popup.
+ */
+export async function getHistorySynced(source: string): Promise<Record<string, string>> {
+  const key = `historySynced:${source}`;
+  return ((await chrome.storage.local.get(key))[key] as Record<string, string> | undefined) ?? {};
+}
+
+export async function addHistorySynced(source: string, entries: Record<string, string>): Promise<void> {
+  const key = `historySynced:${source}`;
+  const current = await getHistorySynced(source);
+  await chrome.storage.local.set({ [key]: { ...current, ...entries } });
+}
+
+export async function getHistoryStatus(): Promise<Record<string, import("./types").HistorySyncStatus>> {
+  return ((await chrome.storage.local.get("historyStatus")).historyStatus as Record<string, import("./types").HistorySyncStatus> | undefined) ?? {};
+}
+
+export async function setHistoryStatus(source: string, status: import("./types").HistorySyncStatus): Promise<void> {
+  const all = await getHistoryStatus();
+  await chrome.storage.local.set({ historyStatus: { ...all, [source]: status } });
+}

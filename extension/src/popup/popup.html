@@ -177,6 +177,19 @@
       <!-- Per-source capture health. Filled by popup.ts; hidden until connected. -->
       <div id="capture" class="capture" hidden></div>
 
+      <div id="history" class="card" hidden style="margin-top: 10px">
+        <div style="font-weight: 600; margin-bottom: 4px">Bring in your history</div>
+        <div class="hint" style="margin-bottom: 8px">
+          Thread reads your past conversations while you're signed in and rebuilds your ideas from
+          them, in minutes. No export email needed.
+        </div>
+        <div style="display: flex; gap: 6px">
+          <button id="historyChatgpt" class="primary">ChatGPT</button>
+          <button id="historyClaude" class="primary">Claude</button>
+        </div>
+        <div id="historyStatus" class="hint" style="margin: 8px 0 0"></div>
+      </div>
+
       <details id="codeSection">
         <summary>Pair with a code instead</summary>
         <p class="hint">

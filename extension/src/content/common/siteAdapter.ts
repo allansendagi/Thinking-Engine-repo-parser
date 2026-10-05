@@ -1,4 +1,5 @@
 import type { Source } from "../../lib/types";
+import type { HistoryReader } from "../structured";
 
 export interface RawMessage {
   role: "user" | "assistant";
@@ -31,4 +32,10 @@ export interface SiteAdapter {
    * hand-off-to-the-Mac-app fallback.
    */
   insertIntoComposer?(text: string, root?: ParentNode): boolean;
+  /**
+   * Structured access to this site's conversations with the user's own session (structured.ts):
+   * powers one-click history sync and the capture fallback when the DOM selectors drift.
+   * Optional -- sites without one just capture from the DOM.
+   */
+  history?(): HistoryReader;
 }

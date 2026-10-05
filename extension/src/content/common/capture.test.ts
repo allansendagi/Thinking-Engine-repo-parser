@@ -308,3 +308,69 @@ describe("startCapture (debounce + dedup, no real browser or network)", () => {
     expect(r?.extracted).toBe(0);
   });
 });
+
+describe("structured fallback when the DOM selectors drift", () => {
+  beforeEach(() => installFakeChromeStorage());
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  test("captures from the site's own data when the page renders but extraction finds nothing", async () => {
+    const window = new Window();
+    installMutationObserver(window);
+    const sent: AnyMsg[] = [];
+    let fetches = 0;
+    const adapter: SiteAdapter = {
+      source: "chatgpt",
+      getConversationId: () => "conv_1",
+      extractMessages: () => [], // selectors broken by a redesign
+      conversationContainerPresent: () => true,
+      history: () => ({
+        format: "chatgpt",
+        listPage: async () => ({ items: [], done: true }),
+        fetchForImport: async () => ({}),
+        fetchMessages: async () => {
+          fetches++;
+          return [
+            { role: "user", text: "Should we price per seat?" },
+            { role: "user", text: "Or per workspace?" },
+          ];
+        },
+      }),
+    };
+    const stop = startCapture(adapter, window.document as unknown as ParentNode, {
+      debounceMs: 5, backstopMs: 0, assistantStableMs: 0, structuredEveryMs: 60_000,
+      sendMessage: async (m) => { sent.push(m); return { ok: true }; },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    poke(window);
+    await new Promise((r) => setTimeout(r, 30));
+    stop();
+
+    expect(lastCapture(sent)?.map((m) => m.text)).toEqual(["Should we price per seat?", "Or per workspace?"]);
+    expect(fetches).toBe(1); // throttled: a second flush inside the window doesn't refetch
+  });
+
+  test("never touches the structured path while the DOM works", async () => {
+    const window = new Window();
+    installMutationObserver(window);
+    let fetches = 0;
+    const adapter: SiteAdapter = {
+      source: "chatgpt",
+      getConversationId: () => "conv_1",
+      extractMessages: () => [{ role: "user", text: "hello" }],
+      history: () => ({
+        format: "chatgpt",
+        listPage: async () => ({ items: [], done: true }),
+        fetchForImport: async () => ({}),
+        fetchMessages: async () => { fetches++; return []; },
+      }),
+    };
+    const stop = startCapture(adapter, window.document as unknown as ParentNode, {
+      debounceMs: 5, backstopMs: 0, assistantStableMs: 0, sendMessage: async () => ({ ok: true }),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    stop();
+    expect(fetches).toBe(0);
+  });
+});

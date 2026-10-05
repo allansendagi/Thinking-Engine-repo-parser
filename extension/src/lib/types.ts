@@ -17,6 +17,25 @@ export interface CaptureMessage {
   messages: CapturedMessage[];
 }
 
+/** Content script -> background: one batch of history-sync conversations for `/v1/import`. */
+export interface ImportBatchMessage {
+  type: "thread:import-batch";
+  format: "chatgpt" | "claude";
+  conversations: unknown[];
+}
+
+/** Where a history sync stands, per source -- written by the content script, read by the popup. */
+export interface HistorySyncStatus {
+  state: "listing" | "importing" | "done" | "capped" | "stopped" | "error";
+  found: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  ideaCount: number | null;
+  error?: string;
+  updatedAt: string;
+}
+
 /** A capture pass's outcome, content script -> background, so health is known even when nothing
  *  new was sent (that's the case that hides a broken adapter). */
 export interface HealthMessage {

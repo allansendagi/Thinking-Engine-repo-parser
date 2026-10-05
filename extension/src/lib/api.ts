@@ -190,3 +190,12 @@ export function resolveContinuationText(r: ContinuePacketResponse): string {
       .trimEnd() + "\n"
   );
 }
+
+/** One batch of exported-shape conversations (history sync). The backend dedupes, so re-sending
+ *  a batch is harmless. 402 when the Free cap is reached. */
+export function importBatch(
+  format: "chatgpt" | "claude",
+  conversations: unknown[],
+): Promise<IngestResult> {
+  return request("/v1/import", { method: "POST", body: JSON.stringify({ format, conversations }) });
+}

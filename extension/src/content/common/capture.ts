@@ -1,7 +1,7 @@
 import { addSentIds, getSentIds } from "../../lib/storage";
 import { textHash } from "./domUtils";
 import type { CaptureMessage, CaptureReport, CapturedMessage, HealthMessage } from "../../lib/types";
-import type { SiteAdapter } from "./siteAdapter";
+import type { RawMessage, SiteAdapter } from "./siteAdapter";
 
 /**
  * Turns a SiteAdapter's raw DOM extraction into a debounced, deduplicated capture loop. This is
@@ -38,6 +38,10 @@ export interface CaptureOptions {
   /** How long a trailing assistant turn's text must stay byte-identical before it's considered
    *  finished and allowed into the payload. Default 2500ms (> a debounce window). */
   assistantStableMs?: number;
+  /** Minimum gap between structured-fallback fetches (see below). Default 20s. */
+  structuredEveryMs?: number;
+  /** Treat a missing conversation container as "the DOM has drifted" after this long. Default 10s. */
+  structuredGraceMs?: number;
 }
 
 export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: CaptureOptions = {}): () => void {
@@ -48,6 +52,29 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
     options.sendMessage ?? ((m: CaptureMessage | HealthMessage) => chrome.runtime.sendMessage(m));
   const now = options.now ?? (() => new Date().toISOString());
   const clock = () => Date.now();
+  const structuredEveryMs = options.structuredEveryMs ?? 20_000;
+  const structuredGraceMs = options.structuredGraceMs ?? 10_000;
+  const attachedAt = clock();
+  let lastStructuredAt = -Infinity;
+
+  /**
+   * Structured fallback: the page is a conversation but the DOM selectors found nothing -- the
+   * signature of a site redesign that broke the adapter. Rather than capture going silent until
+   * someone ships new selectors, read the same conversation from the site's own JSON (the
+   * adapter's `history()` reader, with the user's session). Throttled, and only ever a fallback:
+   * when the DOM works, nothing changes.
+   */
+  async function structuredFallback(conversationId: string): Promise<RawMessage[]> {
+    if (!adapter.history) return [];
+    const drifted = containerPresent() || clock() - attachedAt > structuredGraceMs;
+    if (!drifted || clock() - lastStructuredAt < structuredEveryMs) return [];
+    lastStructuredAt = clock();
+    try {
+      return await adapter.history().fetchMessages(conversationId);
+    } catch {
+      return [];
+    }
+  }
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
@@ -105,7 +132,8 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
         return;
       }
 
-      const raw = adapter.extractMessages(doc);
+      let raw = adapter.extractMessages(doc);
+      if (raw.length === 0) raw = await structuredFallback(conversationId);
       const capturedAt = at;
       const messages: CapturedMessage[] = raw.map((m) => ({
         id: `${conversationId}::${m.role[0]}${textHash(m.text)}`,

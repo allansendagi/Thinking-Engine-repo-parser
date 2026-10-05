@@ -1,0 +1,40 @@
+name: Mac app
+
+# Split out of ci.yml so it only runs when the Mac app (or this file) changes: macOS runners bill
+# GitHub Actions minutes at 10x Linux, and a backend- or extension-only change shouldn't pay for
+# a Mac build. Locally, `macos-app/verify.sh` runs the same checks plus a real launch.
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths: ["macos-app/**", ".github/workflows/mac.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["macos-app/**", ".github/workflows/mac.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-app:
+    name: macos-app (swift build · test)
+    runs-on: macos-15
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: macos-app
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build
+      - run: swift test
+      # Assemble the real .app the way a release does (universal, Sparkle embedded; ad-hoc signed
+      # since CI has no Developer ID) and check it's structurally a launchable bundle.
+      - run: ./package.sh
+      - run: |
+          lipo -archs dist/ThreadMac.app/Contents/MacOS/ThreadMac
+          test -d dist/ThreadMac.app/Contents/Frameworks/Sparkle.framework
+          otool -l dist/ThreadMac.app/Contents/MacOS/ThreadMac | grep -A2 LC_RPATH | grep -q '@executable_path/../Frameworks'
+          codesign --verify --deep --strict dist/ThreadMac.app
+          plutil -lint dist/ThreadMac.app/Contents/Info.plist

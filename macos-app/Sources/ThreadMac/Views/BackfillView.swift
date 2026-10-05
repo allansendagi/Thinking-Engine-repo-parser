@@ -62,6 +62,29 @@ struct BackfillView: View {
             sourceRow("Recover from Cursor", "Your local Cursor history — no export needed") { appState.runCursorBackfill() }
         }
 
+        // Fastest for ChatGPT / Claude: the extension reads the history you're signed in to.
+        VStack(alignment: .leading, spacing: 6) {
+            Text("From your browser — fastest").font(.caption).fontWeight(.semibold)
+            Text(appState.browserExtensionConnected
+                 ? "Opens the site and brings in your whole history while you're signed in. Takes minutes."
+                 : "Needs the Thread browser extension. Then it reads your history while you're signed in — minutes, no export.")
+                .font(.caption2).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                ForEach(BackfillKind.allCases, id: \.self) { k in
+                    Button("\(k.displayName) →") { appState.recoverViaBrowser(k) }
+                        .controlSize(.small)
+                }
+                if !appState.browserExtensionConnected, let url = AppState.browserExtensionURL {
+                    Button("Get the extension") { NSWorkspace.shared.open(url) }
+                        .buttonStyle(.plain).font(.caption2).foregroundStyle(Theme.accent)
+                }
+            }
+        }
+        .padding(10)
+        .background(Theme.ink(0.04), in: RoundedRectangle(cornerRadius: 8))
+
+        Text("Or use a data export").font(.caption2).foregroundColor(.secondary)
+
         ForEach(exports.prefix(3)) { e in
             sourceRow("Recover from your \(e.kind.displayName) export",
                       "~\(e.conversationCount) conversations · \(Theme.ago(e.modified))") { appState.runBackfill(e) }

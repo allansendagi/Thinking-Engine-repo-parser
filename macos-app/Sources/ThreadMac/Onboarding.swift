@@ -35,6 +35,22 @@ extension AppState {
         importExportFile(url)
     }
 
+    /// "From your browser" -- the fastest recovery there is. Opens ChatGPT / Claude with the
+    /// `#thread-import` link; the Thread extension sees it and reads the user's whole history
+    /// there (signed-in session, no export email), importing it in minutes. The pairing window is
+    /// held open so an extension installed a moment ago connects on its own first.
+    func recoverViaBrowser(_ kind: BackfillKind) {
+        openPairingWindow(seconds: 300)
+        let url = kind == .chatgpt
+            ? URL(string: "https://chatgpt.com/#thread-import")!
+            : URL(string: "https://claude.ai/#thread-import")!
+        NSWorkspace.shared.open(url)
+        hideBackfillSheet()
+    }
+
+    /// Has a Thread browser extension ever connected to this Mac?
+    var browserExtensionConnected: Bool { lastExtensionPing != nil }
+
     /// A file chosen or dropped: recover from it if it's an export, else say plainly what's wrong.
     func importExportFile(_ url: URL) {
         let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
