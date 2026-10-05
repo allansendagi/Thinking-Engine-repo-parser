@@ -25,7 +25,7 @@ const STOPWORDS = new Set([
   "made", "like", "know", "think", "thinking", "really", "actually", "probably", "maybe",
 ]);
 
-function tokenize(text: string): string[] {
+export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")

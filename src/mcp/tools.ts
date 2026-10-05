@@ -7,7 +7,7 @@ import {
   loadCanonicalEvents,
 } from "../db/queries";
 import { buildThinkingState } from "../state/thinkingState";
-import { lexicalOverlap, entityOverlap } from "../identity/signals";
+import { lexicalOverlap, entityOverlap, tokenize } from "../identity/signals";
 import type { IdeaNode, OpenLoop, ThinkingState } from "../types";
 
 /**
@@ -25,19 +25,44 @@ export interface IdeaSummary {
   score: number;
 }
 
+/**
+ * Recall ranking. What a person types is a few words they half-remember -- so score how much of
+ * the QUERY an idea covers (not how similar the two word sets are, which punished any idea with a
+ * long formulation), match word forms loosely ("prices" finds "pricing"), and search everything
+ * the idea has been: its title (weighted), current formulation, earlier formulations, why it
+ * matters, and its open questions. Recency breaks ties. The Mac app layers on-device meaning
+ * search on top of this; the two lists are merged, never one replacing the other.
+ */
 export function searchIdeas(
   db: Database,
   query: string,
   limit = 10,
 ): IdeaSummary[] {
+  const qTokens = [...new Set(tokenize(query))];
+  if (qTokens.length === 0) return [];
   const ideas = loadIdeas(db);
   return ideas
-    .map((idea) => ({
-      idea,
-      score: lexicalOverlap(query, `${idea.title} ${idea.currentFormulation}`),
-    }))
+    .map((idea) => {
+      const title = new Set(tokenize(idea.title));
+      const body = new Set(
+        tokenize(
+          [
+            idea.currentFormulation,
+            idea.whyItMatters ?? "",
+            ...idea.evolution.map((s) => s.formulation),
+            ...idea.openLoops.map((l) => l.statement),
+          ].join(" "),
+        ),
+      );
+      let score = 0;
+      for (const q of qTokens) {
+        if (matchesAny(q, title)) score += 1.5;
+        else if (matchesAny(q, body)) score += 1;
+      }
+      return { idea, score: score / (qTokens.length * 1.5) };
+    })
     .filter((r) => r.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || b.idea.updatedAt.localeCompare(a.idea.updatedAt))
     .slice(0, limit)
     .map((r) => ({
       id: r.idea.id,
@@ -46,6 +71,18 @@ export function searchIdeas(
       currentFormulation: r.idea.currentFormulation,
       score: r.score,
     }));
+}
+
+/** Loose word-form match: exact, or a shared stem of 5+ letters ("pricing" ~ "prices" ~ "priced"). */
+function matchesAny(q: string, words: Set<string>): boolean {
+  if (words.has(q)) return true;
+  const stem = (w: string) => (w.length > 5 ? w.slice(0, Math.max(5, w.length - 3)) : w);
+  const qs = stem(q);
+  for (const w of words) {
+    if (w.length < 4) continue;
+    if (w.startsWith(qs) || q.startsWith(stem(w))) return true;
+  }
+  return false;
 }
 
 export function getIdea(db: Database, id: string): IdeaNode | null {

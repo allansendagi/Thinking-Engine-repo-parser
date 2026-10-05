@@ -836,3 +836,18 @@ describe("templateTrajectory", () => {
     expect(trajectory[trajectory.length - 1]).toContain("Step 10");
   });
 });
+
+describe("searchIdeas recall ranking", () => {
+  test("finds an idea from a different word form and ranks by query coverage", async () => {
+    const db = await seedDb();
+    // "boundary" (singular) still finds "explicit boundaries".
+    expect(searchIdeas(db, "boundary")[0]?.title).toContain("Authority");
+    // An unrelated query finds nothing rather than noise.
+    expect(searchIdeas(db, "banana smoothie")).toHaveLength(0);
+  });
+
+  test("matches an idea by its open question, not just its title", async () => {
+    const db = await seedDb();
+    expect(searchIdeas(db, "who enforces")[0]?.title).toContain("Authority");
+  });
+});

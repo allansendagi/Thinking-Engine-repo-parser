@@ -1,5 +1,6 @@
 import SwiftUI
 import Carbon.HIToolbox
+import Combine
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -17,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var axSensor: AXSensorRunner?
     private var cursorWatch: CursorLiveWatch?
     private var connectivity: ConnectivityWatcher?
+    private var spotlightSync: AnyCancellable?
     let updater = Updater()
     private let setupNotifier = SetupNotifier()
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
@@ -73,6 +75,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Sparkle auto-updates -- inert unless the bundle carries a feed URL + public key.
         updater.start()
+
+        // Keep Spotlight's copy of your ideas current (debounced: a sync burst is one reindex).
+        spotlightSync = appState.$thinkingState
+            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+            .sink { [weak appState] state in
+                MainActor.assumeIsolated {   // RunLoop.main scheduler: always the main thread
+                    guard let appState else { return }
+                    if !appState.isPaired { SpotlightIndex.removeAll(); return }
+                    if let ideas = state?.currentIdeas { SpotlightIndex.sync(ideas) }
+                }
+            }
 
         let state = appState
         let server = PairingServer(
@@ -179,6 +192,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: sweep)
         }
         DispatchQueue.main.async(execute: sweep)
+    }
+
+    /// A Spotlight result for one of your ideas was chosen -- open it in the panel.
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        guard let id = SpotlightIndex.ideaId(from: userActivity) else { return false }
+        appState.perform(.openIdea(id))
+        return true
     }
 
     /// `open thread://...` from Raycast / Alfred / Shortcuts / a script. Registered via

@@ -1250,6 +1250,7 @@ final class AppState: ObservableObject {
         }
         LocalStore.clear(userId: CredentialStore.userId)
         CredentialStore.clear()
+        SpotlightIndex.removeAll()   // a signed-out Mac must not keep surfacing the account's ideas
         resetInMemoryState()
     }
 
@@ -1352,7 +1353,9 @@ final class AppState: ObservableObject {
         // the snapshot). If it's down or the query moved on, the local results stand.
         do {
             let remote = try await client.searchIdeas(query: q)
-            if q == searchQuery.trimmingCharacters(in: .whitespaces) { searchResults = remote }
+            if q == searchQuery.trimmingCharacters(in: .whitespaces) {
+                searchResults = mergeSearchResults(remote: remote, local: keyword + semantic)
+            }
         } catch {
             // keep the local results; offline is surfaced by refresh(), not here
         }

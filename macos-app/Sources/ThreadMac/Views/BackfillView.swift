@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// "Recover my thinking" — the first-run experience: offer → a staged "finding your thinking"
 /// pass → the graph it reconstructed, led by one strong idea. Driven by `appState.backfill`.
@@ -28,7 +29,26 @@ struct BackfillView: View {
         }
         .padding(18)
         .frame(width: 400)
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                    .padding(4)
+                    .allowsHitTesting(false)
+            }
+        }
+        // Drag a ChatGPT/Claude export straight in -- the most direct path there is.
+        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { [appState] url, _ in
+                guard let url else { return }
+                Task { @MainActor in appState.importExportFile(url) }
+            }
+            return true
+        }
     }
+
+    @State private var dropTargeted = false
 
     // MARK: offer
 
@@ -48,11 +68,17 @@ struct BackfillView: View {
         }
 
         if exports.isEmpty {
-            Button { appState.lookForExports() } label: {
-                Label("I have a ChatGPT / Claude export in Downloads — check", systemImage: "folder")
-                    .font(.system(size: 12, weight: .medium))
+            HStack(spacing: 8) {
+                Button { appState.chooseExportFile() } label: {
+                    Label("Choose export file…", systemImage: "doc.badge.plus")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Check Downloads") { appState.lookForExports() }
+                    .font(.system(size: 12))
             }
-            .buttonStyle(.borderedProminent)
+            Text("Or drop the .zip anywhere on this window.")
+                .font(.caption2).foregroundColor(.secondary)
         }
 
         Divider()

@@ -105,17 +105,21 @@ struct WelcomeView: View {
         } else {
             VStack(alignment: .leading, spacing: 14) {
                 header(
-                    "Thread is ready",
-                    "It picks up your thinking in Cursor on its own. For ChatGPT and Claude, paste a conversation in — Thread takes it from there."
+                    "Start with what you've already thought",
+                    "Bring in your past Cursor, ChatGPT and Claude conversations. Thread rebuilds the ideas in them — so recall works from the first minute, not the first month."
                 )
                 HStack(spacing: 6) {
                     Text(RecallShortcut.current.symbol).font(.system(size: 11, weight: .semibold, design: .rounded))
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Theme.ink(0.06), in: RoundedRectangle(cornerRadius: 5))
-                    Text("Recall anything you've thought about").font(.system(size: 11)).foregroundStyle(Theme.ink(0.5))
+                    Text("Recall anything you've thought about, from any app").font(.system(size: 11)).foregroundStyle(Theme.ink(0.5))
                 }
-                Button("Start") { appState.dismissWelcome() }
+                Button("Recover my thinking") { appState.startRecovery() }
                     .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
+                    .keyboardShortcut(.defaultAction)
+                Button("Skip for now") { appState.dismissWelcome() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11)).foregroundStyle(Theme.ink(0.45))
             }
         }
     }
