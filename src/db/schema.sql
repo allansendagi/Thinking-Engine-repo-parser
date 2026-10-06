@@ -200,3 +200,16 @@ CREATE TABLE IF NOT EXISTS idea_corrections (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_idea_corrections_kind ON idea_corrections(kind);
+
+-- Captured messages whose idea extraction hasn't run yet: the model was unavailable (billing,
+-- outage, rate limit) when they arrived. The messages themselves are already in canonical_events
+-- -- a capture is never lost to an AI failure -- and these rows are retried until they succeed.
+CREATE TABLE IF NOT EXISTS pending_extraction (
+  event_id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  queued_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  last_attempt_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pending_extraction_conv ON pending_extraction(conversation_id);

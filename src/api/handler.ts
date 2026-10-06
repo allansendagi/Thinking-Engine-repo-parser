@@ -48,6 +48,7 @@ import {
   loadIdeas,
 } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
+import { deferredStatus, scheduleDeferredRetry } from "../state/deferred";
 import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
@@ -550,6 +551,8 @@ export function createRequestHandler(
     }
 
     const db = openUserDb(userId);
+    // Captures saved while the AI was unavailable resume on their own (throttled, off-path).
+    scheduleDeferredRetry(userId, openUserDb, providers);
 
     try {
       // Soft lock. Reads are never gated. No-op until Paddle is actually configured.
@@ -878,7 +881,13 @@ export function createRequestHandler(
       if (req.method === "GET" && pathname === "/v1/capture-health") {
         const daysParam = Number(url.searchParams.get("days") ?? "7");
         const windowDays = Number.isFinite(daysParam) && daysParam > 0 && daysParam <= 90 ? daysParam : 7;
-        return json(captureHealthSummary(db, windowDays));
+        const pending = deferredStatus(db);
+        return json({
+          ...captureHealthSummary(db, windowDays),
+          // Saved but waiting for the AI: shown in the app so a paused pipeline is never silent.
+          pendingExtraction: pending,
+          ...(pending.count > 0 ? { healthy: false } : {}),
+        });
       }
 
       if (req.method === "POST" && pathname === "/v1/continue") {

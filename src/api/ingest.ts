@@ -1,4 +1,3 @@
-import { dismissedExamples } from "../mining/corrections";
 import type { Database } from "bun:sqlite";
 import type { CanonicalEvent, CaptureProvenance, Role } from "../types";
 import {
@@ -8,13 +7,9 @@ import {
   loadConversationFingerprints,
   loadIdeas,
 } from "../db/queries";
-import {
-  runPipeline,
-  persistPipelineResult,
-  persistCanonicalEvents,
-  type PipelineProviders,
-} from "../state/pipeline";
+import { persistCanonicalEvents, type PipelineProviders } from "../state/pipeline";
 import { replayDiscardedEvents } from "../state/replayDiscarded";
+import { extractOrDefer } from "../state/deferred";
 import { canonicalize, type IntegrityIssue, type RawObservation } from "../state/canonicalize";
 import {
   resolveConversationIdentity,
@@ -63,6 +58,11 @@ export interface IngestConversationInput {
 
 export interface IngestResult {
   newCanonicalEvents: number;
+  /** New messages saved but not yet turned into ideas because the AI was unavailable; they're
+   *  processed automatically once it's back. 0 normally. */
+  extractionPending?: number;
+  /** Why extraction is waiting (the AI provider's error), when it is. */
+  extractionError?: string | null;
   /** Grounded events the signal gate PROMOTED to ideas this call. */
   newCognitiveEvents: number;
   /** Grounded events the signal gate declined to persist (stored for replay, not attached). */
@@ -298,14 +298,29 @@ export async function ingestConversation(
     };
   }
 
-  const existingIdeas = new Map(loadIdeas(db).map((i) => [i.id, i]));
-
-  const result = await runPipeline(allEvents, providers, { existingIdeas, newEventIds: extractIds, dismissed: dismissedExamples(db) });
-  persistPipelineResult(db, allEvents, result); // writes every row, incl. promoted status=committed
+  // Stored first, then extracted -- or deferred with the reason if the AI is unavailable.
+  const outcome = await extractOrDefer(db, allEvents, extractIds, providers);
+  if (!outcome.result) {
+    return {
+      ...zeros,
+      newCanonicalEvents: newToCanonical.size,
+      extractionPending: outcome.deferred,
+      extractionError: outcome.error,
+      ideaCount: existingIdeaCount(),
+      integrityOk: integrity.ok,
+      integrityIssues: integrity.issues,
+      provisionalEvents: provisionalParked,
+      promotedEvents: promoting.size,
+      retractedProvisional: retracted,
+      identityStatus: identity.status,
+      identityConflicts: identity.conflicts,
+    };
+  }
+  const result = outcome.result;
 
   // Reconsider earlier medium-value discards now that this call may have created the idea they
-  // belong to. Incremental-only -- see replayDiscardedEvents.
-  const replay = await replayDiscardedEvents(db, providers);
+  // belong to. Incremental-only -- see replayDiscardedEvents. Best-effort: the capture is done.
+  const replay = await replayDiscardedEvents(db, providers).catch(() => ({ promoted: 0 }));
 
   return {
     newCanonicalEvents: newToCanonical.size,
