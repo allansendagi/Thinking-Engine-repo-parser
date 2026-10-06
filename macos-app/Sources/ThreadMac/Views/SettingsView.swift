@@ -420,9 +420,8 @@ private struct AccentSwatch: View {
 }
 
 
-/// What Thread captures on this Mac, beyond the browser: AI tools whose history is in files here
-/// (read natively the moment it changes), and -- opt-in -- desktop AI apps read through
-/// Accessibility.
+/// What Thread captures on this Mac, beyond the browser: AI tools whose history is in files here,
+/// read natively the moment it changes, one switch per tool.
 private struct CaptureSection: View {
     @EnvironmentObject var appState: AppState
     @State private var detected: [(source: String, name: String)] = []
@@ -461,6 +460,5 @@ private struct CaptureSection: View {
             detected = AppDelegate.shared?.localHistory?.detectedSources() ?? []
             enabled = Dictionary(uniqueKeysWithValues: detected.map { ($0.source, CaptureSettings.isLocalSourceEnabled($0.source)) })
         }
-    }
     }
 }

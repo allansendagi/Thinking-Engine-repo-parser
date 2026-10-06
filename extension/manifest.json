@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Thread \u2014 Continuity Layer",
-  "version": "0.4.1",
+  "name": "Thread — Continuity Layer",
+  "version": "0.4.2",
   "description": "Captures the ideas you develop in ChatGPT, Claude, and Gemini, and lets you recover and continue your thinking.",
   "icons": {
     "16": "icons/icon16.png",
@@ -13,7 +13,9 @@
     "storage",
     "sidePanel",
     "alarms",
-    "scripting"
+    "scripting",
+    "contextMenus",
+    "activeTab"
   ],
   "host_permissions": [
     "http://localhost/*",
