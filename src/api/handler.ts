@@ -1,4 +1,5 @@
-import { mkdirSync, statfsSync, unlinkSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -956,9 +957,14 @@ function checkStorage(): Record<string, unknown> {
     out.writeError = describeFailure(e);
   }
   try {
-    const s = statfsSync(dir);
-    out.freeMB = Math.floor((Number(s.bavail) * Number(s.bsize)) / 1_048_576);
-    out.totalMB = Math.floor((Number(s.blocks) * Number(s.bsize)) / 1_048_576);
+    // Looked up at call time, never imported by name: older Bun builds (Railway's image pins
+    // one) have no fs.statfsSync, and a missing named import would crash the server at startup.
+    const statfs = (fs as unknown as { statfsSync?: (p: string) => { bavail: number; bsize: number; blocks: number } }).statfsSync;
+    if (statfs) {
+      const s = statfs(dir);
+      out.freeMB = Math.floor((Number(s.bavail) * Number(s.bsize)) / 1_048_576);
+      out.totalMB = Math.floor((Number(s.blocks) * Number(s.bsize)) / 1_048_576);
+    }
   } catch {
     // statfs unavailable -- leave sizes out
   }
