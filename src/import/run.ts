@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { parseChatGptExport } from "../parser/chatgpt";
 import { parseClaudeExport } from "../parser/claude";
-import { loadCanonicalEvents, loadIdeas } from "../db/queries";
+import { countIdeas, loadCanonicalIds } from "../db/queries";
 import type { PipelineProviders } from "../state/pipeline";
 import { extractOrDefer } from "../state/deferred";
 import type { CanonicalEvent } from "../types";
@@ -40,11 +40,11 @@ export async function importIntoDb(
   events: CanonicalEvent[],
   providers: PipelineProviders,
 ): Promise<ImportSummary> {
-  const existingCanonicalIds = new Set(loadCanonicalEvents(db).map((e) => e.id));
+  const existingCanonicalIds = loadCanonicalIds(db);
   const newEventIds = new Set(events.filter((e) => !existingCanonicalIds.has(e.id)).map((e) => e.id));
 
   if (newEventIds.size === 0) {
-    return { newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: loadIdeas(db).length };
+    return { newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: countIdeas(db) };
   }
 
   const conversationsWithNewEvents = new Set(
@@ -59,7 +59,7 @@ export async function importIntoDb(
       newCanonicalEvents: newEventIds.size,
       newCognitiveEvents: 0,
       rejectedExtractions: 0,
-      ideaCount: loadIdeas(db).length,
+      ideaCount: countIdeas(db),
       extractionPending: outcome.deferred,
       extractionError: outcome.error,
     };

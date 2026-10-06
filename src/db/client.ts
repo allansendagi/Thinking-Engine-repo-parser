@@ -13,6 +13,7 @@ const ADD_COLUMNS: [table: string, column: string][] = [
   ["canonical_events", "capture_fidelity TEXT"],
   ["canonical_events", "status TEXT NOT NULL DEFAULT 'committed'"],
   ["canonical_events", "text_removed_at TEXT"],
+  ["canonical_events", "fingerprint TEXT"],
   ["evidence", "identity TEXT"],
   ["evidence", "source TEXT"],
   ["cognitive_events", "role TEXT"],
@@ -57,8 +58,11 @@ export function openDb(path: string): Database {
   if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL;");
   const { user_version } = db.query("PRAGMA user_version").get() as { user_version: number };
   if (user_version !== SCHEMA_VERSION) {
-    db.exec(SCHEMA_SQL);
+    // Columns first: schema.sql also creates indexes, some on columns a database from before
+    // that column existed doesn't have yet. (On a fresh file the ALTERs find no table and no-op, hence the second pass.)
     migrate(db);
+    db.exec(SCHEMA_SQL);
+    migrate(db); // a fresh file's tables only exist now
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
   return db;

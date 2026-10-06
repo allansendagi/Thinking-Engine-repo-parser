@@ -7,6 +7,7 @@ import {
   persistCanonicalEvents,
   persistPipelineResult,
   runPipeline,
+  snapshotIdeas,
   type PipelineProviders,
   type PipelineResult,
 } from "./pipeline";
@@ -85,12 +86,14 @@ async function extractOrDeferLocked(
 
   // 3. This capture.
   try {
+    const existing = new Map(loadIdeas(db).map((i) => [i.id, i]));
+    const baseline = snapshotIdeas(existing); // so only the ideas this capture touches are written
     const result = await runPipeline(contextEvents, providers, {
-      existingIdeas: new Map(loadIdeas(db).map((i) => [i.id, i])),
+      existingIdeas: existing,
       newEventIds: extractIds,
       dismissed: dismissedExamples(db),
     });
-    persistPipelineResult(db, contextEvents, result);
+    persistPipelineResult(db, contextEvents, result, baseline);
     clear(db, extractIds);
     // Their ideas exist now; apply the person's retention setting to the text that fed them.
     applyRetention(db);
@@ -124,7 +127,6 @@ async function retryUnlocked(
     )
     .all(maxConversations) as { conversation_id: string }[];
   if (convs.length === 0) return { processed: 0, error: null };
-  const all = loadCanonicalEvents(db);
   let processed = 0;
   for (const { conversation_id } of convs) {
     const ids = new Set(
@@ -132,7 +134,7 @@ async function retryUnlocked(
         event_id: string;
       }[]).map((r) => r.event_id),
     );
-    const context = all.filter((e) => e.conversationId === conversation_id);
+    const context = loadCanonicalEvents(db, conversation_id);
     // Rows whose event vanished (a provisional event later retracted) have nothing to extract.
     const live = new Set([...ids].filter((id) => context.some((e) => e.id === id && e.status === "committed")));
     if (live.size === 0) {
@@ -140,12 +142,14 @@ async function retryUnlocked(
       continue;
     }
     try {
+      const existing = new Map(loadIdeas(db).map((i) => [i.id, i]));
+      const baseline = snapshotIdeas(existing);
       const result = await runPipeline(context, providers, {
-        existingIdeas: new Map(loadIdeas(db).map((i) => [i.id, i])),
+        existingIdeas: existing,
         newEventIds: live,
         dismissed: dismissedExamples(db),
       });
-      persistPipelineResult(db, context, result);
+      persistPipelineResult(db, context, result, baseline);
       clear(db, ids);
       applyRetention(db);
       processed += live.size;

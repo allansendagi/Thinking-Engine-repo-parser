@@ -49,6 +49,7 @@ import {
   getConversation,
   listConversations,
   loadCanonicalEvents,
+  countIdeas,
   loadIdeas,
 } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
@@ -171,7 +172,7 @@ function deviceNameFrom(
 function ideaCountFor(userId: string): number {
   const db = openUserDb(userId);
   try {
-    return loadIdeas(db).length;
+    return countIdeas(db);
   } finally {
     db.close();
   }
@@ -181,7 +182,7 @@ function ideaCountFor(userId: string): number {
 function accountIsEmpty(userId: string): boolean {
   const db = openUserDb(userId);
   try {
-    return loadIdeas(db).length === 0 && loadCanonicalEvents(db).length === 0;
+    return countIdeas(db) === 0 && (db.query("SELECT COUNT(*) AS n FROM canonical_events").get() as { n: number }).n === 0;
   } finally {
     db.close();
   }
@@ -603,7 +604,7 @@ export function createRequestHandler(
       if (
         isCaptureRoute &&
         billingConfigured() &&
-        !canCapture(getAccount(userId), loadIdeas(db).length)
+        !canCapture(getAccount(userId), countIdeas(db))
       ) {
         return error(
           402,
@@ -708,7 +709,7 @@ export function createRequestHandler(
             newCanonicalEvents: 0,
             newCognitiveEvents: 0,
             rejectedExtractions: 0,
-            ideaCount: loadIdeas(db).length,
+            ideaCount: countIdeas(db),
           });
         if (body.conversations.length > IMPORT_BATCH_MAX) {
           return error(

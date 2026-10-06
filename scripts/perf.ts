@@ -93,6 +93,8 @@ for (let c = 0; c < CONVERSATIONS; c++) {
   bucket.push(await send(c, TURNS));
   if ((c + 1) % bucketSize === 0) {
     slices.push({ upTo: c + 1, ms: bucket });
+    // Progress as it happens: a slow build is the finding, not something to wait out silently.
+    console.log(`  ${String(c + 1).padStart(5)} conversations: p50 ${fmt(pct(bucket, 0.5))} ms  p95 ${fmt(pct(bucket, 0.95))} ms  (${((performance.now() - buildStart) / 1000).toFixed(0)}s elapsed)`);
     bucket = [];
   }
 }

@@ -12,7 +12,7 @@ import type {
 } from "../types";
 
 import {
-  contentFingerprint,
+  messageFingerprint,
   type KnownConversation,
 } from "../state/resolveConversationIdentity";
 
@@ -37,18 +37,21 @@ interface IdeaRow {
   updated_at: string;
 }
 interface EvolutionRow {
+  idea_id: string;
   cognitive_event_id: string;
   formulation: string;
   created_at: string;
   source_event_id: string;
 }
 interface OpenLoopRow {
+  idea_id: string;
   id: string;
   statement: string;
   created_at: string;
   resolved: number;
 }
 interface DecisionRow {
+  idea_id: string;
   id: string;
   statement: string;
   decided_at: string;
@@ -84,72 +87,87 @@ interface CanonicalEventRow {
 
 /** Loads every idea, with its evolution/open loops/decisions/related ids, from SQLite. */
 export function loadIdeas(db: Database): IdeaNode[] {
-  const ideaRows = db.query("SELECT * FROM idea_nodes").all() as IdeaRow[];
+  return loadIdeaGraph(db);
+}
 
-  return ideaRows.map((row): IdeaNode => {
-    const evolution = (
-      db.query("SELECT * FROM evolution_steps WHERE idea_id = ? ORDER BY created_at ASC").all(row.id) as EvolutionRow[]
-    ).map((e) => ({
+/** One idea, read on its own -- not by loading the whole graph and picking it out. */
+export function loadIdea(db: Database, id: string): IdeaNode | undefined {
+  return loadIdeaGraph(db, id)[0];
+}
+
+function loadIdeaGraph(db: Database, only?: string): IdeaNode[] {
+  const where = only === undefined ? "" : " WHERE id = ?";
+  const whereIdea = only === undefined ? "" : " WHERE idea_id = ?";
+  const args = only === undefined ? [] : [only];
+  const ideaRows = db.query(`SELECT * FROM idea_nodes${where}`).all(...args) as IdeaRow[];
+  if (ideaRows.length === 0) return [];
+
+  // Four queries for the whole graph, grouped in memory -- not four per idea. (The per-idea version
+  // was one of the costs that made every capture slower as an account grew.) Order within an idea is
+  // the same as before: steps and loops oldest first, decisions by date.
+  const group = <T extends { idea_id: string }>(rows: T[]): Map<string, T[]> => {
+    const m = new Map<string, T[]>();
+    for (const r of rows) {
+      const list = m.get(r.idea_id);
+      if (list) list.push(r);
+      else m.set(r.idea_id, [r]);
+    }
+    return m;
+  };
+  const steps = group(db.query(`SELECT * FROM evolution_steps${whereIdea} ORDER BY created_at ASC`).all(...args) as EvolutionRow[]);
+  const loops = group(db.query(`SELECT * FROM open_loops${whereIdea} ORDER BY created_at ASC`).all(...args) as OpenLoopRow[]);
+  const decisions = group(db.query(`SELECT * FROM decisions${whereIdea} ORDER BY decided_at ASC`).all(...args) as DecisionRow[]);
+  const related = group(db.query(`SELECT idea_id, related_idea_id FROM related_ideas${whereIdea}`).all(...args) as (RelatedRow & { idea_id: string })[]);
+
+  return ideaRows.map((row): IdeaNode => ({
+    id: row.id,
+    title: row.title,
+    state: row.state as IdeaState,
+    currentFormulation: row.current_formulation,
+    whyItMatters: row.why_it_matters ?? undefined,
+    evolution: (steps.get(row.id) ?? []).map((e) => ({
       cognitiveEventId: e.cognitive_event_id,
       formulation: e.formulation,
       createdAt: e.created_at,
       sourceEventId: e.source_event_id,
-    }));
-
-    const openLoops = (
-      db.query("SELECT * FROM open_loops WHERE idea_id = ? ORDER BY created_at ASC").all(row.id) as OpenLoopRow[]
-    ).map((l) => ({ id: l.id, statement: l.statement, createdAt: l.created_at, resolved: l.resolved === 1 }));
-
-    const decisions = (
-      db.query("SELECT * FROM decisions WHERE idea_id = ? ORDER BY decided_at ASC").all(row.id) as DecisionRow[]
-    ).map((d) => ({ id: d.id, statement: d.statement, decidedAt: d.decided_at, sourceEventId: d.source_event_id }));
-
-    const relatedIdeaIds = (
-      db.query("SELECT related_idea_id FROM related_ideas WHERE idea_id = ?").all(row.id) as RelatedRow[]
-    ).map((r) => r.related_idea_id);
-
-    return {
-      id: row.id,
-      title: row.title,
-      state: row.state as IdeaState,
-      currentFormulation: row.current_formulation,
-      whyItMatters: row.why_it_matters ?? undefined,
-      evolution,
-      openLoops,
-      decisions,
-      relatedIdeaIds,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
-  });
+    })),
+    openLoops: (loops.get(row.id) ?? []).map((l) => ({ id: l.id, statement: l.statement, createdAt: l.created_at, resolved: l.resolved === 1 })),
+    decisions: (decisions.get(row.id) ?? []).map((d) => ({ id: d.id, statement: d.statement, decidedAt: d.decided_at, sourceEventId: d.source_event_id })),
+    relatedIdeaIds: (related.get(row.id) ?? []).map((r) => r.related_idea_id),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
 }
 
-export function loadIdea(db: Database, id: string): IdeaNode | undefined {
-  return loadIdeas(db).find((i) => i.id === id);
+/** How many ideas there are, without loading them. */
+export function countIdeas(db: Database): number {
+  return (db.query("SELECT COUNT(*) AS n FROM idea_nodes").get() as { n: number }).n;
 }
 
 export function loadCognitiveEvents(db: Database): CognitiveEvent[] {
   const rows = db.query("SELECT * FROM cognitive_events").all() as CognitiveEventRow[];
-  return rows.map((r) => {
-    const additional = (
-      db.query("SELECT canonical_event_id FROM cognitive_event_sources WHERE cognitive_event_id = ?").all(r.id) as {
-        canonical_event_id: string;
-      }[]
-    ).map((a) => a.canonical_event_id);
-
-    return {
-      id: r.id,
-      type: r.type as CognitiveEvent["type"],
-      statement: r.statement,
-      confidence: r.confidence,
-      persistence: (r.persistence as CognitiveEvent["persistence"]) ?? "high",
-      persistenceReason: r.persistence_reason ?? undefined,
-      sourceEventId: r.source_event_id,
-      evidenceQuote: r.evidence_quote,
-      whyItMatters: r.why_it_matters ?? undefined,
-      additionalSourceEventIds: additional,
-    };
-  });
+  // One query for every event's extra sources, not one per event.
+  const extra = new Map<string, string[]>();
+  for (const a of db.query("SELECT cognitive_event_id, canonical_event_id FROM cognitive_event_sources").all() as {
+    cognitive_event_id: string;
+    canonical_event_id: string;
+  }[]) {
+    const list = extra.get(a.cognitive_event_id);
+    if (list) list.push(a.canonical_event_id);
+    else extra.set(a.cognitive_event_id, [a.canonical_event_id]);
+  }
+  return rows.map((r) => ({
+    id: r.id,
+    type: r.type as CognitiveEvent["type"],
+    statement: r.statement,
+    confidence: r.confidence,
+    persistence: (r.persistence as CognitiveEvent["persistence"]) ?? "high",
+    persistenceReason: r.persistence_reason ?? undefined,
+    sourceEventId: r.source_event_id,
+    evidenceQuote: r.evidence_quote,
+    whyItMatters: r.why_it_matters ?? undefined,
+    additionalSourceEventIds: extra.get(r.id) ?? [],
+  }));
 }
 
 interface DiscardedEventRow {
@@ -185,8 +203,43 @@ export function loadDiscardedEvents(db: Database): DiscardedEvent[] {
   }));
 }
 
-export function loadCanonicalEvents(db: Database): CanonicalEvent[] {
-  const rows = db.query("SELECT * FROM canonical_events ORDER BY idx ASC").all() as CanonicalEventRow[];
+/** Messages, in transcript order -- all of them, or one conversation's (indexed). */
+export function loadCanonicalEvents(db: Database, conversationId?: string): CanonicalEvent[] {
+  const rows = (
+    conversationId === undefined
+      ? db.query("SELECT * FROM canonical_events ORDER BY idx ASC").all()
+      : db.query("SELECT * FROM canonical_events WHERE conversation_id = ? ORDER BY idx ASC").all(conversationId)
+  ) as CanonicalEventRow[];
+  return canonicalFromRows(rows);
+}
+
+/** Just the messages with these ids -- what an idea's provenance needs, not the whole account. */
+export function loadCanonicalEventsByIds(db: Database, ids: string[]): CanonicalEvent[] {
+  const unique = [...new Set(ids)];
+  const rows: CanonicalEventRow[] = [];
+  for (let i = 0; i < unique.length; i += 500) {
+    const chunk = unique.slice(i, i + 500);
+    rows.push(
+      ...(db
+        .query(`SELECT * FROM canonical_events WHERE id IN (${chunk.map(() => "?").join(",")})`)
+        .all(...chunk) as CanonicalEventRow[]),
+    );
+  }
+  return canonicalFromRows(rows);
+}
+
+/** message id -> where it came from, without reading any message text. */
+export function loadEventSources(db: Database): Map<string, CanonicalEvent["source"]> {
+  const rows = db.query("SELECT id, source FROM canonical_events").all() as { id: string; source: string }[];
+  return new Map(rows.map((r) => [r.id, r.source as CanonicalEvent["source"]]));
+}
+
+/** Every message id, without reading any message text. */
+export function loadCanonicalIds(db: Database): Set<string> {
+  return new Set((db.query("SELECT id FROM canonical_events").all() as { id: string }[]).map((r) => r.id));
+}
+
+function canonicalFromRows(rows: CanonicalEventRow[]): CanonicalEvent[] {
   return rows.map((r) => ({
     id: r.id,
     conversationId: r.conversation_id,
@@ -224,29 +277,33 @@ export function loadCanonicalIdentity(
     .all(conversationId) as { id: string; role: string; text: string }[];
 }
 
-/** Every known conversation with its content fingerprint (verbatim-normalized message texts) and
- *  URL -- the corpus the conversation-identity resolver checks an observation against
- *  (state/resolveConversationIdentity.ts). The fingerprint is computed via the resolver's own
- *  `contentFingerprint` so both sides normalize identically. Computed on read; cheap at this
- *  scale, materialize later if a user's history gets large. */
+/** Every known conversation with its content fingerprint and URL -- the corpus the
+ *  conversation-identity resolver checks an observation against
+ *  (state/resolveConversationIdentity.ts). Each message's fingerprint is stored with it when it is
+ *  written, so this is one indexed-width scan of short hashes -- not a re-read and re-normalize of
+ *  every message's text on every capture. Rows written before the column existed are filled in
+ *  here, once. */
 export function loadConversationFingerprints(db: Database): KnownConversation[] {
-  const rows = db
-    .query("SELECT conversation_id, text, source_url FROM canonical_events")
-    .all() as { conversation_id: string; text: string; source_url: string | null }[];
-  const byConv = new Map<string, { texts: { text: string }[]; sourceUrl: string | null }>();
-  for (const r of rows) {
-    let entry = byConv.get(r.conversation_id);
-    if (!entry) {
-      entry = { texts: [], sourceUrl: r.source_url ?? null };
-      byConv.set(r.conversation_id, entry);
-    }
-    entry.texts.push({ text: r.text });
-    if (!entry.sourceUrl && r.source_url) entry.sourceUrl = r.source_url;
+  const missing = db
+    .query("SELECT id, text FROM canonical_events WHERE fingerprint IS NULL AND text <> ''")
+    .all() as { id: string; text: string }[];
+  if (missing.length > 0) {
+    const set = db.prepare("UPDATE canonical_events SET fingerprint = ? WHERE id = ?");
+    db.transaction(() => {
+      // Too-short turns get '' so they are not revisited.
+      for (const m of missing) set.run(messageFingerprint(m.text) ?? "", m.id);
+    })();
   }
-  return [...byConv.entries()].map(([conversationId, v]) => ({
-    conversationId,
-    fingerprint: contentFingerprint(v.texts),
-    sourceUrl: v.sourceUrl,
+  const rows = db
+    .query(
+      `SELECT conversation_id, MAX(source_url) AS source_url, group_concat(fingerprint, ' ') AS fps
+       FROM canonical_events GROUP BY conversation_id`,
+    )
+    .all() as { conversation_id: string; source_url: string | null; fps: string | null }[];
+  return rows.map((r) => ({
+    conversationId: r.conversation_id,
+    fingerprint: new Set((r.fps ?? "").split(" ").filter(Boolean)),
+    sourceUrl: r.source_url ?? null,
   }));
 }
 

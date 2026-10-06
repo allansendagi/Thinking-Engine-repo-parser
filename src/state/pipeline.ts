@@ -7,6 +7,7 @@ import { resolveIdentity } from "../identity/resolve";
 import { rankCandidates, narrowCandidates } from "../identity/signals";
 import { quickGate, strongMatchScore } from "./signalGate";
 import { applyCognitiveEvent, isConfidentExistingMatch } from "./buildIdeaNode";
+import { messageFingerprint } from "./resolveConversationIdentity";
 
 export interface PipelineResult {
   ideas: Map<string, IdeaNode>;
@@ -188,23 +189,46 @@ export function persistCanonicalEvents(db: Database, canonicalEvents: CanonicalE
   const insertCanonical = db.prepare(
     `INSERT OR REPLACE INTO canonical_events
        (id, conversation_id, source, role, text, created_at, idx, source_url,
-        capture_method, capture_fidelity, status)
+        capture_method, capture_fidelity, status, fingerprint)
      VALUES (
        ?, ?, ?, ?, ?, ?, ?,
        COALESCE(?, (SELECT source_url FROM canonical_events WHERE id = ?)),
        COALESCE(?, (SELECT capture_method FROM canonical_events WHERE id = ?)),
        COALESCE(?, (SELECT capture_fidelity FROM canonical_events WHERE id = ?)),
-       ?
+       ?, ?
      )`,
   );
-  // A message whose text the person's retention setting removed stays removed: clients re-send the
-  // whole transcript on every page change, and INSERT OR REPLACE would otherwise write the text
-  // straight back.
-  const removed = new Set(
-    (db.query("SELECT id FROM canonical_events WHERE text_removed_at IS NOT NULL").all() as { id: string }[]).map((r) => r.id),
+  // Clients re-send the whole transcript on every page change, so most of what arrives is already
+  // stored exactly as it is: look at what's there for these conversations and write only what is
+  // new or different. A message whose text the person's retention setting removed stays removed --
+  // INSERT OR REPLACE would otherwise write the text straight back.
+  type Stored = {
+    id: string; source: string; role: string; text: string; created_at: string; idx: number;
+    source_url: string | null; capture_method: string | null; capture_fidelity: string | null;
+    status: string; fingerprint: string | null; text_removed_at: string | null;
+  };
+  const stored = new Map<string, Stored>();
+  const loadStored = db.prepare(
+    `SELECT id, source, role, text, created_at, idx, source_url, capture_method, capture_fidelity, status, fingerprint, text_removed_at
+     FROM canonical_events WHERE conversation_id = ?`,
   );
+  for (const cid of new Set(canonicalEvents.map((e) => e.conversationId))) {
+    for (const r of loadStored.all(cid) as Stored[]) stored.set(r.id, r);
+  }
   for (const e of canonicalEvents) {
-    if (removed.has(e.id)) continue;
+    const old = stored.get(e.id);
+    if (old?.text_removed_at) continue;
+    if (
+      old &&
+      old.text === e.text && old.role === e.role && old.source === e.source && old.created_at === e.createdAt &&
+      old.idx === e.index && old.status === (e.status ?? "committed") &&
+      (e.sourceUrl == null || old.source_url === e.sourceUrl) &&
+      (e.capture?.method == null || old.capture_method === e.capture.method) &&
+      (e.capture?.fidelity == null || old.capture_fidelity === e.capture.fidelity) &&
+      (old.fingerprint !== null || messageFingerprint(e.text) === null)
+    ) {
+      continue; // already stored exactly as it is
+    }
     insertCanonical.run(
       e.id,
       e.conversationId,
@@ -220,14 +244,67 @@ export function persistCanonicalEvents(db: Database, canonicalEvents: CanonicalE
       e.capture?.fidelity ?? null,
       e.id,
       e.status ?? "committed",
+      messageFingerprint(e.text),
     );
   }
 }
 
+/**
+ * An exact fingerprint of everything persisted about an idea. Taken before a pipeline run and
+ * compared after, it tells `persistPipelineResult` which ideas actually changed -- so a capture
+ * writes the one or two ideas it touched, not the whole graph.
+ */
+function stepSignature(e: IdeaNode["evolution"][number]): string {
+  return `${e.cognitiveEventId}\u0001${e.formulation}\u0001${e.createdAt}\u0001${e.sourceEventId}`;
+}
+
+export function ideaSignature(i: IdeaNode): string {
+  return [
+    i.title,
+    i.state,
+    i.currentFormulation,
+    i.whyItMatters ?? "",
+    i.createdAt,
+    i.updatedAt,
+    i.evolution.map(stepSignature).join("\u0002"),
+    i.openLoops.map((l) => `${l.id}\u0001${l.statement}\u0001${l.createdAt}\u0001${l.resolved ? 1 : 0}`).join("\u0002"),
+    i.decisions.map((d) => `${d.id}\u0001${d.statement}\u0001${d.decidedAt}\u0001${d.sourceEventId}`).join("\u0002"),
+    [...i.relatedIdeaIds].sort().join("\u0002"),
+  ].join("\u0003");
+}
+
+/** What was stored for an idea before a run: its whole signature, and its steps one by one so a
+ *  changed idea rewrites only the steps that are new or different, not its entire history. */
+export interface IdeaBaseline {
+  signature: string;
+  steps: Set<string>;
+}
+
+export function snapshotIdeas(ideas: Map<string, IdeaNode>): Map<string, IdeaBaseline> {
+  return new Map(
+    [...ideas].map(([id, idea]) => [id, { signature: ideaSignature(idea), steps: new Set(idea.evolution.map(stepSignature)) }]),
+  );
+}
+
+/**
+ * Write a pipeline run to the database, all or nothing, in one transaction. With `baseline` (from
+ * `snapshotIdeas`, taken before the run) only the ideas that changed or are new are written; without
+ * it every idea is -- the old behaviour, still right for callers that build the whole graph afresh.
+ */
 export function persistPipelineResult(
   db: Database,
   canonicalEvents: CanonicalEvent[],
   result: PipelineResult,
+  baseline?: Map<string, IdeaBaseline>,
+): void {
+  db.transaction(() => persistPipelineResultUnchecked(db, canonicalEvents, result, baseline))();
+}
+
+function persistPipelineResultUnchecked(
+  db: Database,
+  canonicalEvents: CanonicalEvent[],
+  result: PipelineResult,
+  baseline?: Map<string, IdeaBaseline>,
 ): void {
   persistCanonicalEvents(db, canonicalEvents);
 
@@ -307,8 +384,11 @@ export function persistPipelineResult(
   );
 
   for (const idea of result.ideas.values()) {
+    const before = baseline?.get(idea.id);
+    if (before && before.signature === ideaSignature(idea)) continue; // unchanged: already stored
     insertIdea.run(idea.id, idea.title, idea.state, idea.currentFormulation, idea.whyItMatters ?? null, idea.createdAt, idea.updatedAt);
     for (const step of idea.evolution) {
+      if (before?.steps.has(stepSignature(step))) continue; // already stored exactly as it is
       insertEvolution.run(idea.id, step.cognitiveEventId, step.formulation, step.createdAt, step.sourceEventId);
     }
     for (const loop of idea.openLoops) {

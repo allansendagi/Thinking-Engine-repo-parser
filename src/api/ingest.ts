@@ -5,7 +5,7 @@ import {
   loadCanonicalIdentity,
   loadCanonicalStatuses,
   loadConversationFingerprints,
-  loadIdeas,
+  countIdeas,
 } from "../db/queries";
 import { persistCanonicalEvents, type PipelineProviders } from "../state/pipeline";
 import { replayDiscardedEvents } from "../state/replayDiscarded";
@@ -149,7 +149,7 @@ export async function ingestConversation(
   input: IngestConversationInput,
   providers: PipelineProviders,
 ): Promise<IngestResult> {
-  const existingIdeaCount = () => loadIdeas(db).length;
+  const existingIdeaCount = () => countIdeas(db);
   const zeros = {
     newCanonicalEvents: 0,
     newCognitiveEvents: 0,
@@ -328,7 +328,7 @@ export async function ingestConversation(
     discardedEvents: result.discardedEvents.length,
     promotedFromDiscard: replay.promoted,
     rejectedExtractions: result.rejectedExtractions.length,
-    ideaCount: loadIdeas(db).length,
+    ideaCount: countIdeas(db),
     integrityOk: integrity.ok,
     integrityIssues: integrity.issues,
     provisionalEvents: provisionalParked,

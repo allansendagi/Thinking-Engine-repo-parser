@@ -6,7 +6,7 @@ import { rankCandidates, narrowCandidates } from "../identity/signals";
 import { resolveIdentity } from "../identity/resolve";
 import { applyCognitiveEvent, isConfidentExistingMatch } from "./buildIdeaNode";
 import { quickGate, strongMatchScore } from "./signalGate";
-import { persistPipelineResult, type PipelineProviders } from "./pipeline";
+import { persistPipelineResult, snapshotIdeas, type PipelineProviders } from "./pipeline";
 
 /** Substring of the gate reason for the one replayable discard branch (medium, no match yet). */
 const REPLAYABLE_MARKER = "persist only if it extends an existing idea";
@@ -35,6 +35,7 @@ export async function replayDiscardedEvents(
 
   const canonicalById = new Map(loadCanonicalEvents(db).map((e) => [e.id, e]));
   const ideas = new Map(loadIdeas(db).map((i) => [i.id, i]));
+  const baseline = snapshotIdeas(ideas); // only the ideas this pass changes get written
 
   // Oldest source first, so an event promoted in this pass can itself be the match for the next.
   pending.sort((a, b) => {
@@ -78,7 +79,7 @@ export async function replayDiscardedEvents(
     discardedEvents: [],
     resolutions,
     rejectedExtractions: [],
-  });
+  }, baseline);
   deleteDiscardedEvents(db, promotedIds);
   return { promoted: promotedEvents.length };
 }
