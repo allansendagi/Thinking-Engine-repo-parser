@@ -6,6 +6,7 @@ import SwiftUI
 struct ConversationView: View {
     @EnvironmentObject var appState: AppState
     let transcript: ConversationTranscript
+    @State private var confirmDelete = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -28,10 +29,22 @@ struct ConversationView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                Button { confirmDelete = true } label: { Image(systemName: "trash") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.ink(0.5))
+                    .help("Delete this conversation and everything Thread built from it")
                 Button("Done") { appState.closeConversation() }
                     .keyboardShortcut(.cancelAction)
             }
             .padding(16)
+            .confirmationDialog("Delete this conversation?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("Delete conversation", role: .destructive) {
+                    Task { _ = await appState.deleteConversation(transcript.conversationId) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Removes its \(transcript.messages.count) messages and every idea, thought and vector Thread built from them. Ideas that also rest on other conversations are kept and rewritten from what remains. This can't be undone.")
+            }
 
             Divider()
 

@@ -31,7 +31,7 @@ final class APIClient {
         self.decoder = JSONDecoder()
     }
 
-    private func request<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil) async throws -> T {
+    private func rawRequest(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
         // A base URL with no scheme (e.g. a bare host typed into Settings) still yields a non-nil
         // *relative* URL here, which URLSession then rejects with the opaque "unsupported URL".
         // Catch it with a clear message instead.
@@ -60,6 +60,11 @@ final class APIClient {
             throw APIError.http(status: status, message: message)
         }
 
+        return data
+    }
+
+    private func request<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil) async throws -> T {
+        let data = try await rawRequest(path, method: method, body: body)
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -169,6 +174,30 @@ final class APIClient {
         struct Wrap: Decodable { let conversations: [ConversationSummary] }
         let w: Wrap = try await request("/v1/conversations")
         return w.conversations
+    }
+
+    // MARK: - Your data
+
+    func dataSummary() async throws -> DataSummaryResponse {
+        try await request("/v1/account/data-summary")
+    }
+
+    /// A full copy of everything Thread holds for this account, as the server's JSON.
+    func exportData() async throws -> Data {
+        try await rawRequest("/v1/account/export")
+    }
+
+    /// Remove one conversation and everything derived from it.
+    func deleteConversation(id: String) async throws -> ConversationRemoval {
+        try await request("/v1/conversations/\(Self.pathSegment(id))", method: "DELETE")
+    }
+
+    /// Delete the account and all of its data. The server insists on the typed confirmation and
+    /// answers 409 `subscription_active` while a paid plan is live unless acknowledged.
+    func deleteEverything(acknowledgeSubscription: Bool) async throws -> AccountDeletionReceipt {
+        struct Body: Encodable { let confirm: String; let acknowledgeSubscription: Bool }
+        let body = try JSONEncoder().encode(Body(confirm: "delete everything", acknowledgeSubscription: acknowledgeSubscription))
+        return try await request("/v1/account/data", method: "DELETE", body: body)
     }
 
     /// Historical backfill: one batch of an exported `conversations.json` array. `conversations`
