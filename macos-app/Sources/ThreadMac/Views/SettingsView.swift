@@ -15,7 +15,26 @@ struct SettingsView: View {
     @State private var tick = 0
     private let heartbeat = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
+    /// The panel is as tall as its content, which on a laptop screen is taller than the screen.
+    /// Cap it to the visible screen, scroll the settings, and keep Quit / Done pinned at the bottom.
+    private var maxPanelHeight: CGFloat {
+        (NSScreen.main?.visibleFrame.height ?? 800) - 120
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView { settingsContent.padding(16) }
+            Divider()
+            footer.padding(12)
+        }
+        .frame(width: 340)
+        .frame(maxHeight: maxPanelHeight)
+        .tint(Theme.accent)   // buttons follow the app accent, not the OS accent colour
+        .onAppear { urlDraft = appState.apiBaseUrl }
+        .onReceive(heartbeat) { _ in tick &+= 1 }   // keep the browser-connection line current
+    }
+
+    @ViewBuilder private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Settings").font(.headline)
 
@@ -187,31 +206,26 @@ struct SettingsView: View {
                 .padding(.top, 4)
             }
             .font(.caption)
-
-            Divider()
-
-            HStack {
-                Button("Quit Thread") { NSApp.terminate(nil) }
-                    .controlSize(.small)
-                    .keyboardShortcut("q", modifiers: .command)
-                Spacer()
-                Button("Done") {
-                    // Only write if the field was actually populated and changed. It starts empty
-                    // and only fills in via .onAppear below -- without the isEmpty guard, opening
-                    // Settings and hitting Done without touching Advanced would blank the API URL.
-                    let trimmed = urlDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty && trimmed != appState.apiBaseUrl { appState.setApiBaseUrl(trimmed) }
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-            }
         }
-        .padding(16)
-        .frame(width: 340)
-        .tint(Theme.accent)   // buttons follow the app accent, not the OS accent colour
-        .onAppear { urlDraft = appState.apiBaseUrl }
-        .onReceive(heartbeat) { _ in tick &+= 1 }   // keep the browser-connection line current
+    }
+
+    @ViewBuilder private var footer: some View {
+        HStack {
+            Button("Quit Thread") { NSApp.terminate(nil) }
+                .controlSize(.small)
+                .keyboardShortcut("q", modifiers: .command)
+            Spacer()
+            Button("Done") {
+                // Only write if the field was actually populated and changed. It starts empty
+                // and only fills in via .onAppear below -- without the isEmpty guard, opening
+                // Settings and hitting Done without touching Advanced would blank the API URL.
+                let trimmed = urlDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty && trimmed != appState.apiBaseUrl { appState.setApiBaseUrl(trimmed) }
+                dismiss()
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+        }
     }
 
     /// One clean line describing the plan -- the only place subscription state lives in the app.
