@@ -120,6 +120,19 @@ describe("what Thread holds is visible", () => {
   });
 });
 
+describe("secrets are stripped on the server too (older clients)", () => {
+  test("a key pasted in a capture, a paste or an import is stored redacted -- file bytes included", async () => {
+    const u = await newUser();
+    const key = "sk-ant-api03-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz9876";
+    await capture(u.call, "conv_k", `my key is ${key} please keep the pricing idea`);
+    expect((await u.call("POST", "/v1/paste", { text: `User: remember ${key}\nAssistant: ok` })).status).toBe(200);
+    const exported = await (await u.call("GET", "/v1/account/export")).text();
+    expect(exported).not.toContain("zzzzzzzzzzzzzzzzzzzz");
+    expect(exported).toContain("[redacted api key]");
+    expect(bytesOnDisk(u.userId)).not.toContain("zzzzzzzzzzzzzzzzzzzz");
+  });
+});
+
 describe("deleting a conversation leaves nothing of it", () => {
   test("messages, thoughts, vectors, corrections, ideas and the file bytes are all clean; the rest is untouched", async () => {
     const u = await newUser();
