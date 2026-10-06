@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   contentFingerprint,
+  messageFingerprint,
   resolveConversationIdentity,
   type KnownConversation,
   type RawObservation,
@@ -94,6 +95,7 @@ describe("resolveConversationIdentity (THREAD.md §9, §17)", () => {
 
   test("very short turns are excluded from the fingerprint (they collide across unrelated chats)", () => {
     const fp = contentFingerprint([{ text: "ok" }, { text: "yes" }, { text: "sure thing" }, { text: "A properly long and distinctive sentence." }]);
-    expect([...fp]).toEqual(["a properly long and distinctive sentence."]);
+    expect([...fp]).toEqual([messageFingerprint("A properly long and distinctive sentence.")!]);
+    expect(fp.size).toBe(1);
   });
 });

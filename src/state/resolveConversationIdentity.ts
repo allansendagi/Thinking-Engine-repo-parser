@@ -88,7 +88,21 @@ function normalizeMessage(text: string): string {
  *  wanted for forks (shared prefixes should match); the tradeoff is that two genuinely distinct
  *  conversations that both open with the same boilerplate preamble drift toward a strong match. */
 export function contentFingerprint(messages: { text: string }[]): Set<string> {
-  return new Set(messages.map((m) => normalizeMessage(m.text)).filter((s) => s.length >= 12));
+  const out = new Set<string>();
+  for (const m of messages) {
+    const f = messageFingerprint(m.text);
+    if (f) out.add(f);
+  }
+  return out;
+}
+
+/** One message's entry in the fingerprint: a 64-bit hash of its normalized prefix, or null for a
+ *  turn too short to identify anything. A hash, not the text, so it can be stored with the message
+ *  (see canonical_events.fingerprint) and survive the message's text being removed by the
+ *  retention setting -- which also keeps a re-sent transcript recognised afterwards. */
+export function messageFingerprint(text: string): string | null {
+  const n = normalizeMessage(text);
+  return n.length >= 12 ? Bun.hash(n).toString(36) : null;
 }
 
 export function resolveConversationIdentity(

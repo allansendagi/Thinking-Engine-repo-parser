@@ -7,6 +7,7 @@ import {
   persistCanonicalEvents,
   persistPipelineResult,
   runPipeline,
+  snapshotIdeas,
   type PipelineProviders,
   type PipelineResult,
 } from "./pipeline";
@@ -85,12 +86,14 @@ async function extractOrDeferLocked(
 
   // 3. This capture.
   try {
+    const existing = new Map(loadIdeas(db).map((i) => [i.id, i]));
+    const baseline = snapshotIdeas(existing); // so only the ideas this capture touches are written
     const result = await runPipeline(contextEvents, providers, {
-      existingIdeas: new Map(loadIdeas(db).map((i) => [i.id, i])),
+      existingIdeas: existing,
       newEventIds: extractIds,
       dismissed: dismissedExamples(db),
     });
-    persistPipelineResult(db, contextEvents, result);
+    persistPipelineResult(db, contextEvents, result, baseline);
     clear(db, extractIds);
     // Their ideas exist now; apply the person's retention setting to the text that fed them.
     applyRetention(db);
@@ -140,12 +143,14 @@ async function retryUnlocked(
       continue;
     }
     try {
+      const existing = new Map(loadIdeas(db).map((i) => [i.id, i]));
+      const baseline = snapshotIdeas(existing);
       const result = await runPipeline(context, providers, {
-        existingIdeas: new Map(loadIdeas(db).map((i) => [i.id, i])),
+        existingIdeas: existing,
         newEventIds: live,
         dismissed: dismissedExamples(db),
       });
-      persistPipelineResult(db, context, result);
+      persistPipelineResult(db, context, result, baseline);
       clear(db, ids);
       applyRetention(db);
       processed += live.size;

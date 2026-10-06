@@ -43,14 +43,41 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : intersection / union;
 }
 
+/**
+ * Tokenizing is a pure function of the text, and the same idea texts are compared against every new
+ * thought -- so each string is split once and remembered, instead of once per comparison. Matching
+ * a new thought against an account's ideas used to re-split every formulation of every idea (regex
+ * work that dominated a capture and grew with the account). Results are identical. The sets are
+ * shared: callers must not mutate them.
+ */
+const MAX_CACHED = 100_000;
+const tokenCache = new Map<string, Set<string>>();
+const entityCache = new Map<string, Set<string>>();
+
+export function tokenSet(text: string): Set<string> {
+  let s = tokenCache.get(text);
+  if (!s) {
+    if (tokenCache.size >= MAX_CACHED) tokenCache.clear();
+    s = new Set(tokenize(text));
+    tokenCache.set(text, s);
+  }
+  return s;
+}
+
 export function lexicalOverlap(a: string, b: string): number {
-  return jaccard(new Set(tokenize(a)), new Set(tokenize(b)));
+  return jaccard(tokenSet(a), tokenSet(b));
 }
 
 /** Crude proxy for named-entity overlap: capitalized tokens (mid-string), not stopwords. */
 function extractEntityTokens(text: string): Set<string> {
-  const matches = text.match(/\b[A-Z][a-zA-Z0-9]{2,}\b/g) ?? [];
-  return new Set(matches.map((m) => m.toLowerCase()).filter((t) => !STOPWORDS.has(t)));
+  let s = entityCache.get(text);
+  if (!s) {
+    if (entityCache.size >= MAX_CACHED) entityCache.clear();
+    const matches = text.match(/\b[A-Z][a-zA-Z0-9]{2,}\b/g) ?? [];
+    s = new Set(matches.map((m) => m.toLowerCase()).filter((t) => !STOPWORDS.has(t)));
+    entityCache.set(text, s);
+  }
+  return s;
 }
 
 export function entityOverlap(a: string, b: string): number {

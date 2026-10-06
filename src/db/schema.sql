@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS canonical_events (
   -- Set when the person's retention setting removed this message's text (the row stays, so a
   -- re-sent transcript is recognised and never restores the text). NULL while the text is kept.
   text_removed_at TEXT,
+  fingerprint TEXT,
   -- Trust gate: 'committed' | 'provisional'. Provisional rows are stored and used as extraction
   -- context but never become the source of a cognitive event until a clean observation promotes
   -- them. Defaulted so pre-gate rows keep today's behavior. See CanonicalEventStatus / THREAD.md §17.
@@ -225,3 +226,18 @@ CREATE TABLE IF NOT EXISTS account_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Indexes for the lookups the server makes on every request. Without them each of these was a scan
+-- of the whole table, so a capture cost more the bigger the account -- 57 ms at 20 conversations,
+-- 220 ms at 100. All idempotent; an existing database gets them the next time it is opened.
+CREATE INDEX IF NOT EXISTS idx_canonical_conversation ON canonical_events(conversation_id, idx);
+CREATE INDEX IF NOT EXISTS idx_canonical_unfingerprinted ON canonical_events(id) WHERE fingerprint IS NULL AND text <> '';
+CREATE INDEX IF NOT EXISTS idx_canonical_removed ON canonical_events(id) WHERE text_removed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_cognitive_source ON cognitive_events(source_event_id);
+CREATE INDEX IF NOT EXISTS idx_discarded_source ON discarded_events(source_event_id);
+CREATE INDEX IF NOT EXISTS idx_sources_canonical ON cognitive_event_sources(canonical_event_id);
+CREATE INDEX IF NOT EXISTS idx_evolution_source ON evolution_steps(source_event_id);
+CREATE INDEX IF NOT EXISTS idx_evolution_cognitive ON evolution_steps(cognitive_event_id);
+CREATE INDEX IF NOT EXISTS idx_loops_idea ON open_loops(idea_id);
+CREATE INDEX IF NOT EXISTS idx_decisions_idea ON decisions(idea_id);
+CREATE INDEX IF NOT EXISTS idx_decisions_source ON decisions(source_event_id);
