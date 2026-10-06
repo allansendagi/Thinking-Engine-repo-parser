@@ -31,7 +31,7 @@ struct MainWindowView: View {
                 case .ideas: IdeaListColumn()
                 case .loops: LoopListColumn()
                 case .settings:
-                    ScrollView { SettingsView().frame(maxWidth: 460).padding(24) }
+                    SettingsView().padding(24)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             }
