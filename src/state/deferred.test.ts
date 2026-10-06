@@ -5,7 +5,7 @@ import { ingestConversation } from "../api/ingest";
 import { importIntoDb } from "../import/run";
 import { FakeProvider } from "../providers/fake";
 import type { CompletionProvider } from "../providers/types";
-import { deferredStatus, retryDeferredExtraction } from "./deferred";
+import { deferredStatus, drainDeferredExtraction, retryDeferredExtraction } from "./deferred";
 
 /** An AI provider that's down the way an unpaid account is: every call refused. */
 const unpaid: CompletionProvider = {
@@ -82,5 +82,56 @@ describe("captures survive an unavailable AI", () => {
     expect(s.newCanonicalEvents).toBe(1);
     expect(s.extractionPending).toBe(1);
     expect(loadCanonicalEvents(db)).toHaveLength(1);
+  });
+});
+
+describe("a big backlog drains in one pass", () => {
+  test("a 30-conversation history import becomes 30 ideas in a single drain, oldest first", async () => {
+    const db = openDb(":memory:");
+    const topics = ["pricing tiers", "newsletter cadence", "security audit", "hiring plan", "book outline", "onboarding flow", "refund policy", "podcast guests", "tax filing", "garden layout", "kitchen remodel", "marathon training", "chess openings", "visa renewal", "sourdough starter", "solar panels", "piano practice", "tenant dispute", "wedding toast", "api versioning", "cold outreach", "meal prep", "board deck", "logo redesign", "patent filing", "travel itinerary", "budget review", "mentor intro", "code freeze", "sleep schedule"];
+    for (let i = 0; i < 30; i++) {
+      await ingestConversation(
+        db,
+        capture(`c${i}`, `m${i}`, `${topics[i]} needs a decision`),
+        { extraction: unpaid, reasoning: unpaid },
+      );
+    }
+    expect(deferredStatus(db).count).toBe(30);
+    let calls = 0;
+    const extractor: CompletionProvider = {
+      async complete(_s, user) {
+        calls++;
+        const m = [...user.matchAll(/\[NEW\] \[([^\]]+)\] \(user, [^)]*\): (.+)/g)];
+        return JSON.stringify({
+          events: m.map(([, id, text]) => ({
+            type: "new_idea",
+            statement: text!.trim(),
+            title: text!.trim().replace(/ needs a decision$/, ""),
+            confidence: 0.9,
+            persistence: "high",
+            source_event_id: id,
+            evidence_quote: text!.trim().slice(0, 20),
+          })),
+        });
+      },
+    };
+    const reasoner: CompletionProvider = {
+      async complete() {
+        return JSON.stringify({ matched_idea_id: null, confidence: 0.1, reasoning: "unrelated", also_related_idea_id: null });
+      },
+    };
+    const r = await drainDeferredExtraction(db, { extraction: extractor, reasoning: reasoner });
+    expect(r).toEqual({ processed: 30, error: null, remaining: 0 });
+    expect(loadIdeas(db)).toHaveLength(30);
+    expect(calls).toBe(30); // one extraction call per conversation, none repeated
+  });
+
+  test("it stops at once when the AI is still unavailable, without burning the backlog", async () => {
+    const db = openDb(":memory:");
+    for (let i = 0; i < 6; i++) await ingestConversation(db, capture(`d${i}`, `n${i}`, `Another thought ${i} entirely.`), { extraction: unpaid, reasoning: unpaid });
+    const r = await drainDeferredExtraction(db, { extraction: unpaid, reasoning: unpaid });
+    expect(r.processed).toBe(0);
+    expect(r.error).toContain("credit balance");
+    expect(r.remaining).toBe(6);
   });
 });
