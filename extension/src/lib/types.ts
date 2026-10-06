@@ -101,6 +101,9 @@ export interface CaptureReport {
   at: string;
   /** Failure detail, if the pass threw. */
   error?: string | null;
+  /** What the server did with `sent` (absent from older builds = treated as delivered):
+   *  delivered, queued for retry (server unreachable), capped (Free limit), or not connected. */
+  delivery?: "delivered" | "queued" | "capped" | "unpaired";
 }
 
 export type SourceHealthState =

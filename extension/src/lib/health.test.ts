@@ -22,6 +22,20 @@ describe("capture-health fold", () => {
     expect(h.lastError).toBeNull();
   });
 
+  test("a send the server didn't take never counts as a capture, and says why", () => {
+    const prev = fold(undefined, report({ extracted: 3, sent: 2, delivery: "delivered" }));
+    for (const [delivery, words] of [
+      ["queued", "Couldn't reach Thread"],
+      ["capped", "Free plan limit"],
+      ["unpaired", "Not connected"],
+    ] as const) {
+      const h = fold(prev, report({ extracted: 4, sent: 1, delivery, at: "2026-09-08T13:00:00.000Z" }));
+      expect(h.state).toBe("error");
+      expect(h.detail).toContain(words);
+      expect(h.lastCaptureAt).toBe("2026-09-08T12:00:00.000Z"); // unchanged
+    }
+  });
+
   test("extraction working but nothing new is still 'ok', no lastCaptureAt bump", () => {
     const prev: SourceHealth = fold(undefined, report({ extracted: 3, sent: 3 }));
     const h = fold(prev, report({ extracted: 3, sent: 0, at: "2026-09-08T12:05:00.000Z" }));

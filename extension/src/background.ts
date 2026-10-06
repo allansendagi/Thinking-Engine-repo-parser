@@ -18,6 +18,7 @@ import {
   setCredentials,
   setPairingState,
   setResumeSnooze,
+  markDelivered,
 } from "./lib/storage";
 import {
   ApiError,
@@ -486,7 +487,10 @@ async function drainQueue(): Promise<void> {
   for (let i = 0; i < queue.length; i++) {
     const entry = queue[i]!;
     const outcome = await sendCapture(entry);
-    if (outcome.kind === "ok") continue; // done -- drop it
+    if (outcome.kind === "ok") {
+      await markDelivered(entry.source, new Date().toISOString()); // the popup row turns green again
+      continue; // done -- drop it
+    }
     if (outcome.kind === "unauthorized" || outcome.kind === "capped") {
       keep.push(...queue.slice(i)); // stop the pass; leave this and the rest for next time
       break;
@@ -500,7 +504,9 @@ async function drainQueue(): Promise<void> {
 
 async function handleCapture(
   message: CaptureMessage,
-): Promise<{ ok: true; result: unknown } | { ok: false; error: string; queued?: boolean; retry?: boolean }> {
+): Promise<
+  { ok: true; result: unknown } | { ok: false; error: string; queued?: boolean; retry?: boolean; capped?: boolean }
+> {
   const { credentials } = await getSettings();
   if (!credentials) {
     const paired = await ensurePaired("capture");
@@ -522,6 +528,13 @@ async function handleCapture(
       const retry = await sendCapture(message);
       if (retry.kind === "ok") return { ok: true, result: retry.result };
     }
+    // Still rejected with the Mac's own credentials: the account's sign-in is broken, not this
+    // browser's. Never keep saying "Connected" while nothing is getting through.
+    await setPairingState({
+      status: "rejected",
+      detail: "Thread's server isn't accepting this sign-in. Sign in again in Thread for Mac, then Reconnect.",
+    });
+    await setBadge(true);
     return { ok: false, error: "Credentials expired -- reconnect Thread for Mac.", retry: true };
   }
   if (outcome.kind === "capped") {
@@ -530,7 +543,7 @@ async function handleCapture(
       detail: "Free plan limit reached. Upgrade to Pro from your Thread account to keep capturing.",
     });
     await setBadge(true);
-    return { ok: false, error: "Free plan limit reached -- upgrade to Pro from your Thread account." };
+    return { ok: false, error: "Free plan limit reached -- upgrade to Pro from your Thread account.", capped: true };
   }
   // transient -- park the full transcript so it survives the worker being killed and retries later
   console.error(`[Thread] ingest failed for ${message.conversationId}, queued for retry:`, outcome.error);

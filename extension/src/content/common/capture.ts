@@ -159,6 +159,7 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
       const sentIds = toSend.length > 0 ? await getSentIds(conversationId) : new Set<string>();
       const fresh = toSend.filter((m) => !sentIds.has(m.id));
 
+      let delivery: CaptureReport["delivery"];
       if (fresh.length > 0) {
         const sourceUrl = adapter.getConversationUrl?.() ?? null;
         const res = (await sendMessage({
@@ -167,7 +168,8 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
           conversationId,
           sourceUrl,
           messages: toSend,
-        })) as { ok?: boolean; queued?: boolean; retry?: boolean } | undefined;
+        })) as { ok?: boolean; queued?: boolean; retry?: boolean; capped?: boolean } | undefined;
+        delivery = res?.ok ? "delivered" : res?.queued ? "queued" : res?.capped ? "capped" : "unpaired";
         // Mark sent UNLESS the worker explicitly said to retry from here (not paired, or 401
         // before a re-pair landed). A transient backend failure comes back `queued: true` -- the
         // worker owns retrying it from durable storage, so this tab must not also re-send.
@@ -190,6 +192,7 @@ export function startCapture(adapter: SiteAdapter, doc: ParentNode, options: Cap
         extracted: raw.length,
         sent: fresh.length,
         at,
+        delivery,
       });
     } catch (err) {
       if (isContextInvalidated(err)) {

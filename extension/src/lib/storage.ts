@@ -88,6 +88,20 @@ function foldReport(prev: SourceHealth | undefined, r: CaptureReport): SourceHea
     next.detail = "No conversation open";
     return next;
   }
+  // Something new was read but the server didn't take it: say so plainly. "last capture" only
+  // ever moves on a confirmed delivery -- an attempt that failed must not look like success.
+  if (r.sent > 0 && r.delivery && r.delivery !== "delivered") {
+    next.state = "error";
+    next.emptyStreak = 0;
+    const why = {
+      queued: "Couldn't reach Thread — will retry automatically",
+      capped: "Free plan limit reached — not captured",
+      unpaired: "Not connected — open Thread for Mac",
+    }[r.delivery];
+    next.lastError = why;
+    next.detail = why;
+    return next;
+  }
   if (r.extracted > 0) {
     next.state = "ok";
     next.emptyStreak = 0;
@@ -110,6 +124,15 @@ function foldReport(prev: SourceHealth | undefined, r: CaptureReport): SourceHea
     next.detail = base.state === "degraded" ? next.detail : "Up to date";
   }
   return next;
+}
+
+/** A queued capture finally went through: that source's last capture is now, and its error clears. */
+export async function markDelivered(source: CaptureReport["source"], at: string): Promise<void> {
+  const health = await getCaptureHealth();
+  const h = health[source];
+  if (!h) return;
+  health[source] = { ...h, state: "ok", lastCaptureAt: at, lastError: null, detail: "Captured just now" };
+  await chrome.storage.local.set({ captureHealth: health });
 }
 
 export async function recordCaptureReport(report: CaptureReport): Promise<CaptureHealth> {
