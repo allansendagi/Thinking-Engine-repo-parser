@@ -1,11 +1,9 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-const SCHEMA_SQL = readFileSync(join(__dirname, "schema.sql"), "utf-8");
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+// Embedded at build time, not read from disk at start-up, so the engine also runs as a single
+// compiled binary (`bun build --compile`), where no source tree exists next to it.
+import SCHEMA_SQL from "./schema.sql" with { type: "text" };
 
 const ADD_COLUMNS: [table: string, column: string][] = [
   ["cognitive_events", "persistence TEXT NOT NULL DEFAULT 'high'"],
@@ -45,6 +43,10 @@ export function openDb(path: string): Database {
   const db = new Database(path, { create: true });
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA busy_timeout = 5000;");
+  // Deleted content is overwritten, not just unlinked: without this a deleted conversation's
+  // text stays readable in the file's free pages. Per-connection, so it's set on every open --
+  // an idea deleted through any code path, not only the privacy routes, leaves nothing behind.
+  db.exec("PRAGMA secure_delete = ON;");
   // WAL mode: readers don't block writers and vice versa. Default (rollback journal) mode
   // serializes all access to a file and is fine for a single local user, but this backend now
   // opens/closes a connection per HTTP request against the same per-user file -- under real

@@ -385,6 +385,77 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Your data (what Thread holds, export, delete)
+
+    @Published var dataSummary: DataSummaryResponse?
+    @Published var dataSummaryError: String?
+
+    func loadDataSummary() async {
+        guard isPaired, reconnect == nil else { return }
+        do {
+            dataSummary = try await client.dataSummary()
+            dataSummaryError = nil
+        } catch {
+            dataSummaryError = error.localizedDescription
+        }
+    }
+
+    /// Writes a full copy of the account's data to a temporary file and returns it, for the
+    /// caller to hand to a save panel. nil if the server couldn't be reached.
+    func exportDataFile() async -> URL? {
+        do {
+            let data = try await client.exportData()
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("thread-export.json")
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            dataSummaryError = "Couldn't export: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Delete one conversation and everything Thread derived from it, then refresh what's shown.
+    func deleteConversation(_ conversationId: String) async -> ConversationRemoval? {
+        do {
+            let removal = try await client.deleteConversation(id: conversationId)
+            conversations.removeAll { $0.conversationId == conversationId }
+            closeConversation()
+            await refresh()
+            await loadDataSummary()
+            return removal
+        } catch {
+            transcriptError = "Couldn't delete that conversation: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Delete the account and every byte of it on the server, then everything this Mac kept.
+    /// Throws if the server refuses (e.g. 409: a paid subscription is still active).
+    func deleteEverything(acknowledgeSubscription: Bool) async throws -> AccountDeletionReceipt {
+        let receipt = try await client.deleteEverything(acknowledgeSubscription: acknowledgeSubscription)
+        wipeLocalData()
+        return receipt
+    }
+
+    /// Remove every trace of the account from this Mac: snapshots (graph + embeddings), the
+    /// sign-in, the Spotlight index, and the per-account settings that name its data.
+    private func wipeLocalData() {
+        LocalStore.clearAll()
+        CredentialStore.clear()
+        SpotlightIndex.removeAll()
+        let d = UserDefaults.standard
+        for key in [
+            "thread.pinnedIds", "thread.resume", "thread.resumeShown", "thread.resumeSnoozed",
+            "thread.ambient.lastNotified", "thread.ambient.lastThinkingActive",
+            "thread.cursor.live.owner", "thread.cursor.live.seeded", "thread.cursor.live.seen", "thread.cursor.live.sig",
+            "thread.localHistory.fileSigs", "thread.localHistory.owner", "thread.localHistory.seeded", "thread.localHistory.sent",
+            "thread.lastKnownEmail", "thread.backfillCompleted", "thread.setup.deliveredBlockers",
+        ] { d.removeObject(forKey: key) }
+        pinnedIds = []
+        dataSummary = nil
+        resetInMemoryState()
+    }
+
     /// Idea ids the user has pinned. Shown as a "Pinned" group at the top of the All tab.
     /// Local-only (no backend concept), persisted across launches.
     private let pinnedKey = "thread.pinnedIds"

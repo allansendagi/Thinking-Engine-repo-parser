@@ -189,6 +189,13 @@ enum LocalStore {
         try? FileManager.default.removeItem(at: fileURL(for: userId))
     }
 
+    /// Every account's snapshot on this Mac -- used when the person deletes everything.
+    static func clearAll() {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: dirURL, includingPropertiesForKeys: nil) else { return }
+        for url in items where url.lastPathComponent.hasPrefix("snapshot-") { try? fm.removeItem(at: url) }
+    }
+
     /// The newest per-account snapshot on disk, whatever account it belongs to. Recovery needs
     /// this: when the credential is gone the app no longer knows its own userId, but the last
     /// graph it synced is still here and should stay on screen so a token loss never *looks*

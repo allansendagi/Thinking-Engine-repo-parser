@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { openDb } from "./client";
+import { dataSummary, purgeUserFiles, type AccountDeletion } from "./privacy";
 
 /**
  * Where the per-user SQLite files live. Read lazily, not as a module-level const -- see auth.ts's
@@ -34,6 +35,63 @@ export function dbPathForUser(userId: string): string {
   return join(dataDir(), `${userId}.db`);
 }
 
+/**
+ * Accounts deleted by this process. Background work (a deferred extraction, a mining pass) may
+ * still hold a userId when the account is deleted; without this it would reopen the path and
+ * silently recreate an empty database for a person who asked for everything to be removed.
+ */
+const purged = new Set<string>();
+
+/**
+ * Connections currently open per account. A background job (an extraction retry, a mining pass)
+ * can still hold one when the account is deleted; if it wrote after the files were unlinked,
+ * SQLite would quietly create fresh -wal/-shm files holding derived data. Deleting closes these
+ * first, so nothing can write once the account is gone.
+ */
+const live = new Map<string, Set<Database>>();
+
 export function openUserDb(userId: string): Database {
-  return openDb(dbPathForUser(userId));
+  if (purged.has(userId)) throw new Error("This account has been deleted");
+  const db = openDb(dbPathForUser(userId));
+  const set = live.get(userId) ?? new Set<Database>();
+  live.set(userId, set);
+  set.add(db);
+  const close = db.close.bind(db);
+  db.close = (...args: Parameters<Database["close"]>) => {
+    set.delete(db);
+    if (set.size === 0 && live.get(userId) === set) live.delete(userId);
+    return close(...args);
+  };
+  return db;
+}
+
+/** Delete an account's database from disk and return what was removed (counted first). */
+export function purgeUser(userId: string): AccountDeletion {
+  const path = dbPathForUser(userId);
+  let counts = { conversations: 0, messages: 0, ideas: 0, thoughts: 0, vectors: 0, corrections: 0, evidenceRecords: 0 };
+  const db = openDb(path);
+  try {
+    const s = dataSummary(db);
+    counts = {
+      conversations: s.conversations,
+      messages: s.messages,
+      ideas: s.ideas,
+      thoughts: s.thoughts + s.setAsideThoughts,
+      vectors: s.vectors,
+      corrections: s.corrections,
+      evidenceRecords: s.evidenceRecords,
+    };
+  } finally {
+    db.close();
+  }
+  purged.add(userId);
+  // Close anything still open for this account (db.close removes it from `live`).
+  for (const db of [...(live.get(userId) ?? [])]) {
+    try {
+      db.close();
+    } catch {
+      // already closed
+    }
+  }
+  return { ...counts, filesRemoved: purgeUserFiles(path) };
 }

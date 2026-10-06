@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
@@ -112,6 +113,12 @@ struct SettingsView: View {
             CaptureSection()
 
             Divider()
+
+            if appState.isPaired {
+                DataSection()
+
+                Divider()
+            }
 
             AppearanceSection()
 
@@ -473,6 +480,160 @@ private struct CaptureSection: View {
         .onAppear {
             detected = AppDelegate.shared?.localHistory?.detectedSources() ?? []
             enabled = Dictionary(uniqueKeysWithValues: detected.map { ($0.source, CaptureSettings.isLocalSourceEnabled($0.source)) })
+        }
+    }
+}
+
+
+// MARK: - Your data
+
+/// What Thread holds, who else receives it, how long it's kept -- read from the server, so it
+/// can't drift from what the code does -- plus a full export and a provable delete-everything.
+private struct DataSection: View {
+    @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirming = false
+    @State private var typed = ""
+    @State private var needsBillingAck = false
+    @State private var acknowledgeBilling = false
+    @State private var busy = false
+    @State private var message: String?
+
+    private let phrase = "delete everything"
+
+    private func n(_ v: Int) -> String { v.formatted() }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label).foregroundColor(.secondary)
+            Spacer(minLength: 8)
+            Text(value).multilineTextAlignment(.trailing)
+        }
+        .font(.caption)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Your data", systemImage: "lock.shield")
+                .font(.subheadline).fontWeight(.medium)
+
+            if let s = appState.dataSummary {
+                VStack(alignment: .leading, spacing: 4) {
+                    row("Conversations", "\(n(s.stored.conversations)) · \(n(s.stored.messages)) messages, kept in full")
+                    row("Ideas", n(s.stored.ideas))
+                    row("Thoughts behind them", n(s.stored.thoughts + s.stored.setAsideThoughts))
+                    row("Meaning-vectors", n(s.stored.vectors))
+                    row("Your corrections", n(s.stored.corrections))
+                    if s.stored.waitingForAi > 0 { row("Waiting for the AI", n(s.stored.waitingForAi)) }
+                    row("Size on the server", ByteCountFormatter.string(fromByteCount: Int64(s.stored.bytes), countStyle: .file))
+                }
+
+                Text("Who else receives it").font(.caption).fontWeight(.medium).padding(.top, 2)
+                ForEach(s.processors) { p in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(p.name).font(.caption).fontWeight(.medium)
+                        Text("\(p.purpose) Receives: \(p.receives)")
+                            .font(.caption2).foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Text("How long it's kept").font(.caption).fontWeight(.medium).padding(.top, 2)
+                Group {
+                    Text(s.retention.rawConversations)
+                    Text(s.retention.backups)
+                }
+                .font(.caption2).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            } else if let e = appState.dataSummaryError {
+                Text("Couldn't load this right now: \(e)")
+                    .font(.caption).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+
+            HStack(spacing: 8) {
+                Button("Export everything…") { export() }
+                Button("Delete everything…", role: .destructive) { confirming.toggle() }
+            }
+            .controlSize(.small)
+
+            if confirming { confirmBox }
+        }
+        .task { await appState.loadDataSummary() }
+    }
+
+    private var confirmBox: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let s = appState.dataSummary {
+                Text("This permanently deletes \(n(s.stored.conversations)) conversations (\(n(s.stored.messages)) messages), \(n(s.stored.ideas)) ideas, \(n(s.stored.vectors)) vectors and \(n(s.stored.corrections)) corrections from Thread's server, your account, and everything Thread keeps on this Mac. It can't be undone.")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(s.retention.backups)
+                    .font(.caption2).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if needsBillingAck {
+                Toggle("I understand my subscription keeps billing until I cancel it.", isOn: $acknowledgeBilling)
+                    .font(.caption)
+            }
+            TextField("Type “\(phrase)”", text: $typed)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Cancel") { confirming = false; typed = ""; message = nil }
+                Spacer()
+                Button("Delete everything", role: .destructive) { deleteEverything() }
+                    .disabled(typed.trimmingCharacters(in: .whitespaces).lowercased() != phrase || busy || (needsBillingAck && !acknowledgeBilling))
+            }
+            .controlSize(.small)
+            if let message {
+                Text(message).font(.caption).foregroundColor(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .background(Color.red.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func export() {
+        Task {
+            guard let tmp = await appState.exportDataFile() else { return }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "thread-export.json"
+            panel.allowedContentTypes = [.json]
+            if panel.runModal() == .OK, let dest = panel.url {
+                try? FileManager.default.removeItem(at: dest)
+                try? FileManager.default.copyItem(at: tmp, to: dest)
+            }
+            try? FileManager.default.removeItem(at: tmp)
+        }
+    }
+
+    private func deleteEverything() {
+        busy = true
+        message = nil
+        Task {
+            do {
+                let r = try await appState.deleteEverything(acknowledgeSubscription: acknowledgeBilling)
+                busy = false
+                let alert = NSAlert()
+                alert.messageText = "Everything was deleted"
+                var text = "Removed from Thread's server: \(r.data.conversations) conversations (\(r.data.messages) messages), \(r.data.ideas) ideas, \(r.data.vectors) vectors, \(r.data.corrections) corrections, and your account. Removed from this Mac: its copy of your ideas, your sign-in and the Spotlight entries.\n\n\(r.backups)"
+                if r.subscriptionStillActive {
+                    text += "\n\nYour subscription is still active with our payment processor — cancel it from the link in your receipt email."
+                }
+                alert.informativeText = text
+                alert.runModal()
+                dismiss()
+            } catch let APIError.http(status, msg) where status == 409 {
+                busy = false
+                needsBillingAck = true
+                message = msg
+            } catch {
+                busy = false
+                message = error.localizedDescription
+            }
         }
     }
 }

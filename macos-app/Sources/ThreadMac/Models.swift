@@ -469,3 +469,81 @@ struct ThinkingMap: Codable, Equatable {
 
     var isEmpty: Bool { options.isEmpty && gaps.isEmpty }
 }
+
+
+// MARK: - Your data
+
+/// What Thread holds for this account, who else receives what, and how long it's kept --
+/// straight from the server (`GET /v1/account/data-summary`), so the screen can't drift from the
+/// code. Optional-free where the server always sends a value.
+struct DataSummaryResponse: Decodable {
+    struct Stored: Decodable {
+        let conversations: Int
+        let messages: Int
+        let sources: [String: Int]
+        let ideas: Int
+        let thoughts: Int
+        let setAsideThoughts: Int
+        let openQuestions: Int
+        let decisions: Int
+        let vectors: Int
+        let vectorModels: [String]
+        let corrections: Int
+        let waitingForAi: Int
+        let evidenceRecords: Int
+        let firstCaptureAt: String?
+        let lastCaptureAt: String?
+        let bytes: Int
+    }
+    struct Processor: Decodable, Identifiable {
+        let name: String
+        let purpose: String
+        let receives: String
+        var id: String { name }
+    }
+    struct Retention: Decodable {
+        let rawConversations: String
+        let vectors: String
+        let backups: String
+    }
+    struct AccountInfo: Decodable {
+        let email: String?
+        let plan: String
+    }
+    let stored: Stored
+    let account: AccountInfo
+    let processors: [Processor]
+    let retention: Retention
+}
+
+/// Receipt for deleting one conversation: exactly what was removed with it.
+struct ConversationRemoval: Decodable {
+    struct Removed: Decodable {
+        let messages: Int
+        let thoughts: Int
+        let vectors: Int
+        let ideasRemoved: Int
+        let ideasRewritten: Int
+        let openQuestionsRemoved: Int
+    }
+    let removed: Removed
+    let backups: String
+}
+
+/// Receipt for deleting the whole account.
+struct AccountDeletionReceipt: Decodable {
+    struct Counts: Decodable {
+        let conversations: Int
+        let messages: Int
+        let ideas: Int
+        let thoughts: Int
+        let vectors: Int
+        let corrections: Int
+        let evidenceRecords: Int
+        let filesRemoved: Int
+    }
+    let deleted: Bool
+    let data: Counts
+    let subscriptionStillActive: Bool
+    let backups: String
+}
