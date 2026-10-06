@@ -11,6 +11,7 @@ import { loadBenchVectors, v1Miner, v1Offline, v2Miner, type Miner } from "./min
 import { formatTable, runBench } from "./run";
 import { meaningWeightFor } from "../mining/consolidate";
 import { VoyageEmbeddingProvider, voyageConfigured } from "../providers/voyage";
+import { checkCoverage, latencySummary, loadOnDeviceResults, onDeviceMiner } from "./onDevice";
 
 const live = process.argv.includes("--live");
 const apple = loadBenchVectors();
@@ -38,6 +39,20 @@ if (live) {
 
 // --held-out scores seeds the thresholds were NOT tuned on.
 const scenarios = process.argv.includes("--held-out") ? standardSuite([4, 5, 6, 7, 8, 9, 10, 11]) : standardSuite();
+
+// The Mac's own model on the same suite: `--on-device [path]` (default src/bench/ondevice.results.json),
+// produced on a Mac by BenchExtractionTests. See src/bench/ON_DEVICE.md.
+const odFlag = process.argv.indexOf("--on-device");
+if (odFlag >= 0) {
+  const path = process.argv[odFlag + 1] && !process.argv[odFlag + 1]!.startsWith("--") ? process.argv[odFlag + 1]! : "src/bench/ondevice.results.json";
+  const od = loadOnDeviceResults(path);
+  if (!od) throw new Error(`--on-device: no results at ${path} (see src/bench/ON_DEVICE.md)`);
+  const problem = checkCoverage(od, scenarios);
+  if (problem) throw new Error(`--on-device: ${problem}`);
+  const lat = latencySummary(od);
+  console.log(`On-device run: ${lat.answered}/${lat.total} captures answered, mean ${lat.meanMs} ms, p95 ${lat.p95Ms} ms per capture${od.device ? ` (${od.device})` : ""}\n`);
+  miners.push(onDeviceMiner(od));
+}
 const results = await runBench(miners, scenarios);
 console.log(`Thinking bench — ${scenarios.length} scenarios, ${scenarios.reduce((n, s) => n + s.thoughts.length, 0)} gold thoughts\n`);
 console.log(formatTable(results));

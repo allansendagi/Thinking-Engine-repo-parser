@@ -332,7 +332,7 @@ export function listConversations(db: Database): ConversationSummary[] {
   for (const r of db
     .query(
       `SELECT conversation_id AS cid, text FROM canonical_events
-       WHERE role = 'user' ORDER BY idx ASC`,
+       WHERE role = 'user' AND text_removed_at IS NULL AND text <> '' ORDER BY idx ASC`,
     )
     .all() as { cid: string; text: string }[]) {
     if (!previews.has(r.cid)) previews.set(r.cid, r.text.replace(/\s+/g, " ").trim().slice(0, 140));
@@ -359,7 +359,7 @@ export function listConversations(db: Database): ConversationSummary[] {
     firstAt: c.first_at,
     lastAt: c.last_at,
     ideas: ideasByConv.get(c.cid) ?? [],
-    preview: previews.get(c.cid) ?? "",
+    preview: previews.get(c.cid) ?? "Raw text removed by your retention setting",
     pendingMessages: pending.get(c.cid) ?? 0,
   }));
 }
@@ -369,7 +369,8 @@ export interface ConversationTranscript {
   /** "chatgpt" | "claude" | "gemini" | "cursor" | "paste" */
   source: string;
   sourceUrl: string | null;
-  messages: { role: Role; text: string; index: number; createdAt: string }[];
+  /** `removed`: the person's retention setting removed this message's text; `text` is empty. */
+  messages: { role: Role; text: string; index: number; createdAt: string; removed?: boolean }[];
 }
 
 /** Every captured message of one conversation, in order -- the evidence behind an idea. Null if
@@ -377,11 +378,12 @@ export interface ConversationTranscript {
 export function getConversation(db: Database, conversationId: string): ConversationTranscript | null {
   const rows = db
     .query(
-      "SELECT role, text, idx, created_at, source, source_url FROM canonical_events WHERE conversation_id = ? ORDER BY idx ASC",
+      "SELECT role, text, idx, created_at, source, source_url, text_removed_at FROM canonical_events WHERE conversation_id = ? ORDER BY idx ASC",
     )
     .all(conversationId) as {
     role: string;
     text: string;
+    text_removed_at: string | null;
     idx: number;
     created_at: string;
     source: string;
@@ -392,7 +394,13 @@ export function getConversation(db: Database, conversationId: string): Conversat
     conversationId,
     source: rows[0]!.source,
     sourceUrl: rows.find((r) => r.source_url)?.source_url ?? null,
-    messages: rows.map((r) => ({ role: r.role as Role, text: r.text, index: r.idx, createdAt: r.created_at })),
+    messages: rows.map((r) => ({
+      role: r.role as Role,
+      text: r.text,
+      index: r.idx,
+      createdAt: r.created_at,
+      ...(r.text_removed_at ? { removed: true } : {}),
+    })),
   };
 }
 

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { dismissedExamples } from "../mining/corrections";
+import { applyRetention } from "../db/retention";
 import type { CanonicalEvent } from "../types";
 import {
   persistCanonicalEvents,
@@ -91,6 +92,8 @@ async function extractOrDeferLocked(
     });
     persistPipelineResult(db, contextEvents, result);
     clear(db, extractIds);
+    // Their ideas exist now; apply the person's retention setting to the text that fed them.
+    applyRetention(db);
     return { result, deferred: 0, error: null };
   } catch (e) {
     const error = describe(e);
@@ -144,6 +147,7 @@ async function retryUnlocked(
       });
       persistPipelineResult(db, context, result);
       clear(db, ids);
+      applyRetention(db);
       processed += live.size;
     } catch (e) {
       const error = describe(e);
