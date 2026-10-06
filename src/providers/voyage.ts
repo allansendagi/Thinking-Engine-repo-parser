@@ -5,8 +5,11 @@ import type { EmbeddingProvider } from "./types";
  * with Apple's on-device model (see macos-app ThoughtVectorSync). This provider exists only for
  * thoughts no Mac has embedded yet, and only when VOYAGE_API_KEY is set -- unset (the default)
  * means it's never constructed and nothing leaves the server for embedding.
+ *
+ * Default voyage-4-lite: the current small model, with 200M free tokens per account (older
+ * models like voyage-3.5-lite get none) and $0.02 per million tokens after that.
  */
-export const VOYAGE_MODEL = process.env.VOYAGE_MODEL ?? "voyage-3.5-lite";
+export const VOYAGE_MODEL = process.env.VOYAGE_MODEL ?? "voyage-4-lite";
 
 export function voyageConfigured(): boolean {
   return !!process.env.VOYAGE_API_KEY;
