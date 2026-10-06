@@ -269,18 +269,40 @@ function groupAnchors(anchors: string[], sim: Similarity, threshold: number, con
 }
 
 /**
- * How much a vector model's "meaning" may count, from what the bench measured -- a model is
- * only trusted as far as it actually separates ideas.
- *  - apple:nlembedding.sentence.* (macOS's older sentence model, the native fallback when the
- *    contextual asset isn't downloaded): AUC 0.69 same-vs-different idea, and every weight > 0
- *    scored WORSE than words alone (more wrong merges). Not used for grouping.
- *  - apple contextual (NLContextualEmbedding) and voyage: full weight. The contextual model's bench
- *    score is pending a run on a Mac that has the asset; the shadow miner never serves either way.
+ * How much a vector model's "meaning" may count, from what the bench measured (held-out seeds,
+ * realistic paraphrase) -- a model is trusted only as far as it separates ideas.
+ *  - apple:nlembedding.sentence.* (macOS's older sentence model, the fallback when the contextual
+ *    asset isn't downloaded): AUC 0.69 same-vs-different idea; every weight > 0 scored worse than
+ *    words alone. Not used.
+ *  - other apple:* (NLContextualEmbedding, mean-pooled -- what real Macs run): AUC 0.81. Best at
+ *    0.35: grouping F1 62.8 -> 65.4, "where I stand" 22.6% -> 28.0%, decisions 28.7% -> 41.3%, at
+ *    the cost of more wrong merges (18 -> 26). Helpful, not sufficient: "partial".
+ *  - voyage:* -- the cloud fallback. Full weight; scored by `bun run bench` whenever a key is set.
  */
 export function meaningWeightFor(model: string | null): number {
   if (!model) return 0;
   if (model.startsWith("apple:nlembedding.sentence")) return 0;
+  if (model.startsWith("apple:")) return 0.35;
   return 0.65;
+}
+
+/** Native models that measured good enough to stand alone (none yet -- see meaningWeightFor). */
+export function nativeIsSufficient(model: string): boolean {
+  return model.startsWith("apple:") && meaningWeightFor(model) >= 0.65;
+}
+
+/**
+ * Which stored vector model to group with: a sufficient native model first; otherwise the cloud
+ * fallback if the account has it; otherwise the best partial native model; otherwise none.
+ */
+export function chooseMeaningModel(models: string[]): string | null {
+  const usable = models.filter((m) => meaningWeightFor(m) > 0);
+  return (
+    usable.find(nativeIsSufficient) ??
+    usable.find((m) => m.startsWith("voyage:")) ??
+    usable.find((m) => m.startsWith("apple:")) ??
+    null
+  );
 }
 
 // ------------------------------------------------------------------------------- the pass
@@ -290,10 +312,9 @@ export function consolidate(thoughts: MiningThought[], options: ConsolidateOptio
   const meaningWeight = options.meaningWeight ?? 0.65;
   const sim = new Similarity(byId, options.vectors as Map<string, ArrayLike<number>> | undefined, meaningWeight);
   const constraints = options.constraints ?? {};
-  const hasVectors = !!options.vectors && options.vectors.size > 1 && meaningWeight > 0;
-  // Words-only 0.35: on held-out bench seeds it lifted "where I stand" 23% -> 41% and decisions
-  // 40% -> 58% over 0.5 with about the same wrong merges; below it, wrong merges climb fast.
-  const anchorThreshold = options.anchorThreshold ?? (hasVectors ? 0.42 : 0.35);
+  // 0.35, with or without vectors: the best held-out setting on realistic paraphrase. Lower and
+  // wrong merges climb fast; higher and ideas split into duplicates.
+  const anchorThreshold = options.anchorThreshold ?? 0.35;
   const attachFloor = options.attachFloor ?? 0.2;
   const time = (id: string) => byId.get(id)!.createdAt;
 

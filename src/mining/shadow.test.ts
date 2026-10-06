@@ -33,14 +33,20 @@ describe("shadow v2 mining", () => {
     expect((db.query("SELECT COUNT(*) AS n FROM mining_runs").get() as { n: number }).n).toBe(1);
   });
 
-  test("uses on-device Apple vectors when the Mac has uploaded them, never a cloud model", () => {
+  test("groups with on-device Apple vectors when that's what the account has", () => {
     const db = seed();
-    storeThoughtVectors(db, "voyage:voyage-3.5-lite", [{ id: "cog_m1_0", vector: Array(16).fill(1) }]);
     storeThoughtVectors(db, "apple:nlcontextual.r1", [
       { id: "cog_m1_0", vector: Array.from({ length: 16 }, (_, i) => i) },
       { id: "cog_m2_0", vector: Array.from({ length: 16 }, (_, i) => i + 1) },
     ]);
     expect(runShadowMining(db).run.vectorModel).toBe("apple:nlcontextual.r1");
+  });
+
+  test("prefers the cloud fallback while the native model only partly works (bench-measured)", () => {
+    const db = seed();
+    storeThoughtVectors(db, "voyage:voyage-3.5-lite", [{ id: "cog_m1_0", vector: Array(16).fill(1) }, { id: "cog_m2_0", vector: Array(16).fill(2) }]);
+    storeThoughtVectors(db, "apple:nlcontextual.r1", [{ id: "cog_m1_0", vector: Array(16).fill(1) }, { id: "cog_m2_0", vector: Array(16).fill(2) }]);
+    expect(runShadowMining(db).run.vectorModel).toBe("voyage:voyage-3.5-lite");
   });
 
   test("a deleted idea's thoughts never come back as an idea, and teach extraction", () => {
@@ -80,7 +86,7 @@ describe("shadow v2 mining", () => {
     expect(runShadowMining(db).run.vectorModel).toBeNull();
   });
 
-  test("Voyage fills in only when no trusted native vectors exist", async () => {
+  test("Voyage fills in only where on-device meaning isn't good enough, and only when configured", async () => {
     let calls = 0;
     const fetcher = (async (_url: string, init: RequestInit) => {
       calls++;
@@ -89,12 +95,16 @@ describe("shadow v2 mining", () => {
     }) as unknown as typeof fetch;
     const voyage = new VoyageEmbeddingProvider("test-key", "voyage-3.5-lite", fetcher);
 
-    const native = seed();
-    storeThoughtVectors(native, "apple:nlcontextual.r1", [{ id: "cog_m1_0", vector: Array(16).fill(1) }]);
-    expect(await voyageFallback(native, voyage)).toBe(0);
+    // Not configured: nothing leaves the server.
+    const saved = process.env.VOYAGE_API_KEY;
+    delete process.env.VOYAGE_API_KEY;
+    expect(await voyageFallback(seed())).toBe(0);
+    if (saved !== undefined) process.env.VOYAGE_API_KEY = saved;
     expect(calls).toBe(0);
 
+    // Today's native models are partial, so a configured fallback runs even with a Mac's vectors.
     const db = seed();
+    storeThoughtVectors(db, "apple:nlcontextual.r1", [{ id: "cog_m1_0", vector: Array(16).fill(1) }]);
     expect(await voyageFallback(db, voyage)).toBe(3);
     expect(runShadowMining(db).run.vectorModel).toBe("voyage:voyage-3.5-lite");
   });

@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { listThoughts, loadThoughtVectors, storeThoughtVectors, thoughtsNeedingVectors, vectorModels } from "../db/thoughts";
 import { VoyageEmbeddingProvider, voyageConfigured } from "../providers/voyage";
 import type { CognitiveEventType, IdeaNode } from "../types";
-import { consolidate, meaningWeightFor, type ConsolidatedIdea, type MiningThought } from "./consolidate";
+import { chooseMeaningModel, consolidate, meaningWeightFor, nativeIsSufficient, type ConsolidatedIdea, type MiningThought } from "./consolidate";
 import { loadCorrections, type LearnedCorrections } from "./corrections";
 
 /**
@@ -44,10 +44,9 @@ export function loadMiningInput(db: Database): MiningInput {
   const learned = loadCorrections(db);
   const kept = thoughts.filter((t) => t.persistence !== "low" && !learned.dismissedThoughtIds.has(t.id));
 
-  // Native first; a native model only counts if the bench showed it helps (meaningWeightFor).
-  // Voyage is the fallback when no trusted on-device vectors exist (and only if configured).
-  const models = vectorModels(db).filter((m) => meaningWeightFor(m) > 0);
-  const model = models.find((m) => m.startsWith("apple:")) ?? models.find((m) => m.startsWith("voyage:")) ?? null;
+  // Native first, but only as far as the bench showed it works (chooseMeaningModel); Voyage
+  // fills in where on-device meaning isn't good enough (and only if configured).
+  const model = chooseMeaningModel(vectorModels(db));
   const vectors = model ? loadThoughtVectors(db, model) : undefined;
   const previousIdeaOf = new Map(
     (db.query("SELECT idea_id, cognitive_event_id FROM evolution_steps").all() as { idea_id: string; cognitive_event_id: string }[]).map(
@@ -115,12 +114,13 @@ export function loadShadowIdeas(db: Database): { node: IdeaNode; isSpark: boolea
 }
 
 /**
- * Cloud fallback, only when there is no trusted native model for this account (no Mac, or a Mac
- * without the contextual asset) and VOYAGE_API_KEY is set. Embeds up to `max` thoughts per run.
+ * Cloud fallback, only when no on-device model for this account is good enough on its own (no
+ * Mac, no contextual asset, or -- today -- the contextual model's partial score) and
+ * VOYAGE_API_KEY is set. Embeds up to `max` thoughts per run.
  */
 export async function voyageFallback(db: Database, provider?: VoyageEmbeddingProvider, max = 500): Promise<number> {
-  const nativeTrusted = vectorModels(db).some((m) => m.startsWith("apple:") && meaningWeightFor(m) > 0);
-  if (nativeTrusted || (!provider && !voyageConfigured())) return 0;
+  const nativeEnough = vectorModels(db).some(nativeIsSufficient);
+  if (nativeEnough || (!provider && !voyageConfigured())) return 0;
   const voyage = provider ?? new VoyageEmbeddingProvider();
   let done = 0;
   while (done < max) {
