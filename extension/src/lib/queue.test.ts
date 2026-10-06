@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { CAPTURE_QUEUE_MAX, enqueueCapture, getCaptureQueue, setCaptureQueue } from "./storage";
-import type { CapturedMessage } from "./types";
+import { CAPTURE_QUEUE_MAX, enqueueCapture, getCaptureQueue, retryDecision, retryDelayMs, setCaptureQueue } from "./storage";
+import type { CapturedMessage, QueuedCapture } from "./types";
 
 function installFakeChromeStorage(): void {
   const store = new Map<string, unknown>();
@@ -57,5 +57,23 @@ describe("capture retry queue", () => {
     expect(q).toHaveLength(CAPTURE_QUEUE_MAX);
     expect(q[0]!.conversationId).toBe("c5"); // c0..c4 evicted
     expect(q.at(-1)!.conversationId).toBe(`c${CAPTURE_QUEUE_MAX + 4}`);
+  });
+});
+
+describe("capture retry backoff", () => {
+  const entry = (over: Partial<QueuedCapture> = {}): QueuedCapture => ({
+    conversationId: "c", source: "claude", sourceUrl: null, messages: [], queuedAt: "2026-10-06T08:00:00.000Z", attempts: 0, ...over,
+  });
+  const at = (iso: string) => new Date(iso).getTime();
+
+  test("keeps retrying for a week instead of giving up after a few minutes", () => {
+    expect(retryDecision(entry({ attempts: 50 }), at("2026-10-06T09:00:00.000Z"))).toBe("send");
+    expect(retryDecision(entry(), at("2026-10-12T07:59:00.000Z"))).toBe("send");
+    expect(retryDecision(entry(), at("2026-10-13T08:01:00.000Z"))).toBe("expire");
+  });
+
+  test("waits out its backoff, which doubles up to an hour", () => {
+    expect(retryDecision(entry({ nextAttemptAt: "2026-10-06T08:10:00.000Z" }), at("2026-10-06T08:05:00.000Z"))).toBe("wait");
+    expect([1, 2, 3, 7, 20].map((n) => retryDelayMs(n) / 60_000)).toEqual([1, 2, 4, 60, 60]);
   });
 });

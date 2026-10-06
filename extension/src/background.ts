@@ -1,5 +1,6 @@
 import {
-  CAPTURE_MAX_ATTEMPTS,
+  retryDecision,
+  retryDelayMs,
   clearCredentials,
   enqueueCapture,
   getAccountInfo,
@@ -18,6 +19,7 @@ import {
   setCredentials,
   setPairingState,
   setResumeSnooze,
+  markDelivered,
 } from "./lib/storage";
 import {
   ApiError,
@@ -28,6 +30,7 @@ import {
   ingestConversation,
   isPaymentRequired,
   isUnauthorized,
+  pasteConversation,
   resolveContinuationText,
   verifyCredentials,
 } from "./lib/api";
@@ -168,15 +171,23 @@ async function refreshAccountInfo(userId: string): Promise<void> {
  * (which never hits the loopback). Best-effort: the app isn't always running. `PAIRING_PORT` /
  * host permission for 127.0.0.1 are already in the manifest.
  */
-async function pingDesktop(userId: string): Promise<void> {
+async function pingDesktop(userId: string, captured = false): Promise<void> {
   try {
-    await fetch(`http://127.0.0.1:${PAIRING_PORT}/thread/hello?userId=${encodeURIComponent(userId)}`, {
+    const flag = captured ? "&captured=1" : "";
+    await fetch(`http://127.0.0.1:${PAIRING_PORT}/thread/hello?userId=${encodeURIComponent(userId)}${flag}`, {
       method: "GET",
       cache: "no-store",
     });
   } catch {
     // Mac app not running / not listening -- nothing to do.
   }
+}
+
+/** A capture the server just confirmed: tell Thread for Mac so it shows it now, not at its next
+ *  sync. Local loopback only -- nothing leaves the machine. */
+async function notifyDesktopOfCapture(): Promise<void> {
+  const { credentials } = await getSettings();
+  if (credentials) void pingDesktop(credentials.userId, true);
 }
 
 async function setBadge(needsAttention: boolean): Promise<void> {
@@ -219,9 +230,56 @@ async function reinjectOpenTabs(): Promise<void> {
 
 chrome.runtime.onInstalled.addListener((details) => {
   void ensurePaired("install");
+  chrome.contextMenus.create({ id: CAPTURE_MENU_ID, title: "Capture in Thread", contexts: ["selection"] }, () => {
+    void chrome.runtime.lastError; // already exists after an update -- fine
+  });
   if (details.reason === "install" || details.reason === "update") void reinjectOpenTabs();
 });
 chrome.runtime.onStartup.addListener(() => void ensurePaired("startup"));
+
+/**
+ * "Capture in Thread" on any page: select a conversation on ANY AI site (Grok, DeepSeek, Copilot,
+ * Le Chat, Poe, Qwen, Kimi, AI Studio, a shared chat...) and send it -- no per-site reader to
+ * break when a site changes. The selection is read in the page (activeTab, granted only by this
+ * click) so line breaks survive and the server can tell who said what; it's redacted before it
+ * leaves the browser (pasteConversation).
+ */
+const CAPTURE_MENU_ID = "thread-capture-selection";
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== CAPTURE_MENU_ID) return;
+  void (async () => {
+    let text = info.selectionText ?? "";
+    if (tab?.id !== undefined) {
+      try {
+        const [res] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => window.getSelection()?.toString() ?? "",
+        });
+        if (typeof res?.result === "string" && res.result.trim().length > 0) text = res.result;
+      } catch {
+        // A page the extension can't script (chrome://, the Web Store): the plain selection is fine.
+      }
+    }
+    text = text.trim();
+    if (text.length < 20) return flashBadge("?", "#8a8a8a");
+    const { credentials } = await getSettings();
+    if (!credentials && !(await ensurePaired("context-menu"))) return flashBadge("!", "#d93025");
+    try {
+      await pasteConversation(text);
+      await notifyDesktopOfCapture();
+      flashBadge("✓", "#1a7f37");
+    } catch (err) {
+      console.error("[Thread] context-menu capture failed:", err);
+      flashBadge("!", "#d93025");
+    }
+  })();
+});
+
+function flashBadge(text: string, color: string): void {
+  void chrome.action.setBadgeBackgroundColor({ color });
+  void chrome.action.setBadgeText({ text });
+  setTimeout(() => void chrome.action.setBadgeText({ text: "" }), 3000);
+}
 
 // On every service-worker start (including a manual reload), tell the Mac right away if we're
 // already paired -- so "Browser connected" appears without waiting for the 1-minute alarm.
@@ -473,7 +531,8 @@ async function sendCapture(c: Capture): Promise<SendOutcome> {
 /**
  * Retry every queued conversation once. Stops the whole pass on `unauthorized` (nothing will
  * work until re-paired) and on `capped` (hammering a Free-cap account is pointless). A `transient`
- * failure bumps `attempts` and is dropped past `CAPTURE_MAX_ATTEMPTS`. Called from the retry
+ * failure bumps `attempts` and backs off (1, 2, 4... minutes, up to an hour); an entry is only
+ * given up after a week (`CAPTURE_MAX_AGE_MS`). Called from the retry
  * alarm and after any successful live capture.
  */
 async function drainQueue(): Promise<void> {
@@ -483,16 +542,27 @@ async function drainQueue(): Promise<void> {
   if (!credentials) return;
 
   const keep: typeof queue = [];
+  const now = Date.now();
   for (let i = 0; i < queue.length; i++) {
     const entry = queue[i]!;
+    const decision = retryDecision(entry, now);
+    if (decision === "expire") continue; // a week of failures: give up
+    if (decision === "wait") {
+      keep.push(entry);
+      continue;
+    }
     const outcome = await sendCapture(entry);
-    if (outcome.kind === "ok") continue; // done -- drop it
+    if (outcome.kind === "ok") {
+      await markDelivered(entry.source, new Date().toISOString()); // the popup row turns green again
+      await notifyDesktopOfCapture();
+      continue; // done -- drop it
+    }
     if (outcome.kind === "unauthorized" || outcome.kind === "capped") {
       keep.push(...queue.slice(i)); // stop the pass; leave this and the rest for next time
       break;
     }
-    if (entry.attempts + 1 < CAPTURE_MAX_ATTEMPTS) keep.push({ ...entry, attempts: entry.attempts + 1 });
-    // else: give it up -- it isn't transient any more
+    const attempts = entry.attempts + 1;
+    keep.push({ ...entry, attempts, nextAttemptAt: new Date(now + retryDelayMs(attempts)).toISOString() });
   }
   await setCaptureQueue(keep);
   await setBadge(keep.length > 0 || (await getPairingState()).status !== "paired");
@@ -500,7 +570,9 @@ async function drainQueue(): Promise<void> {
 
 async function handleCapture(
   message: CaptureMessage,
-): Promise<{ ok: true; result: unknown } | { ok: false; error: string; queued?: boolean; retry?: boolean }> {
+): Promise<
+  { ok: true; result: unknown } | { ok: false; error: string; queued?: boolean; retry?: boolean; capped?: boolean }
+> {
   const { credentials } = await getSettings();
   if (!credentials) {
     const paired = await ensurePaired("capture");
@@ -510,6 +582,7 @@ async function handleCapture(
   const outcome = await sendCapture(message);
   if (outcome.kind === "ok") {
     console.log(`[Thread] ingested ${message.conversationId}`);
+    await notifyDesktopOfCapture();
     void drainQueue(); // a working connection is a good moment to flush anything parked
     return { ok: true, result: outcome.result };
   }
@@ -520,8 +593,18 @@ async function handleCapture(
     const repaired = await ensurePaired("capture-401");
     if (repaired) {
       const retry = await sendCapture(message);
-      if (retry.kind === "ok") return { ok: true, result: retry.result };
+      if (retry.kind === "ok") {
+        await notifyDesktopOfCapture();
+        return { ok: true, result: retry.result };
+      }
     }
+    // Still rejected with the Mac's own credentials: the account's sign-in is broken, not this
+    // browser's. Never keep saying "Connected" while nothing is getting through.
+    await setPairingState({
+      status: "rejected",
+      detail: "Thread's server isn't accepting this sign-in. Sign in again in Thread for Mac, then Reconnect.",
+    });
+    await setBadge(true);
     return { ok: false, error: "Credentials expired -- reconnect Thread for Mac.", retry: true };
   }
   if (outcome.kind === "capped") {
@@ -530,7 +613,7 @@ async function handleCapture(
       detail: "Free plan limit reached. Upgrade to Pro from your Thread account to keep capturing.",
     });
     await setBadge(true);
-    return { ok: false, error: "Free plan limit reached -- upgrade to Pro from your Thread account." };
+    return { ok: false, error: "Free plan limit reached -- upgrade to Pro from your Thread account.", capped: true };
   }
   // transient -- park the full transcript so it survives the worker being killed and retries later
   console.error(`[Thread] ingest failed for ${message.conversationId}, queued for retry:`, outcome.error);

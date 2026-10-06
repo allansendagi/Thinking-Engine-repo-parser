@@ -39,4 +39,13 @@ final class PairingServerTests: XCTestCase {
         XCTAssertEqual(h["host"], "127.0.0.1:43917")
         XCTAssertNil(h["origin"])
     }
+
+    func testHelloCarriesTheCapturedFlagSoTheAppRefreshesNow() {
+        var seen: [(String?, Bool)] = []
+        let server = PairingServer(payloadProvider: { nil }, onHello: { uid, captured in seen.append((uid, captured)) })
+        _ = server.response(for: "GET /thread/hello?userId=u_1&captured=1 HTTP/1.1")
+        _ = server.response(for: "GET /thread/hello?userId=u_1 HTTP/1.1")
+        XCTAssertEqual(seen.map(\.0), ["u_1", "u_1"])
+        XCTAssertEqual(seen.map(\.1), [true, false])
+    }
 }

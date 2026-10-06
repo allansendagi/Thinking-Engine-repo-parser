@@ -204,6 +204,11 @@ export function createRequestHandler(
     const { pathname } = url;
 
     if (req.method === "GET" && pathname === "/v1/health") {
+      // ?deep=1 also checks the AI models every capture depends on (one tiny call each, cached
+      // for 5 minutes so it can't be used to spend tokens).
+      if (url.searchParams.get("deep") === "1") {
+        return json({ status: "ok", storage: storageMode(), models: await checkModels(providers) });
+      }
       return json({ status: "ok", storage: storageMode() });
     }
 
@@ -902,8 +907,41 @@ export function createRequestHandler(
       }
 
       return error(404, "Not found");
+    } catch (e) {
+      // Never a bare 500: say what failed (an upstream model error, a database error...) so the
+      // extension and the app can show it, and log it with the route for the server logs.
+      const detail = describeFailure(e);
+      console.error(`[Thread] ${req.method} ${pathname} failed for ${userId}: ${detail}`, e);
+      return error(500, detail, "server_error");
     } finally {
       db.close();
     }
   };
+}
+
+let modelCheck: { at: number; result: Record<string, string> } | null = null;
+
+async function checkModels(providers: PipelineProviders): Promise<Record<string, string>> {
+  if (modelCheck && Date.now() - modelCheck.at < 5 * 60_000) return modelCheck.result;
+  const probe = async (p: PipelineProviders["extraction"]): Promise<string> => {
+    try {
+      const out = await p.complete("Reply with the single word: ok", "ok?", 5);
+      return out.trim() ? "ok" : "empty reply";
+    } catch (e) {
+      return describeFailure(e);
+    }
+  };
+  const [extraction, reasoning] = await Promise.all([probe(providers.extraction), probe(providers.reasoning)]);
+  const result = { extraction, reasoning };
+  modelCheck = { at: Date.now(), result };
+  return result;
+}
+
+/** One safe line about a failure: the error's class/status and message, never request data. */
+function describeFailure(e: unknown): string {
+  if (!(e instanceof Error)) return "Unexpected server error";
+  const status = (e as { status?: number }).status;
+  const kind = e.constructor?.name && e.constructor.name !== "Error" ? e.constructor.name : "Error";
+  const msg = e.message.replace(/sk-[A-Za-z0-9_-]{10,}/g, "[redacted]").slice(0, 240);
+  return `${kind}${status ? ` ${status}` : ""}: ${msg}`;
 }

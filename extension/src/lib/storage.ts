@@ -88,6 +88,20 @@ function foldReport(prev: SourceHealth | undefined, r: CaptureReport): SourceHea
     next.detail = "No conversation open";
     return next;
   }
+  // Something new was read but the server didn't take it: say so plainly. "last capture" only
+  // ever moves on a confirmed delivery -- an attempt that failed must not look like success.
+  if (r.sent > 0 && r.delivery && r.delivery !== "delivered") {
+    next.state = "error";
+    next.emptyStreak = 0;
+    const why = {
+      queued: "Couldn't reach Thread — will retry automatically",
+      capped: "Free plan limit reached — not captured",
+      unpaired: "Not connected — open Thread for Mac",
+    }[r.delivery];
+    next.lastError = why;
+    next.detail = why;
+    return next;
+  }
   if (r.extracted > 0) {
     next.state = "ok";
     next.emptyStreak = 0;
@@ -112,6 +126,15 @@ function foldReport(prev: SourceHealth | undefined, r: CaptureReport): SourceHea
   return next;
 }
 
+/** A queued capture finally went through: that source's last capture is now, and its error clears. */
+export async function markDelivered(source: CaptureReport["source"], at: string): Promise<void> {
+  const health = await getCaptureHealth();
+  const h = health[source];
+  if (!h) return;
+  health[source] = { ...h, state: "ok", lastCaptureAt: at, lastError: null, detail: "Captured just now" };
+  await chrome.storage.local.set({ captureHealth: health });
+}
+
 export async function recordCaptureReport(report: CaptureReport): Promise<CaptureHealth> {
   const health = await getCaptureHealth();
   health[report.source] = foldReport(health[report.source], report);
@@ -130,8 +153,21 @@ export const _foldReport = foldReport;
 
 /** Cap the queue so a long outage can't grow storage without bound. Newest conversations win. */
 export const CAPTURE_QUEUE_MAX = 25;
-/** Give up on an entry after this many failed drains -- it's not transient any more. */
-export const CAPTURE_MAX_ATTEMPTS = 8;
+/** How long a capture is kept and retried. It used to be dropped after 8 one-minute tries, so a
+ *  server problem longer than ~8 minutes silently lost the person's conversations. */
+export const CAPTURE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Backoff after `attempts` failures: 1, 2, 4, 8... minutes, capped at an hour. */
+export function retryDelayMs(attempts: number): number {
+  return Math.min(60, 2 ** Math.max(0, attempts - 1)) * 60_000;
+}
+
+/** What a drain pass does with one queued capture right now. */
+export function retryDecision(e: QueuedCapture, now: number): "send" | "wait" | "expire" {
+  if (now - new Date(e.queuedAt).getTime() > CAPTURE_MAX_AGE_MS) return "expire";
+  if (e.nextAttemptAt && new Date(e.nextAttemptAt).getTime() > now) return "wait";
+  return "send";
+}
 
 export async function getCaptureQueue(): Promise<QueuedCapture[]> {
   const { captureQueue } = await chrome.storage.local.get("captureQueue");

@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var ambientNudge: AmbientNudge?
     private var axSensor: AXSensorRunner?
     private var cursorWatch: CursorLiveWatch?
+    private(set) var localHistory: LocalHistoryWatch?
     private var connectivity: ConnectivityWatcher?
     private var spotlightSync: AnyCancellable?
     let updater = Updater()
@@ -92,9 +93,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Only serve the token while a pairing window is open (see AppState.openPairingWindow).
             payloadProvider: { state.isPairingWindowOpen ? state.pairingPayload() : nil },
             onServed: { Task { @MainActor in state.noteExtensionHandshake() } },
-            onHello: { uid in Task { @MainActor in state.noteExtensionPing(userId: uid) } }
+            onHello: { uid, captured in
+                Task { @MainActor in
+                    state.noteExtensionPing(userId: uid)
+                    if captured { state.noteExtensionCapture(userId: uid) }
+                }
+            }
         )
         server.start()
+        appState.startAutoRefresh()
         pairingServer = server
         // A short window on launch so a freshly-installed extension pairs with no clicks.
         appState.openPairingWindow(seconds: 120)
@@ -122,55 +129,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watch.start()
         cursorWatch = watch
 
-        // Native AX capture across Cursor / Claude / ChatGPT. OFF unless THREAD_AX_SENSOR=1 --
-        // still a measurement rig ("does AX-only capture actually work"), not a shipped path,
-        // until the adapters are verified against real AX trees (THREAD_AX_DUMP=1 prints them).
-        // Everything captured is stamped native_accessibility + its source app so it's
-        // distinguishable in the evidence store and per-app in capture health.
+        // Every AI tool that keeps readable history on this Mac (Claude Code, Codex, Gemini CLI,
+        // Copilot Chat, local-model apps...): one native FSEvents watcher, captured the moment a
+        // conversation file changes. Seeds silently; per-tool switches in Settings.
+        let local = LocalHistoryWatch(
+            sources: LocalHistorySources.all,
+            client: { [appState] in appState.client },
+            paired: { [weak appState] in appState?.isPaired ?? false },
+            enabled: { CaptureSettings.isLocalSourceEnabled($0) },
+            onCaptured: { [weak appState] _ in Task { await appState?.refresh() } }
+        )
+        local.start()
+        localHistory = local
+
+        // Desktop AI apps read through Accessibility: a measurement rig only (THREAD_AX_SENSOR=1).
+        // Real-machine runs showed roles and conversation identity can't be recovered reliably
+        // from these apps' AX trees (see AXAdapterConfig.extractionUnverified), so it isn't a
+        // user-facing option. Native WRITE (continuation) is separate and does work.
         if ProcessInfo.processInfo.environment["THREAD_AX_SENSOR"] == "1" {
-            print("[ThreadMac AX] THREAD_AX_SENSOR=1 -- native capture rig is ON "
-                + "(Cursor / Claude / ChatGPT). This build knows THREAD_AX_DUMP.")
-            AXSensorRunner.requestAccessibility()
-            let sensor = AXSensorRunner(
-                adapters: AXAdapters.all,
-                ingest: { [weak appState, setupNotifier] source, id, messages, fidelity in
-                    guard let appState else { return }
-                    guard appState.isPaired else {
-                        print("[ThreadMac AX] \(source): read \(messages.count) msg but this build isn't paired "
-                            + "to an account -- nothing sent. Finish onboarding in the menu-bar app first.")
-                        await MainActor.run { setupNotifier.report(.notPaired) }
-                        return
-                    }
-                    do {
-                        let r = try await appState.client.ingestConversation(
-                            id: id, source: source, messages: messages,
-                            capture: (method: "native_accessibility", fidelity: fidelity)
-                        )
-                        print("[ThreadMac AX] \(source): +\(messages.count) msg fidelity=\(fidelity) -> canonical +\(r.newCanonicalEvents), ideas \(r.ideaCount)")
-                        await MainActor.run { setupNotifier.clear(.notPaired) }
-                    } catch {
-                        print("[ThreadMac AX] \(source) ingest failed: \(error)")
-                    }
-                }
-            )
-            sensor.onStatusChange = { [setupNotifier] status in
-                print("[ThreadMac AX] status: \(status)")
-                switch status {
-                case .needsPermission:
-                    setupNotifier.report(.accessibilityNeeded)
-                case .error(let m):
-                    setupNotifier.report(.captureError("Native capture: \(m)"))
-                case .waiting, .watching:
-                    // Reaching either proves Accessibility is granted and there's no live error.
-                    // Says nothing about the account -- leave `.notPaired` alone.
-                    setupNotifier.clear(.accessibilityNeeded)
-                    setupNotifier.clear(.captureError(""))
-                case .idle:
-                    break
-                }
-            }
-            sensor.start()
-            axSensor = sensor
+            startDesktopAppCapture()
         }
 
         // Flush any thread:// URL that launched us before this point.
@@ -327,6 +304,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pairingServer?.stop()
         connectivity?.stop()
     }
+
+    /// Desktop AI apps (ChatGPT, Claude, Cursor windows) through Accessibility -- the measurement
+    /// rig (THREAD_AX_SENSOR=1); not user-facing until the AX read is verified. Everything captured is
+    /// stamped native_accessibility + its app, so it's distinguishable in the evidence store and
+    /// per-app in capture health. THREAD_AX_DUMP=1 prints the trees for adapter work.
+    func startDesktopAppCapture() {
+        do {
+            guard axSensor == nil else { return }
+            AXSensorRunner.requestAccessibility()
+            let sensor = AXSensorRunner(
+                adapters: AXAdapters.all,
+                ingest: { [weak appState, setupNotifier] source, id, messages, fidelity in
+                    guard let appState else { return }
+                    guard appState.isPaired else {
+                        print("[ThreadMac AX] \(source): read \(messages.count) msg but this build isn't paired "
+                            + "to an account -- nothing sent. Finish onboarding in the menu-bar app first.")
+                        await MainActor.run { setupNotifier.report(.notPaired) }
+                        return
+                    }
+                    do {
+                        let r = try await appState.client.ingestConversation(
+                            id: id, source: source, messages: messages,
+                            capture: (method: "native_accessibility", fidelity: fidelity)
+                        )
+                        print("[ThreadMac AX] \(source): +\(messages.count) msg fidelity=\(fidelity) -> canonical +\(r.newCanonicalEvents), ideas \(r.ideaCount)")
+                        await MainActor.run { setupNotifier.clear(.notPaired) }
+                        if r.newCanonicalEvents > 0 { await appState.refresh() }
+                    } catch {
+                        print("[ThreadMac AX] \(source) ingest failed: \(error)")
+                    }
+                }
+            )
+            sensor.onStatusChange = { [setupNotifier, weak appState] status in
+                appState?.desktopCaptureStatus = status
+                print("[ThreadMac AX] status: \(status)")
+                switch status {
+                case .needsPermission:
+                    setupNotifier.report(.accessibilityNeeded)
+                case .error(let m):
+                    setupNotifier.report(.captureError("Native capture: \(m)"))
+                case .waiting, .watching:
+                    // Reaching either proves Accessibility is granted and there's no live error.
+                    // Says nothing about the account -- leave `.notPaired` alone.
+                    setupNotifier.clear(.accessibilityNeeded)
+                    setupNotifier.clear(.captureError(""))
+                case .idle:
+                    break
+                }
+            }
+            sensor.start()
+            axSensor = sensor
+        }
+    }
+
+    func stopDesktopAppCapture() {
+        axSensor?.stop()
+        axSensor = nil
+        appState.desktopCaptureStatus = .idle
+    }
+
 }
 
 @main

@@ -1,0 +1,61 @@
+name: Mac app — latest build
+
+# Every change to the Mac app or the extension on main builds a fresh universal Thread.dmg (on a
+# GitHub Mac) plus the extension zip, and publishes both as the `mac-latest` pre-release,
+# replacing the previous one. The website's admin
+# page and download links point at its stable URL:
+#   https://github.com/<repo>/releases/download/mac-latest/Thread.dmg
+#
+# UNSIGNED (ad-hoc) -- there is no Developer ID yet. macOS asks the user to approve it once in
+# System Settings > Privacy & Security > Open Anyway. Signed, notarized, auto-updating releases
+# are release-mac.yml (needs the Apple secrets listed there). A pre-release never becomes
+# "latest", so Sparkle's appcast (releases/latest) is untouched.
+
+on:
+  push:
+    # The working branch too, so a build exists before its next merge (it only ever carries main
+    # plus not-yet-merged app work).
+    branches: ["main", "claude/zen-faraday-hi9ive"]
+    paths: ["macos-app/**", "extension/**", ".github/workflows/build-mac-latest.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mac-latest
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: macos-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build the extension zip
+        working-directory: extension
+        run: |
+          ./package.sh
+          cp dist-package/thread-extension-*.zip "$RUNNER_TEMP/thread-extension.zip"
+
+      - name: Build Thread.dmg
+        env:
+          THREAD_VERSION: 0.3.${{ github.run_number }}
+        run: ./package.sh
+
+      - name: Publish as mac-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: 0.3.${{ github.run_number }}
+        run: |
+          cp dist/Thread.dmg "dist/Thread-${VERSION}.dmg"
+          gh release delete mac-latest --cleanup-tag --yes || true
+          gh release create mac-latest dist/Thread.dmg "dist/Thread-${VERSION}.dmg" "$RUNNER_TEMP/thread-extension.zip" \
+            --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "Thread for Mac ${VERSION} (latest build)" \
+            --notes "Built from ${GITHUB_SHA::7} on $(date -u '+%Y-%m-%d %H:%M UTC'). Unsigned: on first open, approve it in System Settings > Privacy & Security > Open Anyway. Extension: unzip thread-extension.zip, then chrome://extensions > Developer mode > Load unpacked (or Reload if already loaded from that folder)."

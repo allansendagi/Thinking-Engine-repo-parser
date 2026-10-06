@@ -51,6 +51,8 @@ final class AppState: ObservableObject {
     /// True when the last sync attempt failed. A quiet "showing last synced" hint — never a
     /// blocking error; the cached graph stays fully usable.
     @Published var isOffline = false
+    /// The desktop-app (Accessibility) sensor's state, for Settings.
+    @Published var desktopCaptureStatus: AXSensorStatus = .idle
 
     private func persistSnapshot() {
         // When we're showing the on-device graph, don't persist it as the "last synced" state —
@@ -882,6 +884,36 @@ final class AppState: ObservableObject {
         recordExtensionPing()
     }
 
+    /// The extension just had a capture confirmed by the server: the new thinking is already
+    /// there, so fetch it now (debounced -- a burst of captures is one refresh). This local
+    /// signal is what makes a capture show up in the app within a second or two.
+    func noteExtensionCapture(userId: String?) {
+        guard userId == nil || userId?.isEmpty == true || userId == CredentialStore.userId else { return }
+        captureRefreshTask?.cancel()
+        captureRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1200))
+            guard !Task.isCancelled, let self else { return }
+            await self.refresh()
+        }
+    }
+    private var captureRefreshTask: Task<Void, Never>?
+
+    /// Safety net for everything the extension ping doesn't cover (captures from another Mac or
+    /// browser, extraction finishing later): a light sync every minute while the app runs, more
+    /// often while it can't reach the server so it recovers quickly.
+    func startAutoRefresh() {
+        guard autoRefreshTask == nil else { return }
+        autoRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let offline = self?.isOffline ?? false
+                try? await Task.sleep(for: .seconds(offline ? 20 : 60))
+                guard let self, !Task.isCancelled else { return }
+                if self.isPaired, self.reconnect == nil, !self.isLoading { await self.refresh() }
+            }
+        }
+    }
+    private var autoRefreshTask: Task<Void, Never>?
+
     private func recordExtensionPing() {
         let now = Date()
         lastExtensionPing = now
@@ -1328,9 +1360,15 @@ final class AppState: ObservableObject {
             persistSnapshot()
             await flushPending()
             await flushEdits()
+        } catch let APIError.http(status, _) where status == 401 {
+            // The server no longer accepts this sign-in. Silently showing old ideas as if all were
+            // well is how captures went missing unnoticed: say so, and offer one-tap reconnect.
+            isLoading = false
+            enterReconnect(knownEmail: account?.email ?? CredentialStore.lastKnownEmail)
+            return
         } catch {
-            // Local-first: a failed sync is not an error the user has to see. Keep whatever's on
-            // screen; fall back to the on-device graph if we have nothing else.
+            // Can't reach the server: keep whatever's on screen (local-first) and fall back to the
+            // on-device graph if there's nothing else. The footer shows it ("Can't reach Thread").
             isOffline = true
             if thinkingState == nil && !localGraph.ideas.isEmpty { showLocalGraph() }
         }

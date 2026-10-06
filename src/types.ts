@@ -38,10 +38,13 @@ export type CanonicalEventStatus = "committed" | "provisional";
 export interface CanonicalEvent {
   id: string;
   conversationId: string;
-  // Browser-captured AI tools, the local desktop store (cursor), a human paste, and test
-  // fixtures. Adding a new browser source: extend this union, add a label in mcp/tools.ts
-  // `SOURCE_LABELS`, and ship the extension adapter.
-  source: "chatgpt" | "claude" | "gemini" | "perplexity" | "cursor" | "paste" | "fixture";
+  // Browser-captured AI tools, local histories read on the Mac (cursor, claude_code, codex...),
+  // a human paste, and test fixtures. Adding a source: extend this union and add a label in
+  // mcp/tools.ts `SOURCE_LABELS`.
+  source:
+    | "chatgpt" | "claude" | "gemini" | "perplexity" | "cursor" | "paste" | "fixture"
+    | "claude_code" | "codex" | "gemini_cli" | "copilot" | "windsurf" | "zed" | "lm_studio" | "jan" | "ollama"
+    | "grok" | "deepseek" | "mistral" | "ms_copilot" | "meta_ai" | "poe" | "qwen" | "kimi" | "ai_studio";
   role: Role;
   text: string;
   createdAt: string; // ISO 8601

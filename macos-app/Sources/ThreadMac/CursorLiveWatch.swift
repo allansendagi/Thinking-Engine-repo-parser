@@ -4,8 +4,9 @@ import Foundation
 /// composer"; this is the same reader on a "diff since last read" loop -- new thinking in Cursor
 /// reaches Thread within a poll interval, no export and no Accessibility.
 ///
-/// Mechanism: a low-priority timer re-checks `state.vscdb` (+ its `-wal`). A `stat` signature
-/// gates the actual work, so an idle tick is nearly free. When the db has moved, every
+/// Mechanism: an FSEvents stream on Cursor's storage folder wakes this the moment Cursor writes
+/// (a slow timer remains only as a backstop). A `stat` signature of `state.vscdb` (+ its `-wal`)
+/// gates the actual work, so a wake for an unrelated file is nearly free. When the db has moved, every
 /// conversation whose turn set has grown since we last sent it is POSTed **whole** to
 /// `/v1/conversations`, stamped `desktop_agent` / `high`. The backend dedupes on canonical event
 /// id, so re-sending the settled turns is a cheap no-op there too -- only the genuinely new turn
@@ -48,7 +49,7 @@ final class CursorLiveWatch {
     init(
         client: @escaping @MainActor () -> APIClient,
         paired: @escaping @MainActor () -> Bool,
-        interval: TimeInterval = 20
+        interval: TimeInterval = 180
     ) {
         self.makeClient = client
         self.paired = paired
@@ -71,10 +72,18 @@ final class CursorLiveWatch {
         t.setEventHandler { [weak self] in Task { @MainActor in self?.tick() } }
         timer = t
         t.resume()
+        // Native change notifications: Cursor writing a turn wakes us within ~2s, no polling.
+        let folder = (CursorBackfill.stateDbPath as NSString).deletingLastPathComponent
+        let s = FileEventStream { [weak self] _ in Task { @MainActor in self?.tick() } }
+        s.watch([folder], latency: 2.0)
+        events = s
     }
+    private var events: FileEventStream?
 
     func stop() {
         stopped = true
+        events?.stop()
+        events = nil
         timer?.cancel()
         timer = nil
         task?.cancel()

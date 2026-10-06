@@ -40,11 +40,13 @@ final class PairingServer {
     ///     is connected (it does this after adopting credentials by *any* path, including a
     ///     pasted code, which never touches `/thread/pair`). The argument is the userId it
     ///     claims; the app ignores a ping for a different account. Invoked on an arbitrary queue.
-    private var onHello: (String?) -> Void
+    ///     `captured` is true when the ping follows a capture the server just confirmed
+    ///     (`&captured=1`) -- the app refreshes right away instead of waiting for its next sync.
+    private var onHello: (_ userId: String?, _ captured: Bool) -> Void
     init(
         payloadProvider: @escaping () -> Data?,
         onServed: @escaping () -> Void = {},
-        onHello: @escaping (String?) -> Void = { _ in }
+        onHello: @escaping (_ userId: String?, _ captured: Bool) -> Void = { _, _ in }
     ) {
         self.payloadProvider = payloadProvider
         self.onServed = onServed
@@ -92,7 +94,7 @@ final class PairingServer {
         }
     }
 
-    private func response(for requestLine: String) -> Data {
+    func response(for requestLine: String) -> Data {   // internal for tests
         let parts = requestLine.split(separator: " ")
         let method = parts.first.map(String.init) ?? ""
         let path = parts.count > 1 ? String(parts[1]) : ""
@@ -100,7 +102,7 @@ final class PairingServer {
         // Liveness ping -- no token in or out. Answered any time (no pairing window needed) so a
         // browser that paired via a pasted code can still register as connected.
         if method == "GET", path.hasPrefix("/thread/hello") {
-            onHello(Self.queryValue("userId", in: path))
+            onHello(Self.queryValue("userId", in: path), Self.queryValue("captured", in: path) == "1")
             return Self.raw(status: "200 OK", body: Data(#"{"ok":true}"#.utf8))
         }
 
