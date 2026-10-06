@@ -78,6 +78,38 @@ enum Embeddings {
     }
 }
 
+// MARK: - Native vectors for server-side idea mining
+
+/// The best on-device model available right now, for thought vectors the server mines with.
+/// Native-only chain: Apple's contextual model when its asset is downloaded, else the sentence
+/// model built into macOS (no download, always present). Never a cloud model.
+enum NativeThoughtEmbedding {
+    private static let sentenceLock = NSLock()
+    private static let sentence: NLEmbedding? = NLEmbedding.sentenceEmbedding(for: .english)
+
+    /// (model id, vector) for `text`, or nil if no native model can embed it.
+    static func embed(_ text: String) -> (model: String, vector: [Float])? {
+        if Embeddings.isAvailable, let id = Embeddings.modelId, let v = Embeddings.vector(for: text) {
+            return (id, v)
+        }
+        return sentenceVector(text)
+    }
+
+    /// The model `embed` would use right now -- what the server is asked about.
+    static var currentModel: String? {
+        if Embeddings.isAvailable, let id = Embeddings.modelId { return id }
+        return sentence.map { "apple:nlembedding.sentence.en.r\($0.revision)" }
+    }
+
+    static func sentenceVector(_ text: String) -> (model: String, vector: [Float])? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, let s = sentence else { return nil }
+        sentenceLock.lock(); defer { sentenceLock.unlock() }
+        guard let v = s.vector(for: t) else { return nil }
+        return ("apple:nlembedding.sentence.en.r\(s.revision)", v.map { Float($0) })
+    }
+}
+
 /// Deterministic across launches (unlike `String.hashValue`, which is per-process seeded) — so a
 /// cached vector is reused until the idea's text genuinely changes. djb2-xor over UTF-8.
 func stableHash(_ s: String) -> Int {
