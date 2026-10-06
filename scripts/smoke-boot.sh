@@ -10,8 +10,11 @@ LOG="$DIR/server.log"
 cleanup() { [ -n "${PID:-}" ] && kill "$PID" 2>/dev/null || true; rm -rf "$DIR"; }
 trap cleanup EXIT
 
+# THREAD_SERVER_CMD lets CI boot the compiled single-binary engine through the same checks.
+CMD="${THREAD_SERVER_CMD:-bun run src/api/server.ts}"
+# shellcheck disable=SC2086
 PORT="$PORT" THREAD_REGISTRY_PATH="$DIR/registry.db" THREAD_DATA_DIR="$DIR/users" \
-  bun run src/api/server.ts >"$LOG" 2>&1 &
+  $CMD >"$LOG" 2>&1 &
 PID=$!
 
 i=0

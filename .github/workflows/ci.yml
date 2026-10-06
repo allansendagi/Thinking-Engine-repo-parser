@@ -30,6 +30,26 @@ jobs:
       - run: bun test $(find src -name '*.test.ts' | sort | sed 's|^|./|')
       - run: ./scripts/smoke-boot.sh
 
+  engine-binary:
+    name: backend as a single binary (compile + boot)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      # The engine can run on a Mac as one self-contained executable (no source tree beside it).
+      # Anything it reads from disk at start-up would break there -- schema.sql once did.
+      - run: bun build --compile src/api/server.ts --outfile thread-engine
+      - run: ./scripts/smoke-boot.sh
+        env:
+          THREAD_SERVER_CMD: ./thread-engine
+      # And the macOS targets must keep compiling.
+      - run: |
+          bun build --compile --target=bun-darwin-arm64 src/api/server.ts --outfile thread-engine-darwin-arm64
+          bun build --compile --target=bun-darwin-x64 src/api/server.ts --outfile thread-engine-darwin-x64
+
   backend:
     name: backend (bun · tsc · test)
     runs-on: ubuntu-latest

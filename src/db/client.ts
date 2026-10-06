@@ -1,11 +1,9 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-const SCHEMA_SQL = readFileSync(join(__dirname, "schema.sql"), "utf-8");
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+// Embedded at build time, not read from disk at start-up, so the engine also runs as a single
+// compiled binary (`bun build --compile`), where no source tree exists next to it.
+import SCHEMA_SQL from "./schema.sql" with { type: "text" };
 
 const ADD_COLUMNS: [table: string, column: string][] = [
   ["cognitive_events", "persistence TEXT NOT NULL DEFAULT 'high'"],
