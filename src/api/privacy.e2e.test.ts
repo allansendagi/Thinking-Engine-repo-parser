@@ -230,6 +230,29 @@ describe("delete everything", () => {
     expect((await u.call("GET", "/v1/account")).status).toBe(401);
   });
 
+  test("a background job that still holds the database open can't bring files back after deletion", async () => {
+    const u = await newUser();
+    await capture(u.call, "conv_a", SECRET_A);
+    // What an in-flight mining pass or extraction retry looks like: a connection opened earlier.
+    const straggler = openUserDb(u.userId);
+    const dbFile = dbPathForUser(u.userId);
+    expect((await u.call("DELETE", "/v1/account/data", { confirm: "delete everything" })).status).toBe(200);
+    // It tries to write after the account is gone: that must fail, not recreate -wal/-shm.
+    let wrote = true;
+    try {
+      straggler.prepare("INSERT INTO mining_runs (miner, thoughts, vectors, ideas, sparks, ms, ran_at) VALUES ('v2', 0, 0, 0, 0, 0, 'x')").run();
+    } catch {
+      wrote = false;
+    }
+    try {
+      straggler.close();
+    } catch {
+      // already closed by the purge
+    }
+    expect(wrote).toBe(false);
+    for (const f of [dbFile, `${dbFile}-wal`, `${dbFile}-shm`]) expect(existsSync(f)).toBe(false);
+  });
+
   test("an active subscription must be dealt with first -- deleting data doesn't cancel billing", async () => {
     const u = await newUser();
     setPlan(u.userId, { plan: "pro", status: "active", paddleCustomerId: "ctm_1" });

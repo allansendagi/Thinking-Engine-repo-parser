@@ -42,9 +42,27 @@ export function dbPathForUser(userId: string): string {
  */
 const purged = new Set<string>();
 
+/**
+ * Connections currently open per account. A background job (an extraction retry, a mining pass)
+ * can still hold one when the account is deleted; if it wrote after the files were unlinked,
+ * SQLite would quietly create fresh -wal/-shm files holding derived data. Deleting closes these
+ * first, so nothing can write once the account is gone.
+ */
+const live = new Map<string, Set<Database>>();
+
 export function openUserDb(userId: string): Database {
   if (purged.has(userId)) throw new Error("This account has been deleted");
-  return openDb(dbPathForUser(userId));
+  const db = openDb(dbPathForUser(userId));
+  const set = live.get(userId) ?? new Set<Database>();
+  live.set(userId, set);
+  set.add(db);
+  const close = db.close.bind(db);
+  db.close = (...args: Parameters<Database["close"]>) => {
+    set.delete(db);
+    if (set.size === 0 && live.get(userId) === set) live.delete(userId);
+    return close(...args);
+  };
+  return db;
 }
 
 /** Delete an account's database from disk and return what was removed (counted first). */
@@ -67,5 +85,13 @@ export function purgeUser(userId: string): AccountDeletion {
     db.close();
   }
   purged.add(userId);
+  // Close anything still open for this account (db.close removes it from `live`).
+  for (const db of [...(live.get(userId) ?? [])]) {
+    try {
+      db.close();
+    } catch {
+      // already closed
+    }
+  }
   return { ...counts, filesRemoved: purgeUserFiles(path) };
 }
