@@ -155,7 +155,7 @@ describe("the September outage, end to end", () => {
 
   test("the deep health check names the cause while the AI is down", async () => {
     aiUp = false;
-    // A fresh server: the health result is cached for 5 minutes per process.
+    // A fresh server (the health result is cached for 5 minutes per server).
     const s = Bun.serve({ port: 0, fetch: createRequestHandler({ extraction, reasoning }) });
     try {
       const h = (await (await fetch(`http://localhost:${s.port}/v1/health?deep=1`)).json()) as {

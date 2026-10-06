@@ -968,10 +968,12 @@ function checkStorage(): Record<string, unknown> {
   return out;
 }
 
-let modelCheck: { at: number; result: Record<string, string> } | null = null;
+/** Cached per provider set (one per server), never shared across servers in a process. */
+const modelChecks = new WeakMap<PipelineProviders, { at: number; result: Record<string, string> }>();
 
 async function checkModels(providers: PipelineProviders): Promise<Record<string, string>> {
-  if (modelCheck && Date.now() - modelCheck.at < 5 * 60_000) return modelCheck.result;
+  const cached = modelChecks.get(providers);
+  if (cached && Date.now() - cached.at < 5 * 60_000) return cached.result;
   const probe = async (p: PipelineProviders["extraction"]): Promise<string> => {
     try {
       const out = await p.complete("Reply with the single word: ok", "ok?", 5);
@@ -982,7 +984,7 @@ async function checkModels(providers: PipelineProviders): Promise<Record<string,
   };
   const [extraction, reasoning] = await Promise.all([probe(providers.extraction), probe(providers.reasoning)]);
   const result = { extraction, reasoning };
-  modelCheck = { at: Date.now(), result };
+  modelChecks.set(providers, { at: Date.now(), result });
   return result;
 }
 
