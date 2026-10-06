@@ -35,6 +35,7 @@ import {
 } from "./billing";
 import { dataDir, openUserDb, purgeUser } from "../db/tenancy";
 import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
+import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary, scheduleRetentionSweep, setRetentionDays } from "../db/retention";
 import { storageMode } from "../db/durability";
 import { downloadSummary, isAdmin, recordDownload } from "./metrics";
 import { addToWaitlist, waitlistSummary } from "./waitlist";
@@ -588,6 +589,8 @@ export function createRequestHandler(
     const db = openUserDb(userId);
     // Captures saved while the AI was unavailable resume on their own (throttled, off-path).
     scheduleDeferredRetry(userId, openUserDb, providers);
+    // The retention setting (if any) is applied in the background, at most hourly.
+    scheduleRetentionSweep(userId, openUserDb);
 
     try {
       // Soft lock. Reads are never gated. No-op until Paddle is actually configured.
@@ -742,7 +745,8 @@ export function createRequestHandler(
           account: { email: account?.email ?? null, plan: account?.plan ?? "free" },
           processors: dataProcessors(providers),
           retention: {
-            rawConversations: "Kept while your account exists, or until you delete the conversation or the account.",
+            ...retentionSummary(db),
+            rawConversations: retentionText(getRetentionDays(db)),
             vectors: "Kept while your account exists; removed with the conversation they came from.",
             backups: backupNote(),
           },
@@ -757,6 +761,27 @@ export function createRequestHandler(
             "content-disposition": 'attachment; filename="thread-export.json"',
           },
         });
+      }
+      // --- Retention: how long raw conversation text is kept once ideas exist --------------
+      if (pathname === "/v1/account/retention") {
+        if (req.method === "GET") {
+          return json({ ...retentionSummary(db), maxDays: MAX_RETENTION_DAYS, text: retentionText(getRetentionDays(db)) });
+        }
+        if (req.method === "PUT") {
+          let body: { days?: unknown };
+          try {
+            body = (await req.json()) as { days?: unknown };
+          } catch {
+            return error(400, "Invalid JSON body");
+          }
+          const days = body.days === null || body.days === undefined ? null : body.days;
+          if (days !== null && (typeof days !== "number" || !Number.isInteger(days) || days < 0 || days > MAX_RETENTION_DAYS))
+            return error(400, `days must be null (keep) or a whole number from 0 to ${MAX_RETENTION_DAYS}`);
+          setRetentionDays(db, days as number | null);
+          // Applied now, not at some later sweep: the person asked for it to happen.
+          const applied = applyRetention(db);
+          return json({ ...retentionSummary(db), text: retentionText(getRetentionDays(db)), applied, backups: backupNote() });
+        }
       }
       const delConv = pathname.match(/^\/v1\/conversations\/(.+)$/);
       if (req.method === "DELETE" && delConv) {
@@ -1000,6 +1025,13 @@ export function createRequestHandler(
       db.close();
     }
   };
+}
+
+/** One line on what the retention setting does, shown wherever it's offered. */
+function retentionText(days: number | null): string {
+  if (days === null) return "Full conversations are kept for as long as your account exists, or until you delete them.";
+  if (days === 0) return "Raw conversation text is removed as soon as its ideas are extracted. Ideas, and the short quotes that ground them, are kept.";
+  return `Raw conversation text is removed ${days} days after it was written. Ideas, and the short quotes that ground them, are kept.`;
 }
 
 /** Plain-language note on backups, shown wherever deletion is promised. */

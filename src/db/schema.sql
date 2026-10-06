@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS canonical_events (
   -- 'browser_extension' / 'high'. See CanonicalEvent.capture / THREAD.md §7.
   capture_method TEXT,
   capture_fidelity TEXT,
+  -- Set when the person's retention setting removed this message's text (the row stays, so a
+  -- re-sent transcript is recognised and never restores the text). NULL while the text is kept.
+  text_removed_at TEXT,
   -- Trust gate: 'committed' | 'provisional'. Provisional rows are stored and used as extraction
   -- context but never become the source of a cognitive event until a clean observation promotes
   -- them. Defaulted so pre-gate rows keep today's behavior. See CanonicalEventStatus / THREAD.md §17.
@@ -213,3 +216,12 @@ CREATE TABLE IF NOT EXISTS pending_extraction (
   last_attempt_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pending_extraction_conv ON pending_extraction(conversation_id);
+
+
+-- Small per-account settings (key/value). Today: `retention_days` -- how long raw conversation
+-- text is kept once it has been turned into ideas. Absent = keep it for as long as the account
+-- exists; 0 = remove it as soon as ideas are extracted; N = remove it N days after it was written.
+CREATE TABLE IF NOT EXISTS account_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

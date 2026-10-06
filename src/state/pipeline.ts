@@ -197,7 +197,14 @@ export function persistCanonicalEvents(db: Database, canonicalEvents: CanonicalE
        ?
      )`,
   );
+  // A message whose text the person's retention setting removed stays removed: clients re-send the
+  // whole transcript on every page change, and INSERT OR REPLACE would otherwise write the text
+  // straight back.
+  const removed = new Set(
+    (db.query("SELECT id FROM canonical_events WHERE text_removed_at IS NOT NULL").all() as { id: string }[]).map((r) => r.id),
+  );
   for (const e of canonicalEvents) {
+    if (removed.has(e.id)) continue;
     insertCanonical.run(
       e.id,
       e.conversationId,

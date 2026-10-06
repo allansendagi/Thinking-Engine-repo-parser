@@ -120,7 +120,8 @@ export function traceIdea(db: Database, id: string): IdeaTrace | null {
     return {
       formulation: step.formulation,
       createdAt: step.createdAt,
-      sourceText: source?.text ?? null,
+      // Empty when the person's retention setting removed the raw text: no source text, not a blank quote.
+      sourceText: source?.text || null,
       sourceRole: source?.role ?? null,
       source: source?.source ?? null,
       sourceUrl: source?.sourceUrl ?? null,
