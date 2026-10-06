@@ -112,9 +112,13 @@ export async function rankCandidates(
 
   for (const idea of ideas) {
     const lastEvolutionTime = idea.evolution.at(-1)?.createdAt ?? idea.createdAt;
+    // Everything the idea has been called, not only its latest wording: a refinement of an idea
+    // often echoes its title or an earlier formulation more than whatever was said last. Max, not
+    // a concatenation, so the score scale (and the signal gate's threshold on it) is unchanged.
+    const texts = [idea.currentFormulation, idea.title, ...idea.evolution.map((s) => s.formulation)];
     const signals: CandidateScore["signals"] = {
-      lexical: lexicalOverlap(event.statement, idea.currentFormulation),
-      entity: entityOverlap(event.statement, idea.currentFormulation),
+      lexical: Math.max(...texts.map((t) => lexicalOverlap(event.statement, t))),
+      entity: Math.max(...texts.map((t) => entityOverlap(event.statement, t))),
       temporal: temporalProximity(sourceEvent.createdAt, lastEvolutionTime, options.halfLifeDays),
       relationship: relationshipBoost(idea),
     };
@@ -144,6 +148,10 @@ export async function rankCandidates(
 export interface NarrowOptions {
   maxCandidates?: number;
   minScore?: number;
+  /** The top-N ranked ideas are kept below `minScore` as long as they clear `keepFloor`. Default 5. */
+  alwaysKeep?: number;
+  /** Minimum score for the always-kept top few -- roughly "touched within the last month". Default 0.01. */
+  keepFloor?: number;
 }
 
 /**
@@ -154,7 +162,17 @@ export function narrowCandidates(
   ranked: CandidateScore[],
   options: NarrowOptions = {},
 ): CandidateScore[] {
-  const maxCandidates = options.maxCandidates ?? 8;
+  const maxCandidates = options.maxCandidates ?? 12;
   const minScore = options.minScore ?? 0.05;
-  return ranked.filter((c) => c.score >= minScore).slice(0, maxCandidates);
+  // Without an embeddings provider there's no semantic signal, so the same idea in different
+  // words can score ~0 lexically. The model is the real judge and is instructed to be
+  // conservative, so a slightly wider net here costs a few prompt tokens, while a candidate
+  // dropped here is a duplicate idea nothing downstream can catch. Keep the floor-free top few.
+  // "Some signal" still means some: an idea with no shared words and no recent activity at all
+  // isn't worth a reasoning call (a genuinely new topic must stay free).
+  const alwaysKeep = options.alwaysKeep ?? 5;
+  const keepFloor = options.keepFloor ?? 0.01;
+  return ranked
+    .filter((c, i) => (i < alwaysKeep && c.score >= keepFloor) || c.score >= minScore)
+    .slice(0, maxCandidates);
 }

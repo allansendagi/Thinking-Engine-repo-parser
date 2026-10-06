@@ -24,6 +24,22 @@ export interface PipelineProviders {
   embeddings?: EmbeddingProvider;
 }
 
+const EXTRACTION_CONCURRENCY = 4;
+
+/** `fn` over `items` with at most `limit` in flight; results in input order. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function groupByConversation(events: CanonicalEvent[]): Map<string, CanonicalEvent[]> {
   const groups = new Map<string, CanonicalEvent[]>();
   for (const event of events) {
@@ -72,8 +88,16 @@ export async function runPipeline(
   const allCognitiveEvents: CognitiveEvent[] = [];
   const allRejected: ExtractionOutcome["rejected"] = [];
 
-  for (const conversationEvents of byConversation.values()) {
-    const outcome = await extractCognitiveEvents(conversationEvents, providers.extraction, options.newEventIds);
+  // Extraction is independent per conversation, so run a few at once -- a 15-conversation import
+  // batch used to make 15 sequential model calls before identity resolution even began. Results
+  // are re-sorted chronologically below, so completion order doesn't matter. Identity resolution
+  // stays strictly sequential: each decision depends on the ideas the previous one produced.
+  const outcomes = await mapWithConcurrency(
+    [...byConversation.values()],
+    EXTRACTION_CONCURRENCY,
+    (conversationEvents) => extractCognitiveEvents(conversationEvents, providers.extraction, options.newEventIds),
+  );
+  for (const outcome of outcomes) {
     allCognitiveEvents.push(...outcome.events);
     allRejected.push(...outcome.rejected);
   }

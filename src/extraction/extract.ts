@@ -2,12 +2,8 @@ import type { CanonicalEvent, CognitiveEvent } from "../types";
 import type { CompletionProvider } from "../providers/types";
 import { EXTRACTION_SYSTEM_PROMPT, MAX_PROMPT_MESSAGE_CHARS, buildTranscriptPrompt } from "./prompt";
 import { extractionResultSchema, type ExtractedEvent } from "./schema";
+import { completeJson } from "../providers/json";
 
-function parseJsonResponse(text: string): unknown {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = fenced?.[1] ?? text;
-  return JSON.parse(candidate.trim());
-}
 
 /**
  * Deterministic hallucination guard: an extracted event is only trustworthy if (a) its
@@ -159,13 +155,13 @@ async function extractOnce(
 ): Promise<ExtractionOutcome> {
   const eventsById = new Map(contextEvents.map((e) => [e.id, e]));
 
-  const raw = await provider.complete(
+  const parsed = await completeJson(
+    provider,
     EXTRACTION_SYSTEM_PROMPT,
     buildTranscriptPrompt(contextEvents, newEventIds),
-    4096,
+    8192,
+    extractionResultSchema,
   );
-
-  const parsed = extractionResultSchema.parse(parseJsonResponse(raw));
 
   const events: CognitiveEvent[] = [];
   const rejected: ExtractionOutcome["rejected"] = [];
