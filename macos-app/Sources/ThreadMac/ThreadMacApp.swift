@@ -92,9 +92,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Only serve the token while a pairing window is open (see AppState.openPairingWindow).
             payloadProvider: { state.isPairingWindowOpen ? state.pairingPayload() : nil },
             onServed: { Task { @MainActor in state.noteExtensionHandshake() } },
-            onHello: { uid in Task { @MainActor in state.noteExtensionPing(userId: uid) } }
+            onHello: { uid, captured in
+                Task { @MainActor in
+                    state.noteExtensionPing(userId: uid)
+                    if captured { state.noteExtensionCapture(userId: uid) }
+                }
+            }
         )
         server.start()
+        appState.startAutoRefresh()
         pairingServer = server
         // A short window on launch so a freshly-installed extension pairs with no clicks.
         appState.openPairingWindow(seconds: 120)

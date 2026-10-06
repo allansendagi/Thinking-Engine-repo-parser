@@ -143,7 +143,11 @@ struct RootView: View {
     private var footer: some View {
         HStack(spacing: 6) {
             Glyph(kind: .cloud, size: 12)
-            Text(statusText).font(.system(size: 11))
+            // Re-render every 30s so "Synced 2m ago" stays true without any state change.
+            TimelineView(.periodic(from: .now, by: 30)) { _ in
+                Text(statusText).font(.system(size: 11))
+                    .foregroundStyle(appState.isOffline && appState.isPaired ? Color.orange.opacity(0.9) : Theme.ink(0.42))
+            }
             Spacer(minLength: 0)
             if let n = appState.thinkingState?.currentIdeas.count {
                 Text("\(n) idea\(n == 1 ? "" : "s")")
@@ -156,12 +160,20 @@ struct RootView: View {
         .overlay(Rectangle().fill(Theme.ink(0.1)).frame(height: 0.5), alignment: .top)
     }
 
+    /// Always the truth about sync: when the app last got your thinking from the server, or
+    /// that it can't reach it right now.
     private var statusText: String {
         if appState.needsReconnect { return "Reconnect to sync" }
         switch appState.captureStatus {
         case .capturing: return "Capturing"
-        case .idle: return appState.lastExtensionHandshake == nil ? "Connected" : "Updated just now"
         case .unpaired: return "Not paired"
+        case .idle:
+            if appState.isOffline { return "Can't reach Thread · retrying" }
+            guard let at = appState.lastSyncedAt else { return "Connected" }
+            let s = Date().timeIntervalSince(at)
+            if s < 60 { return "Synced just now" }
+            if s < 3600 { return "Synced \(Int(s / 60))m ago" }
+            return "Synced \(Int(s / 3600))h ago"
         }
     }
 }

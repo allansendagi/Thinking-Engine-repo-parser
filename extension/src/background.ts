@@ -169,15 +169,23 @@ async function refreshAccountInfo(userId: string): Promise<void> {
  * (which never hits the loopback). Best-effort: the app isn't always running. `PAIRING_PORT` /
  * host permission for 127.0.0.1 are already in the manifest.
  */
-async function pingDesktop(userId: string): Promise<void> {
+async function pingDesktop(userId: string, captured = false): Promise<void> {
   try {
-    await fetch(`http://127.0.0.1:${PAIRING_PORT}/thread/hello?userId=${encodeURIComponent(userId)}`, {
+    const flag = captured ? "&captured=1" : "";
+    await fetch(`http://127.0.0.1:${PAIRING_PORT}/thread/hello?userId=${encodeURIComponent(userId)}${flag}`, {
       method: "GET",
       cache: "no-store",
     });
   } catch {
     // Mac app not running / not listening -- nothing to do.
   }
+}
+
+/** A capture the server just confirmed: tell Thread for Mac so it shows it now, not at its next
+ *  sync. Local loopback only -- nothing leaves the machine. */
+async function notifyDesktopOfCapture(): Promise<void> {
+  const { credentials } = await getSettings();
+  if (credentials) void pingDesktop(credentials.userId, true);
 }
 
 async function setBadge(needsAttention: boolean): Promise<void> {
@@ -489,6 +497,7 @@ async function drainQueue(): Promise<void> {
     const outcome = await sendCapture(entry);
     if (outcome.kind === "ok") {
       await markDelivered(entry.source, new Date().toISOString()); // the popup row turns green again
+      await notifyDesktopOfCapture();
       continue; // done -- drop it
     }
     if (outcome.kind === "unauthorized" || outcome.kind === "capped") {
@@ -516,6 +525,7 @@ async function handleCapture(
   const outcome = await sendCapture(message);
   if (outcome.kind === "ok") {
     console.log(`[Thread] ingested ${message.conversationId}`);
+    await notifyDesktopOfCapture();
     void drainQueue(); // a working connection is a good moment to flush anything parked
     return { ok: true, result: outcome.result };
   }
@@ -526,7 +536,10 @@ async function handleCapture(
     const repaired = await ensurePaired("capture-401");
     if (repaired) {
       const retry = await sendCapture(message);
-      if (retry.kind === "ok") return { ok: true, result: retry.result };
+      if (retry.kind === "ok") {
+        await notifyDesktopOfCapture();
+        return { ok: true, result: retry.result };
+      }
     }
     // Still rejected with the Mac's own credentials: the account's sign-in is broken, not this
     // browser's. Never keep saying "Connected" while nothing is getting through.
