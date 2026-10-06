@@ -418,3 +418,15 @@ func mergeSearchResults(remote: [SearchResult], local: [SearchResult]) -> [Searc
     let seen = Set(remote.map(\.id))
     return remote + local.filter { !seen.contains($0.id) }
 }
+
+/// One idea as a pyramid (GET /v1/ideas/:id/map): only the parts the app shows that the on-device
+/// structure doesn't already -- the options weighed and the "unfinished thinking" gaps where the
+/// idea breaks Minto's rules (a decision with no reasons, a question with no options, ...).
+struct ThinkingMap: Codable, Equatable {
+    struct Option: Codable, Hashable { let statement: String; let status: String }
+    struct Gap: Codable, Hashable { let kind: String; let message: String }
+    let options: [Option]
+    let gaps: [Gap]
+
+    var isEmpty: Bool { options.isEmpty && gaps.isEmpty }
+}

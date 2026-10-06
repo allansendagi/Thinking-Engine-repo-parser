@@ -152,6 +152,13 @@ final class APIClient {
         try await request("/v1/ideas/\(Self.pathSegment(id))/trace")
     }
 
+    /// Options weighed and unfinished-thinking gaps for one idea.
+    func thinkingMap(id: String) async throws -> ThinkingMap {
+        struct Wrap: Decodable { let map: ThinkingMap }
+        let w: Wrap = try await request("/v1/ideas/\(Self.pathSegment(id))/map")
+        return w.map
+    }
+
     /// The captured messages of one source conversation -- the evidence behind an idea.
     func getConversation(id: String) async throws -> ConversationTranscript {
         try await request("/v1/conversations/\(Self.pathSegment(id))")

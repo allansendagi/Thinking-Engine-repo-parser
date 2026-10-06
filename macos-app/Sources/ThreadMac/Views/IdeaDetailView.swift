@@ -177,6 +177,7 @@ struct IdeaDetailView: View {
             structureRow(trace)
             evolutionRow(trace)
             if !trace.idea.openLoops.isEmpty { unresolvedRow(trace) }
+            if let map = appState.thinkingMaps[trace.idea.id], !map.isEmpty { weighingRow(map) }
             if !sources(trace).isEmpty { sourcesRow(trace) }
         }
         .background(Color.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 10))
@@ -308,6 +309,50 @@ struct IdeaDetailView: View {
                 }
             }
             .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 12)
+        }
+    }
+
+    // MARK: options + unfinished thinking
+
+    /// What was weighed (open / ruled out / chosen) and where the pyramid is unfinished. Gaps are
+    /// phrased as notes, not warnings: they're where the thinking can go next.
+    private func weighingRow(_ map: ThinkingMap) -> some View {
+        AccordionRow(title: map.gaps.isEmpty ? "Options weighed" : "Unfinished thinking", showDivider: true) { _ in
+            if map.gaps.isEmpty {
+                countLabel(map.options.count, singular: "option", plural: "options")
+            } else {
+                countLabel(map.gaps.count, singular: "gap", plural: "gaps")
+            }
+        } content: {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(map.gaps, id: \.self) { gap in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "circle.dashed").font(.system(size: 10)).foregroundStyle(Theme.accent).padding(.top, 2)
+                        Text(gap.message).font(.system(size: 12.5)).lineSpacing(2)
+                            .foregroundStyle(Theme.ink(0.75)).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                ForEach(map.options, id: \.self) { option in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(optionLabel(option.status)).font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(Theme.ink(0.45)).frame(width: 58, alignment: .leading).padding(.top, 1)
+                        Text(option.statement).font(.system(size: 12.5)).lineSpacing(2)
+                            .foregroundStyle(Theme.ink(option.status == "rejected" ? 0.45 : 0.75))
+                            .strikethrough(option.status == "rejected")
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 12)
+        }
+    }
+
+    private func optionLabel(_ status: String) -> String {
+        switch status {
+        case "chosen": return "CHOSEN"
+        case "rejected": return "RULED OUT"
+        default: return "WEIGHING"
         }
     }
 
