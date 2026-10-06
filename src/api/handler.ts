@@ -49,6 +49,8 @@ import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
 import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
+import { ideaThoughtIds, recordCorrection } from "../mining/corrections";
+import { redactDeep, redactSecrets } from "../capture/redact";
 import { parsePastedConversation } from "../import/pasteParser";
 import { importIntoDb, parseExportFile } from "../import/run";
 
@@ -573,6 +575,8 @@ export function createRequestHandler(
         // that predates this field just omits it; a legacy browser-extension build is read as
         // browser_extension/high downstream anyway (THREAD.md §7).
         body.capture = sanitizeCapture(body.capture);
+        // Clients redact on-device; this catches captures from builds that predate it.
+        body.messages = body.messages.map((m) => (typeof m?.text === "string" ? { ...m, text: redactSecrets(m.text) } : m));
         const result = await ingestConversation(db, body, providers);
         scheduleShadowMining(userId, openUserDb);
         return json(result);
@@ -591,7 +595,7 @@ export function createRequestHandler(
         if (!body.text || body.text.trim().length === 0)
           return error(400, "text is required");
 
-        const parsed = parsePastedConversation(body.text);
+        const parsed = parsePastedConversation(redactSecrets(body.text));
         if (parsed.length === 0)
           return error(400, "Nothing parseable in the pasted text");
 
@@ -660,7 +664,7 @@ export function createRequestHandler(
         }
         let events;
         try {
-          events = parseExportFile(body.format, body.conversations);
+          events = parseExportFile(body.format, redactDeep(body.conversations));
         } catch (e) {
           return error(
             400,
@@ -716,7 +720,11 @@ export function createRequestHandler(
 
       if (req.method === "DELETE" && ideaMatch && !ideaMatch[2]) {
         const ideaId = decodePathId(ideaMatch[1] as string);
+        // Remember what was deleted by its thoughts, so a v2 pass can't rebuild it.
+        const thoughtIds = ideaThoughtIds(db, ideaId);
+        const statement = getIdea(db, ideaId)?.currentFormulation;
         const deleted = deleteIdea(db, ideaId);
+        if (deleted) recordCorrection(db, { kind: "not_idea", ideaId, thoughtIds, value: statement });
         return deleted ? json({ deleted: true }) : error(404, "Idea not found");
       }
 
@@ -740,17 +748,47 @@ export function createRequestHandler(
           }
           if (!setIdeaState(db, ideaId, body.state as IdeaState))
             return error(404, "Idea not found");
+          recordCorrection(db, { kind: "state", ideaId, thoughtIds: ideaThoughtIds(db, ideaId), value: body.state });
         }
         if (body.title !== undefined) {
           try {
             if (!renameIdea(db, ideaId, body.title))
               return error(404, "Idea not found");
+            recordCorrection(db, { kind: "rename", ideaId, thoughtIds: ideaThoughtIds(db, ideaId), value: body.title.trim() });
           } catch (e) {
             return error(400, e instanceof Error ? e.message : "Invalid title");
           }
         }
         const updated = getIdea(db, ideaId);
         return updated ? json(updated) : error(404, "Idea not found");
+      }
+
+      // Corrections that teach v2 grouping. They're recorded against thoughts and respected by
+      // every consolidation pass; the serving (v1) ideas are untouched until v2 serves.
+      const correctMatch = pathname.match(/^\/v1\/ideas\/([^/]+)\/(merge|split)$/);
+      if (req.method === "POST" && correctMatch) {
+        const ideaId = decodePathId(correctMatch[1] as string);
+        const thoughtIds = ideaThoughtIds(db, ideaId);
+        if (thoughtIds.length === 0) return error(404, "Idea not found");
+        let body: { intoIdeaId?: unknown; thoughtIds?: unknown };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        if (correctMatch[2] === "merge") {
+          const target = typeof body.intoIdeaId === "string" ? ideaThoughtIds(db, body.intoIdeaId) : [];
+          if (target.length === 0) return error(400, "intoIdeaId must name an existing idea");
+          recordCorrection(db, { kind: "merge", ideaId, thoughtIds, otherThoughtIds: target });
+        } else {
+          const off = Array.isArray(body.thoughtIds) ? body.thoughtIds.filter((t): t is string => typeof t === "string" && thoughtIds.includes(t)) : [];
+          if (off.length === 0 || off.length === thoughtIds.length) {
+            return error(400, "thoughtIds must be some, not all, of this idea's thoughts");
+          }
+          recordCorrection(db, { kind: "split", ideaId, thoughtIds, otherThoughtIds: off });
+        }
+        scheduleShadowMining(userId, openUserDb);
+        return json({ recorded: true });
       }
 
       const loopMatch = pathname.match(/^\/v1\/open-loops\/([^/]+)$/);

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { openDb } from "../db/client";
 import { storeThoughtVectors } from "../db/thoughts";
+import { dismissedExamples, loadCorrections, recordCorrection } from "./corrections";
 import { loadShadowIdeas, runShadowMining } from "./shadow";
 
 function seed() {
@@ -39,5 +40,33 @@ describe("shadow v2 mining", () => {
       { id: "cog_m2_0", vector: Array.from({ length: 16 }, (_, i) => i + 1) },
     ]);
     expect(runShadowMining(db).run.vectorModel).toBe("apple:nlcontextual.r1");
+  });
+
+  test("a deleted idea's thoughts never come back as an idea, and teach extraction", () => {
+    const db = seed();
+    recordCorrection(db, { kind: "not_idea", ideaId: "idea_cog_m1_0", thoughtIds: ["cog_m1_0", "cog_m2_0"], value: "Charge per seat." });
+    expect(runShadowMining(db).run.thoughts).toBe(0);
+    expect(loadShadowIdeas(db)).toEqual([]);
+    expect(dismissedExamples(db)).toEqual(["Charge per seat."]);
+  });
+
+  test("a split stays split on every pass; a later merge of the same thoughts wins", () => {
+    const db = seed();
+    recordCorrection(db, { kind: "split", ideaId: "idea_cog_m1_0", thoughtIds: ["cog_m1_0", "cog_m2_0"], otherThoughtIds: ["cog_m2_0"] });
+    runShadowMining(db);
+    expect(loadShadowIdeas(db).find((i) => i.thoughtIds.includes("cog_m1_0"))!.thoughtIds).toEqual(["cog_m1_0"]);
+    recordCorrection(db, { kind: "merge", ideaId: "idea_cog_m1_0", thoughtIds: ["cog_m1_0"], otherThoughtIds: ["cog_m2_0"] });
+    expect(loadCorrections(db).constraints.cannotLink).toEqual([]);
+    runShadowMining(db);
+    expect(loadShadowIdeas(db).find((i) => i.thoughtIds.includes("cog_m1_0"))!.thoughtIds).toEqual(["cog_m1_0", "cog_m2_0"]);
+  });
+
+  test("the person's title and state win over derived ones", () => {
+    const db = seed();
+    const id = runShadowMining(db).ideas.find((i) => !i.isSpark)!.node.id;
+    recordCorrection(db, { kind: "rename", ideaId: id, thoughtIds: ["cog_m1_0"], value: "Pricing" });
+    recordCorrection(db, { kind: "state", ideaId: id, thoughtIds: ["cog_m1_0"], value: "dormant" });
+    const node = runShadowMining(db).ideas.find((i) => i.node.id === id)!.node;
+    expect([node.title, node.state]).toEqual(["Pricing", "dormant"]);
   });
 });

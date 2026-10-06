@@ -1,5 +1,6 @@
 import { getSettings } from "./storage";
 import type { CapturedMessage, Source } from "./types";
+import { redactDeep, redactSecrets } from "./redact";
 
 export class ApiError extends Error {
   constructor(
@@ -76,7 +77,8 @@ export function ingestConversation(
     body: JSON.stringify({
       conversationId,
       source,
-      messages,
+      // On-device first pass: credentials never leave the browser.
+      messages: messages.map((m) => ({ ...m, text: redactSecrets(m.text) })),
       sourceUrl,
       // The extension reads the live DOM inside the page: exact roles and message boundaries.
       // See THREAD.md §7 (capture fidelity) and §17 (capture precedence).
@@ -86,7 +88,7 @@ export function ingestConversation(
 }
 
 export function pasteConversation(text: string): Promise<IngestResult & { conversationId: string }> {
-  return request("/v1/paste", { method: "POST", body: JSON.stringify({ text }) });
+  return request("/v1/paste", { method: "POST", body: JSON.stringify({ text: redactSecrets(text) }) });
 }
 
 export interface IdeaSummary {
@@ -197,5 +199,5 @@ export function importBatch(
   format: "chatgpt" | "claude",
   conversations: unknown[],
 ): Promise<IngestResult> {
-  return request("/v1/import", { method: "POST", body: JSON.stringify({ format, conversations }) });
+  return request("/v1/import", { method: "POST", body: JSON.stringify({ format, conversations: redactDeep(conversations) }) });
 }

@@ -78,14 +78,15 @@ export async function extractCognitiveEvents(
   contextEvents: CanonicalEvent[],
   provider: CompletionProvider,
   newEventIds?: Set<string>,
+  dismissed: string[] = [],
 ): Promise<ExtractionOutcome> {
   const calls = planExtractionCalls(contextEvents, newEventIds);
   if (calls.length === 1 && calls[0]!.context === contextEvents) {
-    return extractOnce(contextEvents, provider, newEventIds);
+    return extractOnce(contextEvents, provider, newEventIds, dismissed);
   }
   const merged: ExtractionOutcome = { events: [], rejected: [] };
   for (const call of calls) {
-    const outcome = await extractOnce(call.context, provider, call.newIds);
+    const outcome = await extractOnce(call.context, provider, call.newIds, dismissed);
     merged.events.push(...outcome.events);
     merged.rejected.push(...outcome.rejected);
   }
@@ -167,13 +168,14 @@ async function extractOnce(
   contextEvents: CanonicalEvent[],
   provider: CompletionProvider,
   newEventIds?: Set<string>,
+  dismissed: string[] = [],
 ): Promise<ExtractionOutcome> {
   const eventsById = new Map(contextEvents.map((e) => [e.id, e]));
 
   const parsed = await completeJson(
     provider,
     EXTRACTION_SYSTEM_PROMPT,
-    buildTranscriptPrompt(contextEvents, newEventIds),
+    buildTranscriptPrompt(contextEvents, newEventIds, dismissed),
     8192,
     extractionResultSchema,
   );

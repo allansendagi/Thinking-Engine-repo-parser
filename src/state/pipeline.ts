@@ -66,6 +66,8 @@ export interface RunPipelineOptions {
    * treated as new (bulk/import behavior -- unchanged from before this option existed).
    */
   newEventIds?: Set<string>;
+  /** Statements of ideas this person deleted -- steers extraction away from similar ones. */
+  dismissed?: string[];
 }
 
 /**
@@ -95,7 +97,7 @@ export async function runPipeline(
   const outcomes = await mapWithConcurrency(
     [...byConversation.values()],
     EXTRACTION_CONCURRENCY,
-    (conversationEvents) => extractCognitiveEvents(conversationEvents, providers.extraction, options.newEventIds),
+    (conversationEvents) => extractCognitiveEvents(conversationEvents, providers.extraction, options.newEventIds, options.dismissed),
   );
   for (const outcome of outcomes) {
     allCognitiveEvents.push(...outcome.events);

@@ -1,3 +1,4 @@
+import { dismissedExamples } from "../mining/corrections";
 import type { Database } from "bun:sqlite";
 import type { CanonicalEvent, CaptureProvenance, Role } from "../types";
 import {
@@ -299,7 +300,7 @@ export async function ingestConversation(
 
   const existingIdeas = new Map(loadIdeas(db).map((i) => [i.id, i]));
 
-  const result = await runPipeline(allEvents, providers, { existingIdeas, newEventIds: extractIds });
+  const result = await runPipeline(allEvents, providers, { existingIdeas, newEventIds: extractIds, dismissed: dismissedExamples(db) });
   persistPipelineResult(db, allEvents, result); // writes every row, incl. promoted status=committed
 
   // Reconsider earlier medium-value discards now that this call may have created the idea they

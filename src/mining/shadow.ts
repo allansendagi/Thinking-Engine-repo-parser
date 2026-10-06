@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { listThoughts, loadThoughtVectors, vectorModels } from "../db/thoughts";
 import type { CognitiveEventType, IdeaNode } from "../types";
 import { consolidate, type ConsolidatedIdea, type MiningThought } from "./consolidate";
+import { loadCorrections, type LearnedCorrections } from "./corrections";
 
 /**
  * v2 mining in SHADOW: recompute ideas from every stored thought with the v2 consolidation pass
@@ -17,6 +18,8 @@ export interface MiningInput {
   vectors?: Map<string, Float32Array>;
   vectorModel: string | null;
   previousIdeaOf: Map<string, string>;
+  /** The person's corrections, applied as constraints on every pass. */
+  learned: LearnedCorrections;
 }
 
 export function loadMiningInput(db: Database): MiningInput {
@@ -35,8 +38,10 @@ export function loadMiningInput(db: Database): MiningInput {
     role: t.role ?? undefined,
     adopted: t.adoptedSourceEventId !== null,
   }));
-  // Low-persistence thoughts (requests for info, formatting asks) never seed or join ideas.
-  const kept = thoughts.filter((t) => t.persistence !== "low");
+  // Low-persistence thoughts (requests for info, formatting asks) never seed or join ideas, and
+  // thoughts from an idea the person deleted never come back as one.
+  const learned = loadCorrections(db);
+  const kept = thoughts.filter((t) => t.persistence !== "low" && !learned.dismissedThoughtIds.has(t.id));
 
   const model = vectorModels(db).find((m) => m.startsWith("apple:")) ?? null;
   const vectors = model ? loadThoughtVectors(db, model) : undefined;
@@ -45,7 +50,7 @@ export function loadMiningInput(db: Database): MiningInput {
       (r) => [r.cognitive_event_id, r.idea_id],
     ),
   );
-  return { thoughts: kept, vectors, vectorModel: model, previousIdeaOf };
+  return { thoughts: kept, vectors, vectorModel: model, previousIdeaOf, learned };
 }
 
 export interface ShadowRun {
@@ -60,7 +65,18 @@ export interface ShadowRun {
 export function runShadowMining(db: Database): { run: ShadowRun; ideas: ConsolidatedIdea[] } {
   const started = performance.now();
   const input = loadMiningInput(db);
-  const ideas = consolidate(input.thoughts, { vectors: input.vectors, previousIdeaOf: input.previousIdeaOf });
+  const ideas = consolidate(input.thoughts, {
+    vectors: input.vectors,
+    previousIdeaOf: input.previousIdeaOf,
+    constraints: input.learned.constraints,
+  });
+  // The person's own title and state win over anything derived.
+  for (const i of ideas) {
+    const title = input.learned.titles.get(i.node.id);
+    if (title) i.node.title = title;
+    const state = input.learned.states.get(i.node.id);
+    if (state) i.node.state = state;
+  }
   const ms = Math.round(performance.now() - started);
   const now = new Date().toISOString();
 

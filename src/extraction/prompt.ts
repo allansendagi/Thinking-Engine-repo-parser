@@ -109,7 +109,7 @@ Respond with JSON matching this shape exactly, and nothing else -- no commentary
  *  the prompt. Grounding still matches quotes against the message's full text. */
 export const MAX_PROMPT_MESSAGE_CHARS = 8_000;
 
-export function buildTranscriptPrompt(events: CanonicalEvent[], newEventIds?: Set<string>): string {
+export function buildTranscriptPrompt(events: CanonicalEvent[], newEventIds?: Set<string>, dismissed: string[] = []): string {
   const validIds = events.map((e) => e.id).join(", ");
   const lines = events.map((e) => {
     const marker = !newEventIds || newEventIds.has(e.id) ? "[NEW]" : "[ALREADY PROCESSED]";
@@ -119,5 +119,11 @@ export function buildTranscriptPrompt(events: CanonicalEvent[], newEventIds?: Se
         : e.text;
     return `${marker} [${e.id}] (${e.role}, ${e.createdAt}): ${text}`;
   });
-  return `This transcript contains exactly ${events.length} message(s), no more. The only valid ids are: ${validIds}.\n\nConversation transcript:\n\n${lines.join("\n\n")}`;
+  // Personal learning: ideas this person deleted as not worth keeping. Steering only -- a
+  // genuinely new idea that merely resembles one of these is still extracted.
+  const personal =
+    dismissed.length > 0
+      ? `This person has deleted these as not worth keeping. Mark similar things persistence "low" unless the person clearly cares about them now:\n${dismissed.map((d) => `- ${d}`).join("\n")}\n\n`
+      : "";
+  return `${personal}This transcript contains exactly ${events.length} message(s), no more. The only valid ids are: ${validIds}.\n\nConversation transcript:\n\n${lines.join("\n\n")}`;
 }

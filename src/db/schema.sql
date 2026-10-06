@@ -186,3 +186,17 @@ CREATE TABLE IF NOT EXISTS mining_runs (
   ms INTEGER NOT NULL,
   ran_at TEXT NOT NULL
 );
+
+-- Personal learning: what the person corrected. Every v2 consolidation pass treats these as
+-- constraints (a merge is a must-link, a split a cannot-link, a deleted idea's thoughts never
+-- come back as an idea), and recent "not an idea" corrections steer extraction for this person.
+CREATE TABLE IF NOT EXISTS idea_corrections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN ('not_idea', 'merge', 'split', 'rename', 'state')),
+  idea_id TEXT NOT NULL,
+  thought_ids TEXT NOT NULL,          -- JSON array: the idea's thoughts when corrected
+  other_thought_ids TEXT,             -- JSON array: merge target's / split-off thoughts
+  value TEXT,                         -- new title / state; for not_idea, the idea's statement
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_idea_corrections_kind ON idea_corrections(kind);
