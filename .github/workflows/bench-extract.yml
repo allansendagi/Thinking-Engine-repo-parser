@@ -1,0 +1,29 @@
+name: Bench extraction (on-device)
+
+# Manual. Runs the Mac's own idea extraction over the thinking bench (BenchExtractionTests) on a
+# GitHub macOS runner. Runners are VMs, which almost certainly can't run Apple's on-device model:
+# the test then SKIPS with a message saying so. Running this once settles whether CI can ever
+# produce the on-device numbers; if it skips, run src/bench/ON_DEVICE.md on a real Mac instead.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun src/bench/dumpConversations.ts --held-out > "$RUNNER_TEMP/bench-convs.json"
+      - working-directory: macos-app
+        env:
+          BENCH_CONVERSATIONS: ${{ runner.temp }}/bench-convs.json
+          BENCH_EXTRACT_OUT: ${{ runner.temp }}/ondevice.results.json
+        run: swift test --filter BenchExtractionTests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-extraction-ondevice
+          path: ${{ runner.temp }}/ondevice.results.json
+          if-no-files-found: ignore

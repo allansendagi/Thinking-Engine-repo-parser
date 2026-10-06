@@ -28,3 +28,7 @@ model made grouping worse at every weight, so it is not used.
 
 A new miner ships only when it beats the current one here, and holds up on the live run and
 on real hand-labelled conversations (`eval/`).
+
+On-device extraction: `bun run bench --held-out --live --on-device` adds the Mac's own model
+(produced on a Mac by BenchExtractionTests) next to the cloud pipeline. How to run it, and the
+pass/fail rule written before the data, are in `ON_DEVICE.md`.
