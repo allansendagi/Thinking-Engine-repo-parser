@@ -15,10 +15,14 @@ final class BenchVectorsTests: XCTestCase {
         guard let input = env["BENCH_TEXTS"], let output = env["BENCH_VECTORS_OUT"] else {
             throw XCTSkip("BENCH_TEXTS / BENCH_VECTORS_OUT not set")
         }
-        // The contextual model's asset may still be downloading (or never arrive on a CI runner) --
-        // give it a minute, then use the sentence model built into macOS. Same chain as the app.
-        let deadline = Date().addingTimeInterval(60)
-        while !Embeddings.isAvailable && Date() < deadline { Thread.sleep(forTimeInterval: 2) }
+        // The contextual model's asset (~100 MB) downloads on first use. The bench needs THAT model
+        // -- it's what real Macs run -- so wait for it (BENCH_ASSET_WAIT seconds, default 60), and
+        // only then fall back to the sentence model built into macOS. Same chain as the app.
+        let wait = Double(env["BENCH_ASSET_WAIT"] ?? "") ?? 60
+        let deadline = Date().addingTimeInterval(wait)
+        // Spin the run loop (not sleep) in case the asset callback is delivered on it.
+        while !Embeddings.isAvailable && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(5)) }
+        print("BenchVectors: contextual model available=\(Embeddings.isAvailable) after waiting up to \(Int(wait))s")
         guard let model = NativeThoughtEmbedding.currentModel else {
             return XCTFail("No native Apple embedding model is available on this machine")
         }

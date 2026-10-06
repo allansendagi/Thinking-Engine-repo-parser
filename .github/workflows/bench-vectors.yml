@@ -11,7 +11,7 @@ on:
   # Re-embed whenever the bench corpus changes (manual dispatch needs the file on main first).
   push:
     branches: ["claude/**"]
-    paths: ["src/bench/storylines.ts", "src/bench/generate.ts", "src/bench/dumpTexts.ts", ".github/workflows/bench-vectors.yml"]
+    paths: ["src/bench/storylines.ts", "macos-app/Tests/ThreadMacTests/BenchVectorsTests.swift", "src/bench/generate.ts", "src/bench/dumpTexts.ts", ".github/workflows/bench-vectors.yml"]
 
 permissions:
   contents: write
@@ -28,6 +28,8 @@ jobs:
         env:
           BENCH_TEXTS: ${{ runner.temp }}/bench-texts.json
           BENCH_VECTORS_OUT: ${{ runner.temp }}/vectors.apple.json
+          # Give Apple's contextual model asset time to download: it's the model real Macs use.
+          BENCH_ASSET_WAIT: "900"
         run: swift test --filter BenchVectorsTests
       - uses: actions/upload-artifact@v4
         with:
