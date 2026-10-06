@@ -4,7 +4,8 @@ import {
   loadIdeas,
   loadIdea as loadIdeaById,
   loadCognitiveEvents,
-  loadCanonicalEvents,
+  loadCanonicalEventsByIds,
+  loadEventSources,
 } from "../db/queries";
 import { buildThinkingState } from "../state/thinkingState";
 import { lexicalOverlap, entityOverlap, tokenize } from "../identity/signals";
@@ -114,7 +115,7 @@ export function traceIdea(db: Database, id: string): IdeaTrace | null {
   const idea = getIdea(db, id);
   if (!idea) return null;
 
-  const canonicalById = new Map(loadCanonicalEvents(db).map((e) => [e.id, e]));
+  const canonicalById = new Map(loadCanonicalEventsByIds(db, idea.evolution.map((st) => st.sourceEventId)).map((e) => [e.id, e]));
   const provenance = idea.evolution.map((step) => {
     const source = canonicalById.get(step.sourceEventId);
     return {
@@ -133,9 +134,7 @@ export function traceIdea(db: Database, id: string): IdeaTrace | null {
 }
 
 export function getThreadState(db: Database, topic?: string): ThinkingState {
-  const sourceByEventId = new Map(
-    loadCanonicalEvents(db).map((e) => [e.id, e.source] as const),
-  );
+  const sourceByEventId = loadEventSources(db);
   return buildThinkingState(
     loadIdeas(db),
     loadCognitiveEvents(db),

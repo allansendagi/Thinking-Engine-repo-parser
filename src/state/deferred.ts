@@ -127,7 +127,6 @@ async function retryUnlocked(
     )
     .all(maxConversations) as { conversation_id: string }[];
   if (convs.length === 0) return { processed: 0, error: null };
-  const all = loadCanonicalEvents(db);
   let processed = 0;
   for (const { conversation_id } of convs) {
     const ids = new Set(
@@ -135,7 +134,7 @@ async function retryUnlocked(
         event_id: string;
       }[]).map((r) => r.event_id),
     );
-    const context = all.filter((e) => e.conversationId === conversation_id);
+    const context = loadCanonicalEvents(db, conversation_id);
     // Rows whose event vanished (a provisional event later retracted) have nothing to extract.
     const live = new Set([...ids].filter((id) => context.some((e) => e.id === id && e.status === "committed")));
     if (live.size === 0) {

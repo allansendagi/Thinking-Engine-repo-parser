@@ -87,7 +87,19 @@ interface CanonicalEventRow {
 
 /** Loads every idea, with its evolution/open loops/decisions/related ids, from SQLite. */
 export function loadIdeas(db: Database): IdeaNode[] {
-  const ideaRows = db.query("SELECT * FROM idea_nodes").all() as IdeaRow[];
+  return loadIdeaGraph(db);
+}
+
+/** One idea, read on its own -- not by loading the whole graph and picking it out. */
+export function loadIdea(db: Database, id: string): IdeaNode | undefined {
+  return loadIdeaGraph(db, id)[0];
+}
+
+function loadIdeaGraph(db: Database, only?: string): IdeaNode[] {
+  const where = only === undefined ? "" : " WHERE id = ?";
+  const whereIdea = only === undefined ? "" : " WHERE idea_id = ?";
+  const args = only === undefined ? [] : [only];
+  const ideaRows = db.query(`SELECT * FROM idea_nodes${where}`).all(...args) as IdeaRow[];
   if (ideaRows.length === 0) return [];
 
   // Four queries for the whole graph, grouped in memory -- not four per idea. (The per-idea version
@@ -102,10 +114,10 @@ export function loadIdeas(db: Database): IdeaNode[] {
     }
     return m;
   };
-  const steps = group(db.query("SELECT * FROM evolution_steps ORDER BY created_at ASC").all() as EvolutionRow[]);
-  const loops = group(db.query("SELECT * FROM open_loops ORDER BY created_at ASC").all() as OpenLoopRow[]);
-  const decisions = group(db.query("SELECT * FROM decisions ORDER BY decided_at ASC").all() as DecisionRow[]);
-  const related = group(db.query("SELECT idea_id, related_idea_id FROM related_ideas").all() as (RelatedRow & { idea_id: string })[]);
+  const steps = group(db.query(`SELECT * FROM evolution_steps${whereIdea} ORDER BY created_at ASC`).all(...args) as EvolutionRow[]);
+  const loops = group(db.query(`SELECT * FROM open_loops${whereIdea} ORDER BY created_at ASC`).all(...args) as OpenLoopRow[]);
+  const decisions = group(db.query(`SELECT * FROM decisions${whereIdea} ORDER BY decided_at ASC`).all(...args) as DecisionRow[]);
+  const related = group(db.query(`SELECT idea_id, related_idea_id FROM related_ideas${whereIdea}`).all(...args) as (RelatedRow & { idea_id: string })[]);
 
   return ideaRows.map((row): IdeaNode => ({
     id: row.id,
@@ -132,32 +144,30 @@ export function countIdeas(db: Database): number {
   return (db.query("SELECT COUNT(*) AS n FROM idea_nodes").get() as { n: number }).n;
 }
 
-export function loadIdea(db: Database, id: string): IdeaNode | undefined {
-  return loadIdeas(db).find((i) => i.id === id);
-}
-
 export function loadCognitiveEvents(db: Database): CognitiveEvent[] {
   const rows = db.query("SELECT * FROM cognitive_events").all() as CognitiveEventRow[];
-  return rows.map((r) => {
-    const additional = (
-      db.query("SELECT canonical_event_id FROM cognitive_event_sources WHERE cognitive_event_id = ?").all(r.id) as {
-        canonical_event_id: string;
-      }[]
-    ).map((a) => a.canonical_event_id);
-
-    return {
-      id: r.id,
-      type: r.type as CognitiveEvent["type"],
-      statement: r.statement,
-      confidence: r.confidence,
-      persistence: (r.persistence as CognitiveEvent["persistence"]) ?? "high",
-      persistenceReason: r.persistence_reason ?? undefined,
-      sourceEventId: r.source_event_id,
-      evidenceQuote: r.evidence_quote,
-      whyItMatters: r.why_it_matters ?? undefined,
-      additionalSourceEventIds: additional,
-    };
-  });
+  // One query for every event's extra sources, not one per event.
+  const extra = new Map<string, string[]>();
+  for (const a of db.query("SELECT cognitive_event_id, canonical_event_id FROM cognitive_event_sources").all() as {
+    cognitive_event_id: string;
+    canonical_event_id: string;
+  }[]) {
+    const list = extra.get(a.cognitive_event_id);
+    if (list) list.push(a.canonical_event_id);
+    else extra.set(a.cognitive_event_id, [a.canonical_event_id]);
+  }
+  return rows.map((r) => ({
+    id: r.id,
+    type: r.type as CognitiveEvent["type"],
+    statement: r.statement,
+    confidence: r.confidence,
+    persistence: (r.persistence as CognitiveEvent["persistence"]) ?? "high",
+    persistenceReason: r.persistence_reason ?? undefined,
+    sourceEventId: r.source_event_id,
+    evidenceQuote: r.evidence_quote,
+    whyItMatters: r.why_it_matters ?? undefined,
+    additionalSourceEventIds: extra.get(r.id) ?? [],
+  }));
 }
 
 interface DiscardedEventRow {
@@ -193,8 +203,43 @@ export function loadDiscardedEvents(db: Database): DiscardedEvent[] {
   }));
 }
 
-export function loadCanonicalEvents(db: Database): CanonicalEvent[] {
-  const rows = db.query("SELECT * FROM canonical_events ORDER BY idx ASC").all() as CanonicalEventRow[];
+/** Messages, in transcript order -- all of them, or one conversation's (indexed). */
+export function loadCanonicalEvents(db: Database, conversationId?: string): CanonicalEvent[] {
+  const rows = (
+    conversationId === undefined
+      ? db.query("SELECT * FROM canonical_events ORDER BY idx ASC").all()
+      : db.query("SELECT * FROM canonical_events WHERE conversation_id = ? ORDER BY idx ASC").all(conversationId)
+  ) as CanonicalEventRow[];
+  return canonicalFromRows(rows);
+}
+
+/** Just the messages with these ids -- what an idea's provenance needs, not the whole account. */
+export function loadCanonicalEventsByIds(db: Database, ids: string[]): CanonicalEvent[] {
+  const unique = [...new Set(ids)];
+  const rows: CanonicalEventRow[] = [];
+  for (let i = 0; i < unique.length; i += 500) {
+    const chunk = unique.slice(i, i + 500);
+    rows.push(
+      ...(db
+        .query(`SELECT * FROM canonical_events WHERE id IN (${chunk.map(() => "?").join(",")})`)
+        .all(...chunk) as CanonicalEventRow[]),
+    );
+  }
+  return canonicalFromRows(rows);
+}
+
+/** message id -> where it came from, without reading any message text. */
+export function loadEventSources(db: Database): Map<string, CanonicalEvent["source"]> {
+  const rows = db.query("SELECT id, source FROM canonical_events").all() as { id: string; source: string }[];
+  return new Map(rows.map((r) => [r.id, r.source as CanonicalEvent["source"]]));
+}
+
+/** Every message id, without reading any message text. */
+export function loadCanonicalIds(db: Database): Set<string> {
+  return new Set((db.query("SELECT id FROM canonical_events").all() as { id: string }[]).map((r) => r.id));
+}
+
+function canonicalFromRows(rows: CanonicalEventRow[]): CanonicalEvent[] {
   return rows.map((r) => ({
     id: r.id,
     conversationId: r.conversation_id,
