@@ -43,7 +43,7 @@ export interface CanonicalEvent {
   // mcp/tools.ts `SOURCE_LABELS`.
   source:
     | "chatgpt" | "claude" | "gemini" | "perplexity" | "cursor" | "paste" | "fixture"
-    | "claude_code" | "codex" | "gemini_cli" | "copilot" | "windsurf" | "zed" | "lm_studio" | "jan"
+    | "claude_code" | "codex" | "gemini_cli" | "copilot" | "windsurf" | "zed" | "lm_studio" | "jan" | "ollama"
     | "grok" | "deepseek" | "mistral" | "ms_copilot" | "meta_ai" | "poe" | "qwen" | "kimi" | "ai_studio";
   role: Role;
   text: string;

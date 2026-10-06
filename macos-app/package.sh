@@ -123,6 +123,19 @@ ${SPARKLE_PLIST}
             <key>NSRequiredContext</key>
             <dict><key>NSTextContent</key><string>Text</string></dict>
         </dict>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict><key>default</key><string>Capture in Thread</string></dict>
+            <key>NSMessage</key>
+            <string>captureInThread</string>
+            <key>NSPortName</key>
+            <string>Thread</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>public.utf8-plain-text</string>
+                <string>NSStringPboardType</string>
+            </array>
+        </dict>
     </array>
 </dict>
 </plist>

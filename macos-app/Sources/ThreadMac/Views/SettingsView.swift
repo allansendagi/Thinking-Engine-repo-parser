@@ -425,7 +425,6 @@ private struct AccentSwatch: View {
 /// Accessibility.
 private struct CaptureSection: View {
     @EnvironmentObject var appState: AppState
-    @State private var desktopApps = CaptureSettings.desktopApps
     @State private var detected: [(source: String, name: String)] = []
     @State private var enabled: [String: Bool] = [:]
 
@@ -454,36 +453,14 @@ private struct CaptureSection: View {
                 }
             }
 
-            Toggle("Desktop apps: ChatGPT, Claude (beta)", isOn: $desktopApps)
-                .font(.caption)
-                .help("Reads the conversation on screen in the ChatGPT and Claude Mac apps through Accessibility. macOS asks you to allow it once.")
-                .onChange(of: desktopApps) { _, on in
-                    CaptureSettings.desktopApps = on
-                    if on { AppDelegate.shared?.startDesktopAppCapture() } else { AppDelegate.shared?.stopDesktopAppCapture() }
-                }
-            if desktopApps {
-                Text(desktopStatus).font(.caption2).foregroundColor(.secondary)
-                if appState.desktopCaptureStatus == .needsPermission {
-                    Button("Open Accessibility settings…") {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                    }
-                    .font(.caption2)
-                }
-            }
+            Text("ChatGPT and Claude desktop apps: their chat history is encrypted or kept on their servers, and reading their windows proved unreliable — use them on the web with the Thread extension, or select the conversation and choose Services › Capture in Thread.")
+                .font(.caption2).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear {
             detected = AppDelegate.shared?.localHistory?.detectedSources() ?? []
             enabled = Dictionary(uniqueKeysWithValues: detected.map { ($0.source, CaptureSettings.isLocalSourceEnabled($0.source)) })
         }
     }
-
-    private var desktopStatus: String {
-        switch appState.desktopCaptureStatus {
-        case .idle: return "Starting…"
-        case .needsPermission: return "Needs Accessibility permission — allow Thread, then relaunch it."
-        case .waiting: return "Ready — switch to ChatGPT or Claude to capture."
-        case .watching(let source, _): return "Capturing from \(source)"
-        case .error(let m): return "Not working: \(m)"
-        }
     }
 }

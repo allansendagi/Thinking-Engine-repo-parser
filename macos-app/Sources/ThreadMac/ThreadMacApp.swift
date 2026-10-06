@@ -142,9 +142,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         local.start()
         localHistory = local
 
-        // Desktop AI apps (ChatGPT, Claude...) read through Accessibility: opt-in from Settings
-        // (beta), or forced on for development with THREAD_AX_SENSOR=1.
-        if CaptureSettings.desktopApps || ProcessInfo.processInfo.environment["THREAD_AX_SENSOR"] == "1" {
+        // Desktop AI apps read through Accessibility: a measurement rig only (THREAD_AX_SENSOR=1).
+        // Real-machine runs showed roles and conversation identity can't be recovered reliably
+        // from these apps' AX trees (see AXAdapterConfig.extractionUnverified), so it isn't a
+        // user-facing option. Native WRITE (continuation) is separate and does work.
+        if ProcessInfo.processInfo.environment["THREAD_AX_SENSOR"] == "1" {
             startDesktopAppCapture()
         }
 
@@ -303,8 +305,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         connectivity?.stop()
     }
 
-    /// Desktop AI apps (ChatGPT, Claude, Cursor windows) through Accessibility. Beta: the readers
-    /// follow each app's on-screen structure, which the apps can change. Everything captured is
+    /// Desktop AI apps (ChatGPT, Claude, Cursor windows) through Accessibility -- the measurement
+    /// rig (THREAD_AX_SENSOR=1); not user-facing until the AX read is verified. Everything captured is
     /// stamped native_accessibility + its app, so it's distinguishable in the evidence store and
     /// per-app in capture health. THREAD_AX_DUMP=1 prints the trees for adapter work.
     func startDesktopAppCapture() {

@@ -182,6 +182,7 @@ const SOURCE_LABELS: Record<string, string> = {
   zed: "Zed",
   lm_studio: "LM Studio",
   jan: "Jan",
+  ollama: "Ollama",
   // Browser extension, newer sites.
   grok: "Grok",
   deepseek: "DeepSeek",

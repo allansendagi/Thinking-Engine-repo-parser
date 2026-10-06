@@ -49,4 +49,84 @@ final class LocalHistoryTests: XCTestCase {
         XCTAssertNotEqual(LocalHistoryWatch.fingerprint(b), LocalHistoryWatch.fingerprint(c))
         XCTAssertEqual(LocalHistoryWatch.fingerprint(b), LocalHistoryWatch.fingerprint(b))
     }
+
+    func testCodexUsesUserAndAgentEventsAndSkipsSubAgentThreads() {
+        let c = CodexHistory.parse(lines(#"""
+        {"timestamp":"2026-10-01T12:00:00.000Z","type":"session_meta","payload":{"id":"th1","cwd":"/app","thread_source":"user"}}
+        {"timestamp":"2026-10-01T12:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>...</environment_context>"}]}}
+        {"timestamp":"2026-10-01T12:00:05.120Z","type":"event_msg","payload":{"type":"user_message","message":"add retries to fetch"}}
+        {"timestamp":"2026-10-01T12:00:07.000Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"hidden"}}
+        {"timestamp":"2026-10-01T12:00:09.881Z","type":"event_msg","payload":{"type":"agent_message","message":"Done: exponential backoff, 3 tries."}}
+        """#))!
+        XCTAssertEqual(c.id, "th1")
+        XCTAssertEqual(c.messages.map(\.role), ["user", "assistant"])
+        XCTAssertEqual(c.messages[0].text, "add retries to fetch")
+        XCTAssertNil(CodexHistory.parse(lines(#"""
+        {"timestamp":"t","type":"session_meta","payload":{"id":"sub","parent_thread_id":"th1"}}
+        {"timestamp":"t","type":"event_msg","payload":{"type":"user_message","message":"subtask"}}
+        """#)))
+    }
+
+    func testGeminiCLIAppliesUpsertsSetAndRewind() {
+        let c = GeminiCLIHistory.parse(lines(#"""
+        {"sessionId":"g1","projectHash":"myapp","startTime":"2026-10-01T10:00:00Z","kind":"main"}
+        {"id":"m1","timestamp":"2026-10-01T10:00:02Z","type":"user","content":[{"text":"explain @src/a.ts plus file body"}],"displayContent":"explain @src/a.ts"}
+        {"id":"m2","timestamp":"2026-10-01T10:00:06Z","type":"gemini","content":"It par"}
+        {"id":"m2","timestamp":"2026-10-01T10:00:07Z","type":"gemini","content":"It parses config."}
+        {"id":"m3","timestamp":"2026-10-01T10:00:08Z","type":"info","content":"Tokens: 120"}
+        {"id":"m4","timestamp":"2026-10-01T10:01:00Z","type":"user","content":"wrong question"}
+        {"$rewindTo":"m4"}
+        {"id":"m5","timestamp":"2026-10-01T10:02:00Z","type":"user","content":"why config first?"}
+        """#))!
+        XCTAssertEqual(c.id, "g1")
+        XCTAssertEqual(c.messages.map(\.text), ["explain @src/a.ts", "It parses config.", "why config first?"])
+        XCTAssertEqual(c.messages.map(\.role), ["user", "assistant", "user"])
+    }
+
+    func testCopilotReplaysTheMutationLog() {
+        let session = CopilotChatHistory.replay(lines(#"""
+        {"kind":0,"v":{"version":3,"sessionId":"cs1","creationDate":1759750000000,"requests":[]}}
+        {"kind":2,"k":["requests"],"v":[{"requestId":"request_1","timestamp":1759750001000,"message":{"text":"why is this null?","parts":[]},"response":[]}]}
+        {"kind":2,"k":["requests",0,"response"],"v":[{"kind":"toolInvocationSerialized","invocationMessage":"Reading file"},{"value":"Because `foo` is "}]}
+        {"kind":2,"k":["requests",0,"response"],"v":[{"value":"never assigned."}]}
+        {"kind":1,"k":["customTitle"],"v":"Null foo"}
+        {"kind":2,"k":["requests"],"v":[{"requestId":"request_2","timestamp":1759750100000,"isSystemInitiated":true,"message":{"text":"auto"},"response":[]}]}
+        """#))!
+        let c = CopilotChatHistory.conversation(session)!
+        XCTAssertEqual(c.id, "cs1")
+        XCTAssertEqual(c.messages.map(\.text), ["why is this null?", "Because `foo` is never assigned."])
+        XCTAssertEqual(session["customTitle"] as? String, "Null foo")
+    }
+
+    func testMutationLogPushTruncatesFirst() {
+        let r = CopilotChatHistory.replay(lines(#"""
+        {"kind":0,"v":{"sessionId":"x","requests":[{"requestId":"a"},{"requestId":"b"}]}}
+        {"kind":2,"k":["requests"],"i":1,"v":[{"requestId":"c"}]}
+        {"kind":3,"k":["requests",0]}
+        """#))!
+        XCTAssertEqual((r["requests"] as? [[String: Any]])?.compactMap { $0["requestId"] as? String }, ["c"])
+    }
+
+    func testJanReadsTextValuesAndMillisecondTimes() {
+        let c = JanHistory.parse(lines(#"""
+        {"id":"j1","object":"thread.message","thread_id":"t1","role":"user","content":[{"type":"text","text":{"value":"hi there","annotations":[]}}],"created_at":1759750000000}
+        {"id":"j2","object":"thread.message","thread_id":"t1","role":"assistant","content":[{"type":"text","text":{"value":"Hello!","annotations":[]}}],"created_at":1759750002000}
+        """#), threadId: "t1")!
+        XCTAssertEqual(c.messages.map(\.text), ["hi there", "Hello!"])
+        XCTAssertTrue(c.messages[0].createdAt.hasPrefix("2025-10-06"))
+    }
+
+    func testLMStudioTakesSelectedVersionAndSkipsThinking() throws {
+        let obj = try JSONSerialization.jsonObject(with: Data(#"""
+        {"name":"Pricing","messages":[
+          {"versions":[{"role":"user","content":[{"type":"text","text":"per seat?"}]}]},
+          {"currentlySelected":1,"versions":[
+            {"role":"assistant","steps":[{"type":"contentBlock","content":[{"type":"text","text":"old answer"}]}]},
+            {"role":"assistant","steps":[{"type":"contentBlock","style":{"type":"thinking"},"content":[{"type":"text","text":"hmm"}]},{"type":"contentBlock","content":[{"type":"text","text":"Yes, per seat."}]}]}
+          ]}
+        ]}
+        """#.utf8)) as! [String: Any]
+        let c = LMStudioHistory.parse(obj, id: "1759750000000", fallbackDate: "2026-10-01T00:00:00Z")!
+        XCTAssertEqual(c.messages.map(\.text), ["per seat?", "Yes, per seat."])
+    }
 }

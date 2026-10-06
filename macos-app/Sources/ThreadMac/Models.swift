@@ -21,6 +21,7 @@ func displaySourceLabel(_ source: String?) -> String? {
     case "zed": return "Zed"
     case "lm_studio": return "LM Studio"
     case "jan": return "Jan"
+    case "ollama": return "Ollama"
     case "grok": return "Grok"
     case "deepseek": return "DeepSeek"
     case "mistral": return "Le Chat"

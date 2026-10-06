@@ -27,8 +27,9 @@ protocol LocalHistorySource: Sendable {
     var roots: [String] { get }
     /// Is this changed file one of the tool's conversation files?
     func isConversationFile(_ path: String) -> Bool
-    /// Parse one conversation file. Nil when it isn't a conversation (or is unreadable).
-    func read(_ path: String) -> LocalConversation?
+    /// Parse one history file into its conversations (usually one; a database holds many).
+    /// Empty when it isn't a conversation yet, or is unreadable.
+    func read(_ path: String) -> [LocalConversation]
 }
 
 extension LocalHistorySource {
@@ -64,6 +65,10 @@ final class LocalHistoryWatch {
     private var fileSigs: [String: String]
     private var sent: [String: String]
     private var owner: String?
+    /// Tools whose existing history has been recorded (once, the first time each is seen).
+    /// After that every new or changed conversation is captured.
+    private var seeded: Set<String>
+    private let seededKey = "thread.localHistory.seeded"
     private let sigsKey = "thread.localHistory.fileSigs"
     private let sentKey = "thread.localHistory.sent"
     private let ownerKey = "thread.localHistory.owner"
@@ -84,6 +89,7 @@ final class LocalHistoryWatch {
         fileSigs = (d.dictionary(forKey: sigsKey) as? [String: String]) ?? [:]
         sent = (d.dictionary(forKey: sentKey) as? [String: String]) ?? [:]
         owner = d.string(forKey: ownerKey)
+        seeded = Set(d.stringArray(forKey: seededKey) ?? [])
     }
 
     func start() {
@@ -142,8 +148,12 @@ final class LocalHistoryWatch {
     }
 
     private func scanAll() async {
+        guard paired(), let account = CredentialStore.userId else { return }
+        resetIfAccountChanged(account)
         var files: [String] = []
+        var seeding = Set<String>()
         for src in sources where enabled(src.source) {
+            if !seeded.contains(src.source) { seeding.insert(src.source) }
             for root in src.roots {
                 guard let e = FileManager.default.enumerator(atPath: root) else { continue }
                 while let rel = e.nextObject() as? String {
@@ -152,55 +162,67 @@ final class LocalHistoryWatch {
                 }
             }
         }
-        await process(files)
+        await process(files, seeding: seeding)
+        // A tool counts as seeded once scanned, even with no files yet: from then on anything
+        // that appears is new thinking.
+        seeded.formUnion(seeding)
+        if !seeding.isEmpty { persist() }
+    }
+
+    private func resetIfAccountChanged(_ account: String) {
+        guard account != owner else { return }
+        fileSigs = [:]
+        sent = [:]
+        seeded = []
+        owner = account
     }
 
     // MARK: - the pump
 
-    private func process(_ paths: [String]) async {
+    /// `seeding`: tools being seen for the first time -- record their files, send nothing.
+    private func process(_ paths: [String], seeding: Set<String> = []) async {
         guard !capped, paired(), let account = CredentialStore.userId else { return }
-        if account != owner {
-            fileSigs = [:]
-            sent = [:]
-            owner = account
-        }
+        resetIfAccountChanged(account)
         var changedAny = false
         for path in Set(paths).sorted() {
             guard let src = sources.first(where: { $0.isConversationFile(path) }), enabled(src.source) else { continue }
+            // A live event for a tool not seeded yet waits for the launch scan to seed it.
+            if !seeded.contains(src.source) && !seeding.contains(src.source) { continue }
+            let isSeeding = seeding.contains(src.source)
             let sig = Self.signature(path)
-            let firstSight = fileSigs[path] == nil
             guard sig != fileSigs[path] else { continue }
             // Parse off the main actor -- some histories are large.
-            guard let conv = await Task.detached(priority: .utility, operation: { src.read(path) }).value else {
-                fileSigs[path] = sig
-                continue
+            let convs = await Task.detached(priority: .utility, operation: { src.read(path) }).value
+            var fileDone = true
+            for conv in convs where !conv.messages.isEmpty {
+                let key = "\(src.source):\(conv.id)"
+                let fp = Self.fingerprint(conv)
+                if isSeeding {
+                    // Seed: existing history is not captured retroactively.
+                    sent[key] = fp
+                    changedAny = true
+                    continue
+                }
+                guard sent[key] != fp else { continue }
+                do {
+                    _ = try await makeClient().ingestConversation(
+                        id: "\(src.source)_\(conv.id)", source: src.source,
+                        messages: conv.messages.map { (id: $0.id, role: $0.role, text: $0.text, createdAt: $0.createdAt) },
+                        capture: (method: "desktop_agent", fidelity: "high")
+                    )
+                    sent[key] = fp
+                    changedAny = true
+                    onCaptured(src.source)
+                } catch let APIError.http(status, _) where status == 402 {
+                    capped = true   // Free cap: stop until relaunch (an upgrade lifts it).
+                    fileDone = false
+                    break
+                } catch {
+                    fileDone = false // transient: the next change or sweep retries
+                }
             }
-            let key = "\(src.source):\(conv.id)"
-            let fp = Self.fingerprint(conv)
-            if firstSight && sent[key] == nil {
-                // Seed: existing history is not captured retroactively.
-                fileSigs[path] = sig
-                sent[key] = fp
-                changedAny = true
-                continue
-            }
-            guard sent[key] != fp, !conv.messages.isEmpty else { fileSigs[path] = sig; continue }
-            do {
-                _ = try await makeClient().ingestConversation(
-                    id: "\(src.source)_\(conv.id)", source: src.source,
-                    messages: conv.messages.map { (id: $0.id, role: $0.role, text: $0.text, createdAt: $0.createdAt) },
-                    capture: (method: "desktop_agent", fidelity: "high")
-                )
-                fileSigs[path] = sig
-                sent[key] = fp
-                changedAny = true
-                onCaptured(src.source)
-            } catch let APIError.http(status, _) where status == 402 {
-                capped = true   // Free cap: stop until relaunch (an upgrade lifts it).
-                break
-            } catch {
-                // Transient: leave the marks so the next change or sweep retries.
-            }
+            if fileDone { fileSigs[path] = sig; changedAny = true }
+            if capped { break }
         }
         if changedAny { persist() }
     }
@@ -210,6 +232,7 @@ final class LocalHistoryWatch {
         d.set(fileSigs, forKey: sigsKey)
         d.set(sent, forKey: sentKey)
         d.set(owner, forKey: ownerKey)
+        d.set(Array(seeded).sorted(), forKey: seededKey)
     }
 
     // MARK: - pure helpers (unit-tested)
