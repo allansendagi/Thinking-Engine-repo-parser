@@ -48,6 +48,7 @@ import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
+import { buildThinkingMap, scqaHandoff } from "../mining/map";
 import { parsePastedConversation } from "../import/pasteParser";
 import { importIntoDb, parseExportFile } from "../import/run";
 
@@ -63,7 +64,7 @@ import {
   searchIdeas,
   traceIdea,
 } from "../mcp/tools";
-import type { CaptureFidelity, CaptureMethod, CaptureProvenance, IdeaState } from "../types";
+import type { CaptureFidelity, CaptureMethod, CaptureProvenance, CognitiveEventType, IdeaState } from "../types";
 import type { PipelineProviders } from "../state/pipeline";
 
 const VALID_IDEA_STATES: IdeaState[] = [
@@ -690,6 +691,19 @@ export function createRequestHandler(
       if (req.method === "GET" && convMatch) {
         const conv = getConversation(db, decodePathId(convMatch[1] as string));
         return conv ? json(conv) : error(404, "Conversation not found");
+      }
+
+      // The thinking map: the idea as a Minto pyramid / IBIS structure, its gaps, and a
+      // Situation-Complication-Question-Answer hand-off. Additive -- the idea itself is unchanged.
+      const mapMatch = pathname.match(/^\/v1\/ideas\/([^/]+)\/map$/);
+      if (req.method === "GET" && mapMatch) {
+        const idea = getIdea(db, decodePathId(mapMatch[1] as string));
+        if (!idea) return error(404, "Idea not found");
+        const typeOf = new Map(
+          (db.query("SELECT id, type FROM cognitive_events").all() as { id: string; type: CognitiveEventType }[]).map((r) => [r.id, r.type]),
+        );
+        const map = buildThinkingMap(idea, typeOf);
+        return json({ map, handoff: scqaHandoff(map) });
       }
 
       const ideaMatch = pathname.match(/^\/v1\/ideas\/([^/]+)(\/trace)?$/);
