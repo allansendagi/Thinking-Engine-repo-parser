@@ -53,9 +53,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: 0.3.${{ github.run_number }}
         run: |
+          # Update the release IN PLACE. Deleting and recreating it (the old approach) races with
+          # GitHub's tag cleanup: the new release sometimes came out as an untagged draft, and the
+          # download link 404'd for the length of every run.
           cp dist/Thread.dmg "dist/Thread-${VERSION}.dmg"
-          gh release delete mac-latest --cleanup-tag --yes || true
-          gh release create mac-latest dist/Thread.dmg "dist/Thread-${VERSION}.dmg" "$RUNNER_TEMP/thread-extension.zip" \
-            --prerelease --latest=false --target "$GITHUB_SHA" \
-            --title "Thread for Mac ${VERSION} (latest build)" \
-            --notes "Built from ${GITHUB_SHA::7} on $(date -u '+%Y-%m-%d %H:%M UTC'). Unsigned: on first open, approve it in System Settings > Privacy & Security > Open Anyway. Extension: unzip thread-extension.zip, then chrome://extensions > Developer mode > Load unpacked (or Reload if already loaded from that folder)."
+          TITLE="Thread for Mac ${VERSION} (latest build)"
+          NOTES="Built from ${GITHUB_SHA::7} on $(date -u '+%Y-%m-%d %H:%M UTC'). Unsigned: on first open, approve it in System Settings > Privacy & Security > Open Anyway. Extension: unzip thread-extension.zip, then chrome://extensions > Developer mode > Load unpacked (or Reload if already loaded from that folder)."
+
+          # Leftover drafts from the old race.
+          gh release list --limit 50 --json tagName,isDraft,name \
+            --jq '.[] | select(.isDraft and (.name | startswith("Thread for Mac"))) | .tagName' |
+            while read -r t; do gh release delete "$t" --yes || true; done
+
+          # Point the tag at this commit (create it the first time).
+          if ! gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/mac-latest" \
+                -f sha="$GITHUB_SHA" -F force=true >/dev/null 2>&1; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/mac-latest" -f sha="$GITHUB_SHA" >/dev/null
+          fi
+
+          if ! gh release view mac-latest >/dev/null 2>&1; then
+            gh release create mac-latest --verify-tag --prerelease --latest=false \
+              --title "$TITLE" --notes "$NOTES"
+          fi
+
+          # Drop the previous versioned dmg, then upload (the stable names are replaced in place).
+          gh release view mac-latest --json assets --jq '.assets[].name' |
+            { grep -E '^Thread-[0-9.]+\.dmg$' || true; } |
+            while read -r a; do gh release delete-asset mac-latest "$a" --yes || true; done
+          gh release upload mac-latest dist/Thread.dmg "dist/Thread-${VERSION}.dmg" \
+            "$RUNNER_TEMP/thread-extension.zip" --clobber
+          gh release edit mac-latest --title "$TITLE" --notes "$NOTES" --prerelease --latest=false
+
+          # Never report success unless the stable link is real.
+          draft=$(gh release view mac-latest --json isDraft --jq .isDraft)
+          [ "$draft" = "false" ] || { echo "mac-latest is a draft"; exit 1; }
+          curl -fsSL -r 0-0 -o /dev/null "https://github.com/${GITHUB_REPOSITORY}/releases/download/mac-latest/Thread.dmg"
