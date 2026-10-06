@@ -223,8 +223,8 @@ export function persistPipelineResult(
   persistCanonicalEvents(db, canonicalEvents);
 
   const insertCognitive = db.prepare(
-    `INSERT OR REPLACE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, why_it_matters)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, why_it_matters, role, adopted_source_event_id, adopted_quote)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertSource = db.prepare(
     `INSERT OR REPLACE INTO cognitive_event_sources (cognitive_event_id, canonical_event_id) VALUES (?, ?)`,
@@ -240,6 +240,9 @@ export function persistPipelineResult(
       e.sourceEventId,
       e.evidenceQuote,
       e.whyItMatters ?? null,
+      e.role ?? null,
+      e.adoptedFrom?.sourceEventId ?? null,
+      e.adoptedFrom?.quote ?? null,
     );
     for (const additionalId of e.additionalSourceEventIds) {
       insertSource.run(e.id, additionalId);
@@ -250,8 +253,8 @@ export function persistPipelineResult(
   // or rubric change (SIGNAL_GATE_VERSION) is replayable and "why isn't my idea here" is answerable.
   const insertDiscarded = db.prepare(
     `INSERT OR REPLACE INTO discarded_events
-       (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, gate_reason, gate_version, discarded_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, gate_reason, gate_version, discarded_at, role, adopted_source_event_id, adopted_quote)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const discardedAt = new Date().toISOString();
   for (const d of result.discardedEvents) {
@@ -268,6 +271,9 @@ export function persistPipelineResult(
       d.gateReason,
       d.gateVersion,
       discardedAt,
+      e.role ?? null,
+      e.adoptedFrom?.sourceEventId ?? null,
+      e.adoptedFrom?.quote ?? null,
     );
   }
 

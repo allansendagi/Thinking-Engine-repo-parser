@@ -16,6 +16,12 @@ const ADD_COLUMNS: [table: string, column: string][] = [
   ["canonical_events", "status TEXT NOT NULL DEFAULT 'committed'"],
   ["evidence", "identity TEXT"],
   ["evidence", "source TEXT"],
+  ["cognitive_events", "role TEXT"],
+  ["cognitive_events", "adopted_source_event_id TEXT"],
+  ["cognitive_events", "adopted_quote TEXT"],
+  ["discarded_events", "role TEXT"],
+  ["discarded_events", "adopted_source_event_id TEXT"],
+  ["discarded_events", "adopted_quote TEXT"],
 ];
 
 /**

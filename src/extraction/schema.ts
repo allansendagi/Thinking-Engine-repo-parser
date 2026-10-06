@@ -44,6 +44,19 @@ export const extractedEventSchema = z.object({
    * source_event_id + evidence_quote carry the hallucination guarantee. Optional.
    */
   additional_source_event_ids: z.array(z.string()).optional(),
+  /**
+   * What a claim is DOING in the person's thinking: their position, an option they're weighing,
+   * or a reason for/against something. Drives the thinking map and keeps an option from becoming
+   * "where the idea stands". Optional; absent = position.
+   */
+  role: z.enum(["position", "option", "reason"]).nullable().optional(),
+  /**
+   * Adoption: the person explicitly accepted a proposal the AI made in its immediately preceding
+   * message ("yes, the second one"). evidence_quote is the person's acceptance; these two point at
+   * the AI message and quote the accepted proposal verbatim. Both are grounding-checked.
+   */
+  adopted_from_event_id: z.string().nullable().optional(),
+  adopted_quote: z.string().nullable().optional(),
 });
 
 export const extractionResultSchema = z.object({
