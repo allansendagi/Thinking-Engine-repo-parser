@@ -1,9 +1,9 @@
-import { dismissedExamples } from "../mining/corrections";
 import type { Database } from "bun:sqlite";
 import { parseChatGptExport } from "../parser/chatgpt";
 import { parseClaudeExport } from "../parser/claude";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
-import { runPipeline, persistPipelineResult, type PipelineProviders } from "../state/pipeline";
+import type { PipelineProviders } from "../state/pipeline";
+import { extractOrDefer } from "../state/deferred";
 import type { CanonicalEvent } from "../types";
 
 export type ImportFormat = "chatgpt" | "claude";
@@ -19,6 +19,9 @@ export function parseExportFile(format: ImportFormat, raw: unknown): CanonicalEv
 
 export interface ImportSummary {
   newCanonicalEvents: number;
+  /** Imported messages waiting for the AI (see state/deferred.ts). */
+  extractionPending?: number;
+  extractionError?: string | null;
   newCognitiveEvents: number;
   rejectedExtractions: number;
   ideaCount: number;
@@ -49,9 +52,19 @@ export async function importIntoDb(
   );
   const relevantEvents = events.filter((e) => conversationsWithNewEvents.has(e.conversationId));
 
-  const existingIdeas = new Map(loadIdeas(db).map((i) => [i.id, i]));
-  const result = await runPipeline(relevantEvents, providers, { existingIdeas, newEventIds, dismissed: dismissedExamples(db) });
-  persistPipelineResult(db, relevantEvents, result);
+  // Stored first, then extracted -- or deferred with the reason if the AI is unavailable.
+  const outcome = await extractOrDefer(db, relevantEvents, newEventIds, providers);
+  if (!outcome.result) {
+    return {
+      newCanonicalEvents: newEventIds.size,
+      newCognitiveEvents: 0,
+      rejectedExtractions: 0,
+      ideaCount: loadIdeas(db).length,
+      extractionPending: outcome.deferred,
+      extractionError: outcome.error,
+    };
+  }
+  const result = outcome.result;
 
   return {
     newCanonicalEvents: newEventIds.size,

@@ -1,3 +1,5 @@
+import { mkdirSync, statfsSync, unlinkSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   attachEmail,
@@ -15,6 +17,7 @@ import {
   revokeTokenHash,
   touchToken,
   verifyTokenHash,
+  registryPath,
 } from "./auth";
 import { consumeCode, issueCode, RateLimitedError } from "./authCodes";
 import { clientKey, rateLimit } from "./rateLimit";
@@ -28,7 +31,7 @@ import {
   isProActive,
   verifyPaddleSignature,
 } from "./billing";
-import { openUserDb } from "../db/tenancy";
+import { dataDir, openUserDb } from "../db/tenancy";
 import { storageMode } from "../db/durability";
 import { downloadSummary, isAdmin, recordDownload } from "./metrics";
 import { addToWaitlist, waitlistSummary } from "./waitlist";
@@ -45,6 +48,7 @@ import {
   loadIdeas,
 } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
+import { deferredStatus, scheduleDeferredRetry } from "../state/deferred";
 import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
@@ -207,7 +211,12 @@ export function createRequestHandler(
       // ?deep=1 also checks the AI models every capture depends on (one tiny call each, cached
       // for 5 minutes so it can't be used to spend tokens).
       if (url.searchParams.get("deep") === "1") {
-        return json({ status: "ok", storage: storageMode(), models: await checkModels(providers) });
+        return json({
+          status: "ok",
+          storage: storageMode(),
+          disk: checkStorage(),
+          models: await checkModels(providers),
+        });
       }
       return json({ status: "ok", storage: storageMode() });
     }
@@ -542,6 +551,8 @@ export function createRequestHandler(
     }
 
     const db = openUserDb(userId);
+    // Captures saved while the AI was unavailable resume on their own (throttled, off-path).
+    scheduleDeferredRetry(userId, openUserDb, providers);
 
     try {
       // Soft lock. Reads are never gated. No-op until Paddle is actually configured.
@@ -870,7 +881,13 @@ export function createRequestHandler(
       if (req.method === "GET" && pathname === "/v1/capture-health") {
         const daysParam = Number(url.searchParams.get("days") ?? "7");
         const windowDays = Number.isFinite(daysParam) && daysParam > 0 && daysParam <= 90 ? daysParam : 7;
-        return json(captureHealthSummary(db, windowDays));
+        const pending = deferredStatus(db);
+        return json({
+          ...captureHealthSummary(db, windowDays),
+          // Saved but waiting for the AI: shown in the app so a paused pipeline is never silent.
+          pendingExtraction: pending,
+          ...(pending.count > 0 ? { healthy: false } : {}),
+        });
       }
 
       if (req.method === "POST" && pathname === "/v1/continue") {
@@ -917,6 +934,38 @@ export function createRequestHandler(
       db.close();
     }
   };
+}
+
+/**
+ * Can captures actually be stored? Writes a probe file where per-user databases live and reports
+ * free space and whether that folder is on the persistent volume -- a full disk or a data dir
+ * outside the volume both look healthy to the plain check while every capture fails or vanishes.
+ * Booleans and sizes only; no paths or account data.
+ */
+function checkStorage(): Record<string, unknown> {
+  const dir = dataDir();
+  const out: Record<string, unknown> = {};
+  try {
+    mkdirSync(dir, { recursive: true });
+    const probe = join(dir, `.health-${process.pid}`);
+    writeFileSync(probe, "ok");
+    unlinkSync(probe);
+    out.writable = true;
+  } catch (e) {
+    out.writable = false;
+    out.writeError = describeFailure(e);
+  }
+  try {
+    const s = statfsSync(dir);
+    out.freeMB = Math.floor((Number(s.bavail) * Number(s.bsize)) / 1_048_576);
+    out.totalMB = Math.floor((Number(s.blocks) * Number(s.bsize)) / 1_048_576);
+  } catch {
+    // statfs unavailable -- leave sizes out
+  }
+  const volume = process.env.RAILWAY_VOLUME_MOUNT_PATH;
+  out.onPersistentVolume = volume ? resolve(dir).startsWith(resolve(volume)) : null;
+  out.registryOnPersistentVolume = volume ? resolve(registryPath()).startsWith(resolve(volume)) : null;
+  return out;
 }
 
 let modelCheck: { at: number; result: Record<string, string> } | null = null;

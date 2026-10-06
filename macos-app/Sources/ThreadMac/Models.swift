@@ -247,6 +247,14 @@ struct CaptureHealth: Codable {
     let healthy: Bool
     let unresolvedConversations: Int
     let sensors: [Sensor]
+    /// Captures saved on the server but waiting for its AI to turn them into ideas (the AI was
+    /// unavailable). Optional so older servers still decode.
+    var pendingExtraction: PendingExtraction? = nil
+
+    struct PendingExtraction: Codable {
+        let count: Int
+        let lastError: String?
+    }
 
     var degradedSensors: [Sensor] { sensors.filter(\.degraded) }
 }
@@ -277,6 +285,13 @@ func shouldShowWelcome(
 /// present only when there's something the user can actually do.
 func makeCaptureHealthNotice(_ h: CaptureHealth?) -> (title: String, detail: String?)? {
     guard let h, !h.healthy else { return nil }
+    // Nothing is lost, but nothing new is becoming an idea either -- say so, plainly, first.
+    if let p = h.pendingExtraction, p.count > 0 {
+        return (
+            "\(p.count) captured message\(p.count == 1 ? "" : "s") waiting to become ideas",
+            "Everything is saved. Thread's AI processing is paused right now and resumes on its own."
+        )
+    }
     if let s = h.degradedSensors.first {
         let detail = s.sensor == "browser_extension"
             ? "Reopen the tab you were working in, or check the Thread extension is still on."

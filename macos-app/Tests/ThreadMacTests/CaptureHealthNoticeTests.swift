@@ -46,4 +46,19 @@ private extension Array where Element: Hashable {
         var seen = Set<Element>()
         return filter { seen.insert($0).inserted }
     }
+
+    func testCapturesWaitingForTheAIComeFirstAndReassure() throws {
+        var h = health(false, unresolved: 2, degraded: ["browser_extension"])
+        h.pendingExtraction = .init(count: 4, lastError: "400 Your credit balance is too low")
+        let n = try XCTUnwrap(makeCaptureHealthNotice(h))
+        XCTAssertEqual(n.title, "4 captured messages waiting to become ideas")
+        XCTAssertTrue(n.detail?.contains("Everything is saved") ?? false)
+        XCTAssertFalse(n.detail?.contains("credit") ?? true, "provider billing details aren't the user's concern")
+    }
+
+    func testDecodesAServerThatReportsWaitingCaptures() throws {
+        let json = #"{"windowDays":7,"healthy":false,"sensors":[],"unresolvedConversations":0,"pendingExtraction":{"count":2,"lastError":"x","oldestQueuedAt":"2026-10-06T09:00:00Z"}}"#
+        let h = try JSONDecoder().decode(CaptureHealth.self, from: Data(json.utf8))
+        XCTAssertEqual(h.pendingExtraction?.count, 2)
+    }
 }
