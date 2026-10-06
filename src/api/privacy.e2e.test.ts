@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CompletionProvider } from "../providers/types";
 import { createRequestHandler } from "./handler";
-import { attachEmail, registryPath, setPlan } from "./auth";
+import { attachEmail, openRegistry, registryPath, setPlan } from "./auth";
 import { dbPathForUser, openUserDb } from "../db/tenancy";
 
 /**
@@ -228,6 +228,22 @@ describe("delete everything", () => {
     expect(registryBytes()).not.toContain("erase-me-4471@example.com");
     // The old sign-in is dead.
     expect((await u.call("GET", "/v1/account")).status).toBe(401);
+  });
+
+  test("the email is gone from the registry file even while other connections keep its log alive", async () => {
+    // SQLite only discards the write-ahead log when the LAST connection closes. A busy server
+    // always has another open, so old frames holding the email would otherwise linger.
+    const holder = openRegistry();
+    try {
+      const u = await newUser();
+      attachEmail(u.userId, "linger-9034@example.com");
+      const bytes = () => [registryPath(), `${registryPath()}-wal`].filter(existsSync).map((f) => readFileSync(f).toString("latin1")).join("\n");
+      expect(bytes()).toContain("linger-9034@example.com");
+      expect((await u.call("DELETE", "/v1/account/data", { confirm: "delete everything" })).status).toBe(200);
+      expect(bytes()).not.toContain("linger-9034@example.com");
+    } finally {
+      holder.close();
+    }
   });
 
   test("a background job that still holds the database open can't bring files back after deletion", async () => {

@@ -142,7 +142,7 @@ function migrateRegistry(db: Database): void {
 export function deleteAccountRecords(userId: string): { account: number; devices: number; signInCodes: number } {
   const db = openRegistry();
   try {
-    return db.transaction(() => {
+    const result = db.transaction(() => {
       const email = (db.query("SELECT email FROM users WHERE id = ?").get(userId) as { email: string | null } | null)?.email ?? null;
       const devices = db.prepare("DELETE FROM auth_tokens WHERE user_id = ?").run(userId).changes;
       let signInCodes = 0;
@@ -156,7 +156,16 @@ export function deleteAccountRecords(userId: string): { account: number; devices
       const account = db.prepare("DELETE FROM users WHERE id = ?").run(userId).changes;
       return { account, devices, signInCodes };
     })();
+    return result;
   } finally {
+    // The email was written to the write-ahead log earlier, and SQLite only discards old log
+    // frames when the last connection closes -- a busy server never gets there. Fold the log
+    // back in and truncate it so the deleted email isn't left readable in registry.db-wal.
+    try {
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    } catch {
+      // not in WAL mode: nothing to fold
+    }
     db.close();
   }
 }
