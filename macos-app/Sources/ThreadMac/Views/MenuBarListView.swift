@@ -300,21 +300,43 @@ private struct Segmented: View {
 // MARK: - Empty / onboarding
 
 private struct EmptyState: View {
+    @EnvironmentObject var appState: AppState
     let loops: Bool
     var body: some View {
         VStack(spacing: 13) {
             Spacer()
             Image(systemName: loops ? "checkmark.circle" : "sparkles")
                 .font(.system(size: 28, weight: .light)).foregroundStyle(Theme.accent)
-            Text(loops ? "No open loops" : "Nothing captured yet")
+            Text(loops ? "No open loops" : "Nothing here yet")
                 .font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Theme.ink(0.85))
             if !loops {
-                Text("Talk to ChatGPT, Claude, or Gemini and your first idea shows up here.")
+                Text("Bring in conversations you've already had — Thread finds the ideas in them.")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.ink(0.5))
                     .multilineTextAlignment(.center).frame(maxWidth: 250)
                     .fixedSize(horizontal: false, vertical: true)
+                VStack(spacing: 6) {
+                    if appState.cursorBackfillAvailable {
+                        Button { appState.runCursorBackfill() } label: {
+                            Label("Recover from Cursor", systemImage: "arrow.down.circle").frame(width: 210)
+                        }
+                        .buttonStyle(.borderedProminent).tint(Theme.accent)
+                    }
+                    Button { appState.startRecovery() } label: {
+                        Label("Import ChatGPT or Claude history", systemImage: "tray.and.arrow.down").frame(width: 210)
+                    }
+                    Button { NotificationCenter.default.post(name: .threadOpenPaste, object: nil) } label: {
+                        Label("Paste a conversation", systemImage: "doc.on.clipboard").frame(width: 210)
+                    }
+                }
+                .controlSize(.regular).font(.system(size: 12))
+                .padding(.top, 2)
                 Text("Press \(RecallShortcut.current.symbol) anywhere to recall.")
                     .font(.system(size: 11)).foregroundStyle(Theme.ink(0.35))
+            } else {
+                Text("Questions you leave unresolved show up here, so nothing gets dropped.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.ink(0.5))
+                    .multilineTextAlignment(.center).frame(maxWidth: 250)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
         }

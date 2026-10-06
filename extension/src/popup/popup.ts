@@ -3,6 +3,7 @@ import {
   getAccountInfo,
   getCaptureHealth,
   getCaptureQueue,
+  getHistoryStatus,
   getPairingState,
   getSettings,
   setApiBaseUrl,
@@ -100,6 +101,37 @@ function renderCapture(health: CaptureHealth, paired: boolean, queued: number): 
 function render(status: ExtensionStatus): void {
   renderConnection(status.pairing, status.account);
   renderCapture(status.health, status.pairing.status === "paired", status.queued);
+  $("history").hidden = status.pairing.status !== "paired";
+  void renderHistory();
+}
+
+const HISTORY_LABEL: Record<string, string> = { chatgpt: "ChatGPT", claude: "Claude" };
+
+/** One line per source that has run: what it's doing now, or how it ended. */
+async function renderHistory(): Promise<void> {
+  const all = await getHistoryStatus();
+  const lines = Object.entries(all).map(([source, s]) => {
+    const name = HISTORY_LABEL[source] ?? source;
+    const todo = Math.max(s.found - s.skipped, 0);
+    switch (s.state) {
+      case "listing": return `${name}: finding conversations… (${s.found})`;
+      case "importing": return `${name}: bringing in ${s.imported} of ${todo}…`;
+      case "done": return `${name}: up to date · ${s.found} conversations${s.ideaCount != null ? ` · ${s.ideaCount} ideas` : ""}`;
+      case "capped": return `${name}: stopped at the Free plan's 25 ideas — upgrade to bring in the rest`;
+      case "stopped": return `${name}: paused at ${s.imported} of ${todo} — run again to continue`;
+      case "error": return `${name}: couldn't read history (${s.error ?? "error"}) — are you signed in there?`;
+    }
+  });
+  $("historyStatus").textContent = lines.join("\n");
+  ($("historyStatus") as HTMLElement).style.whiteSpace = "pre-line";
+}
+
+async function startHistory(source: "chatgpt" | "claude"): Promise<void> {
+  const res = (await chrome.runtime.sendMessage({ type: "thread:history-start", source })) as
+    | { ok: boolean; error?: string }
+    | undefined;
+  if (!res?.ok) showError(res?.error ?? "Couldn't start the import.");
+  else window.close(); // the page shows live progress
 }
 
 /** Ask the worker for the whole picture; fall back to reading storage directly if it's asleep. */
@@ -173,6 +205,11 @@ function init(): void {
   $("connect").addEventListener("click", () => void connect());
   $("reconnect").addEventListener("click", () => void connect());
   $("usePairingString").addEventListener("click", () => void usePairingString());
+  $("historyChatgpt").addEventListener("click", () => void startHistory("chatgpt"));
+  $("historyClaude").addEventListener("click", () => void startHistory("claude"));
+  chrome.storage.onChanged.addListener((changes) => {
+    if ("historyStatus" in changes) void renderHistory();
+  });
   $("saveUrl").addEventListener("click", async () => {
     await setApiBaseUrl(input("apiBaseUrl").value.trim() || DEFAULT_API_BASE_URL);
     await refresh();

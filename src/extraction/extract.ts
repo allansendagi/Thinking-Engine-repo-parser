@@ -2,12 +2,8 @@ import type { CanonicalEvent, CognitiveEvent } from "../types";
 import type { CompletionProvider } from "../providers/types";
 import { EXTRACTION_SYSTEM_PROMPT, MAX_PROMPT_MESSAGE_CHARS, buildTranscriptPrompt } from "./prompt";
 import { extractionResultSchema, type ExtractedEvent } from "./schema";
+import { completeJson } from "../providers/json";
 
-function parseJsonResponse(text: string): unknown {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = fenced?.[1] ?? text;
-  return JSON.parse(candidate.trim());
-}
 
 /**
  * Deterministic hallucination guard: an extracted event is only trustworthy if (a) its
@@ -45,6 +41,21 @@ function checkGrounding(
   if (!source.text.toLowerCase().includes(event.evidence_quote.toLowerCase())) {
     return { grounded: false, reason: "evidence_quote not found verbatim in source_event_id" };
   }
+  if (event.adopted_from_event_id || event.adopted_quote) {
+    // Adoption credits the person with an AI proposal, so it's held to a stricter bar: the
+    // proposal must be quoted verbatim from the AI message that IMMEDIATELY precedes theirs
+    // (at most one message between, e.g. a split reply) -- never an AI message from elsewhere.
+    const ai = event.adopted_from_event_id ? eventsById.get(event.adopted_from_event_id) : undefined;
+    if (!ai || ai.role !== "assistant" || ai.conversationId !== source.conversationId) {
+      return { grounded: false, reason: "adoption doesn't point at an assistant message in this conversation" };
+    }
+    if (ai.index >= source.index || source.index - ai.index > 2) {
+      return { grounded: false, reason: "adopted proposal isn't from the AI message right before the acceptance" };
+    }
+    if (!event.adopted_quote || !ai.text.toLowerCase().includes(event.adopted_quote.toLowerCase())) {
+      return { grounded: false, reason: "adopted_quote not found verbatim in the AI message" };
+    }
+  }
   return { grounded: true };
 }
 
@@ -67,14 +78,15 @@ export async function extractCognitiveEvents(
   contextEvents: CanonicalEvent[],
   provider: CompletionProvider,
   newEventIds?: Set<string>,
+  dismissed: string[] = [],
 ): Promise<ExtractionOutcome> {
   const calls = planExtractionCalls(contextEvents, newEventIds);
   if (calls.length === 1 && calls[0]!.context === contextEvents) {
-    return extractOnce(contextEvents, provider, newEventIds);
+    return extractOnce(contextEvents, provider, newEventIds, dismissed);
   }
   const merged: ExtractionOutcome = { events: [], rejected: [] };
   for (const call of calls) {
-    const outcome = await extractOnce(call.context, provider, call.newIds);
+    const outcome = await extractOnce(call.context, provider, call.newIds, dismissed);
     merged.events.push(...outcome.events);
     merged.rejected.push(...outcome.rejected);
   }
@@ -156,16 +168,17 @@ async function extractOnce(
   contextEvents: CanonicalEvent[],
   provider: CompletionProvider,
   newEventIds?: Set<string>,
+  dismissed: string[] = [],
 ): Promise<ExtractionOutcome> {
   const eventsById = new Map(contextEvents.map((e) => [e.id, e]));
 
-  const raw = await provider.complete(
+  const parsed = await completeJson(
+    provider,
     EXTRACTION_SYSTEM_PROMPT,
-    buildTranscriptPrompt(contextEvents, newEventIds),
-    4096,
+    buildTranscriptPrompt(contextEvents, newEventIds, dismissed),
+    8192,
+    extractionResultSchema,
   );
-
-  const parsed = extractionResultSchema.parse(parseJsonResponse(raw));
 
   const events: CognitiveEvent[] = [];
   const rejected: ExtractionOutcome["rejected"] = [];
@@ -192,6 +205,11 @@ async function extractOnce(
       evidenceQuote: candidate.evidence_quote,
       whyItMatters: candidate.why_it_matters ?? undefined,
       additionalSourceEventIds: candidate.additional_source_event_ids ?? [],
+      role: candidate.type === "claim" && candidate.role ? candidate.role : undefined,
+      adoptedFrom:
+        candidate.adopted_from_event_id && candidate.adopted_quote
+          ? { sourceEventId: candidate.adopted_from_event_id, quote: candidate.adopted_quote }
+          : undefined,
     });
   }
 

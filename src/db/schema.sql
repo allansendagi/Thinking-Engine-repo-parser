@@ -148,3 +148,55 @@ CREATE TABLE IF NOT EXISTS identity_resolutions (
   confidence REAL NOT NULL,
   reasoning TEXT NOT NULL
 );
+
+-- Meaning-vectors for thoughts (cognitive_events and discarded_events -- both are grounded
+-- thoughts). Native-first: Thread for Mac computes them on-device with Apple's NaturalLanguage
+-- framework and uploads them; a cloud provider (Voyage) only fills gaps when explicitly
+-- configured. One row per (thought, model): vectors from different models are never compared.
+-- `text_hash` is the statement the vector was computed from, so an edited thought is re-embedded.
+CREATE TABLE IF NOT EXISTS thought_vectors (
+  thought_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dims INTEGER NOT NULL,
+  vector BLOB NOT NULL,
+  text_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (thought_id, model)
+);
+
+-- v2 idea mining output, computed in SHADOW next to the serving idea_nodes (mining/shadow.ts):
+-- recomputed from all thoughts after captures, compared against v1, and not served until it
+-- scores better. One row per idea or spark; `json` is the IdeaNode shape the API already serves.
+CREATE TABLE IF NOT EXISTS idea_view_v2 (
+  idea_id TEXT PRIMARY KEY,
+  is_spark INTEGER NOT NULL,
+  thought_ids TEXT NOT NULL,
+  json TEXT NOT NULL,
+  computed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mining_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  miner TEXT NOT NULL,
+  vector_model TEXT,
+  thoughts INTEGER NOT NULL,
+  vectors INTEGER NOT NULL,
+  ideas INTEGER NOT NULL,
+  sparks INTEGER NOT NULL,
+  ms INTEGER NOT NULL,
+  ran_at TEXT NOT NULL
+);
+
+-- Personal learning: what the person corrected. Every v2 consolidation pass treats these as
+-- constraints (a merge is a must-link, a split a cannot-link, a deleted idea's thoughts never
+-- come back as an idea), and recent "not an idea" corrections steer extraction for this person.
+CREATE TABLE IF NOT EXISTS idea_corrections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN ('not_idea', 'merge', 'split', 'rename', 'state')),
+  idea_id TEXT NOT NULL,
+  thought_ids TEXT NOT NULL,          -- JSON array: the idea's thoughts when corrected
+  other_thought_ids TEXT,             -- JSON array: merge target's / split-off thoughts
+  value TEXT,                         -- new title / state; for not_idea, the idea's statement
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_idea_corrections_kind ON idea_corrections(kind);

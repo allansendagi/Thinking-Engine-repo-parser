@@ -501,6 +501,13 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     );
     expect(badStateRes.status).toBe(400);
 
+    // Grouping corrections are validated and recorded for v2 (serving ideas untouched).
+    const correct = (kind: string, body: object) =>
+      handler(new Request(`http://x/v1/ideas/${ideaId}/${kind}`, { method: "POST", headers: authHeader, body: JSON.stringify(body) }));
+    expect((await correct("merge", { intoIdeaId: "idea_missing" })).status).toBe(400);
+    expect((await correct("split", { thoughtIds: [] })).status).toBe(400);
+    expect((await handler(new Request("http://x/v1/ideas/idea_missing/merge", { method: "POST", headers: authHeader, body: "{}" }))).status).toBe(404);
+
     const deleteRes = await handler(
       new Request(`http://x/v1/ideas/${ideaId}`, {
         method: "DELETE",

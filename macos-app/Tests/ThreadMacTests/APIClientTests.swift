@@ -101,3 +101,21 @@ private extension URLRequest {
         return data
     }
 }
+
+/// The app decodes only the options + gaps of the server's thinking map; the rest is ignored.
+final class ThinkingMapDecodingTests: XCTestCase {
+    func testDecodesTheServerShape() throws {
+        let json = """
+        {"map":{"ideaId":"idea_1","title":"Pricing","governingThought":"Annual plans only.",
+          "questions":[],"reasons":[],"decisions":[],"history":[],
+          "options":[{"statement":"Bill per workspace.","status":"rejected"},{"statement":"Annual plans only.","status":"chosen"}],
+          "gaps":[{"kind":"decision-without-reasons","message":"You decided, but the reasons weren't captured."}]},
+         "handoff":"Situation: ..."}
+        """
+        struct Wrap: Decodable { let map: ThinkingMap }
+        let map = try JSONDecoder().decode(Wrap.self, from: Data(json.utf8)).map
+        XCTAssertEqual(map.options.map(\.status), ["rejected", "chosen"])
+        XCTAssertEqual(map.gaps.first?.kind, "decision-without-reasons")
+        XCTAssertFalse(map.isEmpty)
+    }
+}

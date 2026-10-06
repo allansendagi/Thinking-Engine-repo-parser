@@ -1,4 +1,5 @@
 import type { SiteAdapter, RawMessage } from "../common/siteAdapter";
+import { chatgptReader, lazyReader } from "../structured";
 import { cleanText, fillComposer, firstMatch } from "../common/domUtils";
 
 /**
@@ -30,6 +31,7 @@ function collect(root: ParentNode): HTMLElement[] {
 
 export const chatGptAdapter: SiteAdapter = {
   source: "chatgpt",
+  history: lazyReader(() => chatgptReader()),
 
   getConversationId(): string | null {
     const match = location.pathname.match(/\/c\/([^/?#]+)/);

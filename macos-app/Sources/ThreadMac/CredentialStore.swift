@@ -4,14 +4,11 @@ import Foundation
 /// atomic unit) on disk in the app's Application Support directory, file mode 0600, with a `.bak`
 /// sibling written on every save.
 ///
-/// Why not the Keychain: this app ships **unsigned** via GitHub Releases. A Keychain item's
-/// access control is bound to the app's code signature, which changes on every ad-hoc `swift
-/// build` / every new unsigned download -- so the user gets a "ThreadMac wants to use your
-/// confidential information" password prompt on essentially every launch. A 0600 file in the
-/// user's own Application Support has no such prompt and is adequate protection for what this
-/// token is (a bearer capability to the user's own idea data on the hosted backend). Once the
-/// app has a stable Developer ID signature, moving the token back into the Keychain is the
-/// right call -- see README.
+/// Keychain vs file: a Developer ID-signed build keeps the credential in the Keychain
+/// (KeychainCredential), migrating any existing file into it on first launch. An unsigned /
+/// ad-hoc build can't: a Keychain item's access is bound to the code signature, which changes on
+/// every ad-hoc build, so the user would get a "ThreadMac wants to use your confidential
+/// information" password prompt on essentially every launch. Those builds use the 0600 file.
 ///
 /// Resilience: the file is written **without** a data-protection class. `NSFileProtectionComplete`
 /// makes the file unreadable until the Mac is first unlocked after boot -- a login-item launch
@@ -89,8 +86,38 @@ enum CredentialStore {
         }
     }
 
+    /// Keychain for Developer ID builds (stable signature), the file otherwise. Tests (which set
+    /// `directoryOverride`) always use the file.
+    private static var keychainCache: Credential?
+
+    private static var usesKeychain: Bool { directoryOverride == nil && KeychainCredential.isAvailable }
+
     /// Full load result -- callers deciding whether to recover vs. onboard use this.
     static func load() -> LoadResult {
+        guard usesKeychain else { return loadFile() }
+        // `isPaired` and friends read the credential constantly; don't hit the Keychain each time.
+        if let keychainCache { return .ok(keychainCache) }
+        switch KeychainCredential.read() {
+        case .found(let data):
+            guard let cred = try? JSONDecoder().decode(Credential.self, from: data) else { return .unreadable }
+            keychainCache = cred
+            return .ok(cred)
+        case .failed:
+            return .unreadable
+        case .notFound:
+            // First signed launch after an unsigned/file-based install: move the file credential
+            // into the Keychain (and only then remove the files), so the account carries over.
+            let fileResult = loadFile()
+            if case .ok(let cred) = fileResult, let data = try? JSONEncoder().encode(cred),
+               KeychainCredential.write(data) {
+                keychainCache = cred
+                removeFiles()
+            }
+            return fileResult
+        }
+    }
+
+    private static func loadFile() -> LoadResult {
         let primaryExists = FileManager.default.fileExists(atPath: fileURL.path)
 
         if let cred = decode(fileURL) {
@@ -131,8 +158,13 @@ enum CredentialStore {
     static func save(userId: String, token: String, email: String? = nil) {
         let resolvedEmail = email?.trimmingCharacters(in: .whitespaces).nilIfEmpty ?? credential?.email
         let cred = Credential(userId: userId, token: token, email: resolvedEmail)
-        writeAtomically(cred, to: fileURL)
-        writeAtomically(cred, to: backupURL)
+        if usesKeychain, let data = try? JSONEncoder().encode(cred), KeychainCredential.write(data) {
+            keychainCache = cred
+            removeFiles()
+        } else {
+            writeAtomically(cred, to: fileURL)
+            writeAtomically(cred, to: backupURL)
+        }
         rememberEmail(resolvedEmail)
         UserDefaults.standard.removeObject(forKey: legacyUserIdKey)
         UserDefaults.standard.removeObject(forKey: deliberateSignOutKey)
@@ -146,8 +178,9 @@ enum CredentialStore {
     /// prefills so getting back in is one tap, and losing it was half of why a mis-clicked sign
     /// out stranded people. A genuinely fresh account overwrites it on the next `save()`.
     static func clear() {
-        try? FileManager.default.removeItem(at: fileURL)
-        try? FileManager.default.removeItem(at: backupURL)
+        if usesKeychain { KeychainCredential.delete() }
+        keychainCache = nil
+        removeFiles()
         UserDefaults.standard.removeObject(forKey: legacyUserIdKey)
         UserDefaults.standard.set(true, forKey: deliberateSignOutKey)
     }
@@ -164,6 +197,11 @@ enum CredentialStore {
     }
 
     // MARK: - private
+
+    private static func removeFiles() {
+        try? FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: backupURL)
+    }
 
     private static func decode(_ url: URL) -> Credential? {
         guard let data = try? Data(contentsOf: url) else { return nil }

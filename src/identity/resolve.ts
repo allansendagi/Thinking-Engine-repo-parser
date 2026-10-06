@@ -2,12 +2,8 @@ import type { CognitiveEvent, IdeaNode, IdentityResolution } from "../types";
 import type { CompletionProvider } from "../providers/types";
 import { IDENTITY_SYSTEM_PROMPT, buildIdentityPrompt } from "./prompt";
 import { identityMatchSchema } from "./schema";
+import { completeJson } from "../providers/json";
 
-function parseJsonResponse(text: string): unknown {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = fenced?.[1] ?? text;
-  return JSON.parse(candidate.trim());
-}
 
 /**
  * Decides whether `event` extends one of `candidates` or should become a new idea. `candidates`
@@ -34,8 +30,13 @@ export async function resolveIdentity(
     };
   }
 
-  const raw = await provider.complete(IDENTITY_SYSTEM_PROMPT, buildIdentityPrompt(event, candidates), 512);
-  const parsed = identityMatchSchema.parse(parseJsonResponse(raw));
+  const parsed = await completeJson(
+    provider,
+    IDENTITY_SYSTEM_PROMPT,
+    buildIdentityPrompt(event, candidates),
+    1024,
+    identityMatchSchema,
+  );
 
   const candidateIds = new Set(candidates.map((c) => c.id));
   if (parsed.matched_idea_id !== null && !candidateIds.has(parsed.matched_idea_id)) {

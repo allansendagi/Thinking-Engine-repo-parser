@@ -24,6 +24,22 @@ export interface PipelineProviders {
   embeddings?: EmbeddingProvider;
 }
 
+const EXTRACTION_CONCURRENCY = 4;
+
+/** `fn` over `items` with at most `limit` in flight; results in input order. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function groupByConversation(events: CanonicalEvent[]): Map<string, CanonicalEvent[]> {
   const groups = new Map<string, CanonicalEvent[]>();
   for (const event of events) {
@@ -50,6 +66,8 @@ export interface RunPipelineOptions {
    * treated as new (bulk/import behavior -- unchanged from before this option existed).
    */
   newEventIds?: Set<string>;
+  /** Statements of ideas this person deleted -- steers extraction away from similar ones. */
+  dismissed?: string[];
 }
 
 /**
@@ -72,8 +90,16 @@ export async function runPipeline(
   const allCognitiveEvents: CognitiveEvent[] = [];
   const allRejected: ExtractionOutcome["rejected"] = [];
 
-  for (const conversationEvents of byConversation.values()) {
-    const outcome = await extractCognitiveEvents(conversationEvents, providers.extraction, options.newEventIds);
+  // Extraction is independent per conversation, so run a few at once -- a 15-conversation import
+  // batch used to make 15 sequential model calls before identity resolution even began. Results
+  // are re-sorted chronologically below, so completion order doesn't matter. Identity resolution
+  // stays strictly sequential: each decision depends on the ideas the previous one produced.
+  const outcomes = await mapWithConcurrency(
+    [...byConversation.values()],
+    EXTRACTION_CONCURRENCY,
+    (conversationEvents) => extractCognitiveEvents(conversationEvents, providers.extraction, options.newEventIds, options.dismissed),
+  );
+  for (const outcome of outcomes) {
     allCognitiveEvents.push(...outcome.events);
     allRejected.push(...outcome.rejected);
   }
@@ -199,8 +225,8 @@ export function persistPipelineResult(
   persistCanonicalEvents(db, canonicalEvents);
 
   const insertCognitive = db.prepare(
-    `INSERT OR REPLACE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, why_it_matters)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, why_it_matters, role, adopted_source_event_id, adopted_quote)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertSource = db.prepare(
     `INSERT OR REPLACE INTO cognitive_event_sources (cognitive_event_id, canonical_event_id) VALUES (?, ?)`,
@@ -216,6 +242,9 @@ export function persistPipelineResult(
       e.sourceEventId,
       e.evidenceQuote,
       e.whyItMatters ?? null,
+      e.role ?? null,
+      e.adoptedFrom?.sourceEventId ?? null,
+      e.adoptedFrom?.quote ?? null,
     );
     for (const additionalId of e.additionalSourceEventIds) {
       insertSource.run(e.id, additionalId);
@@ -226,8 +255,8 @@ export function persistPipelineResult(
   // or rubric change (SIGNAL_GATE_VERSION) is replayable and "why isn't my idea here" is answerable.
   const insertDiscarded = db.prepare(
     `INSERT OR REPLACE INTO discarded_events
-       (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, gate_reason, gate_version, discarded_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, gate_reason, gate_version, discarded_at, role, adopted_source_event_id, adopted_quote)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const discardedAt = new Date().toISOString();
   for (const d of result.discardedEvents) {
@@ -244,6 +273,9 @@ export function persistPipelineResult(
       d.gateReason,
       d.gateVersion,
       discardedAt,
+      e.role ?? null,
+      e.adoptedFrom?.sourceEventId ?? null,
+      e.adoptedFrom?.quote ?? null,
     );
   }
 

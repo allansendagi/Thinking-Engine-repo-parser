@@ -14,6 +14,17 @@ enum Embeddings {
     private static var loaded: NLContextualEmbedding?
     private static var settled = false        // gave up, or succeeded
     private static var requestingAssets = false
+    /// Serializes inference: the panel (search), the idea index and thought-vector sync can all
+    /// ask for vectors at once, and one model instance shouldn't be driven from two threads.
+    private static let computeLock = NSLock()
+
+    /// Stable id for vectors from this model, stored server-side next to every vector so
+    /// vectors from different models (or model revisions) are never compared. Nil until loaded.
+    static var modelId: String? {
+        guard let m = model else { return nil }
+        let raw = "apple:\(m.modelIdentifier).r\(m.revision)"
+        return String(raw.map { $0.isLetter || $0.isNumber || "._:@/-".contains($0) ? $0 : "-" }.prefix(100))
+    }
 
     /// True once the model is loaded. Until then (or if the platform lacks it) every caller
     /// falls back to keyword-only — a quiet capability check, not an error. On a fresh machine
@@ -52,8 +63,9 @@ enum Embeddings {
     /// compare time). Nil when the model isn't ready or the text is empty.
     static func vector(for text: String) -> [Float]? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, let m = model,
-              let r = try? m.embeddingResult(for: t, language: .english) else { return nil }
+        guard !t.isEmpty, let m = model else { return nil }
+        computeLock.lock(); defer { computeLock.unlock() }
+        guard let r = try? m.embeddingResult(for: t, language: .english) else { return nil }
         var sum = [Float](repeating: 0, count: m.dimension)
         var n = 0
         r.enumerateTokenVectors(in: t.startIndex..<t.endIndex) { v, _ in
@@ -63,6 +75,38 @@ enum Embeddings {
         }
         guard n > 0 else { return nil }
         return sum.map { $0 / Float(n) }
+    }
+}
+
+// MARK: - Native vectors for server-side idea mining
+
+/// The best on-device model available right now, for thought vectors the server mines with.
+/// Native-only chain: Apple's contextual model when its asset is downloaded, else the sentence
+/// model built into macOS (no download, always present). Never a cloud model.
+enum NativeThoughtEmbedding {
+    private static let sentenceLock = NSLock()
+    private static let sentence: NLEmbedding? = NLEmbedding.sentenceEmbedding(for: .english)
+
+    /// (model id, vector) for `text`, or nil if no native model can embed it.
+    static func embed(_ text: String) -> (model: String, vector: [Float])? {
+        if Embeddings.isAvailable, let id = Embeddings.modelId, let v = Embeddings.vector(for: text) {
+            return (id, v)
+        }
+        return sentenceVector(text)
+    }
+
+    /// The model `embed` would use right now -- what the server is asked about.
+    static var currentModel: String? {
+        if Embeddings.isAvailable, let id = Embeddings.modelId { return id }
+        return sentence.map { "apple:nlembedding.sentence.en.r\($0.revision)" }
+    }
+
+    static func sentenceVector(_ text: String) -> (model: String, vector: [Float])? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, let s = sentence else { return nil }
+        sentenceLock.lock(); defer { sentenceLock.unlock() }
+        guard let v = s.vector(for: t) else { return nil }
+        return ("apple:nlembedding.sentence.en.r\(s.revision)", v.map { Float($0) })
     }
 }
 

@@ -46,6 +46,11 @@ import {
 } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { captureHealthSummary } from "../db/evidence";
+import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
+import { scheduleShadowMining } from "../mining/shadow";
+import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
+import { ideaThoughtIds, recordCorrection } from "../mining/corrections";
+import { redactDeep, redactSecrets } from "../capture/redact";
 import { parsePastedConversation } from "../import/pasteParser";
 import { importIntoDb, parseExportFile } from "../import/run";
 
@@ -61,7 +66,7 @@ import {
   searchIdeas,
   traceIdea,
 } from "../mcp/tools";
-import type { CaptureFidelity, CaptureMethod, CaptureProvenance, IdeaState } from "../types";
+import type { CaptureFidelity, CaptureMethod, CaptureProvenance, CognitiveEventType, IdeaState } from "../types";
 import type { PipelineProviders } from "../state/pipeline";
 
 const VALID_IDEA_STATES: IdeaState[] = [
@@ -570,7 +575,10 @@ export function createRequestHandler(
         // that predates this field just omits it; a legacy browser-extension build is read as
         // browser_extension/high downstream anyway (THREAD.md §7).
         body.capture = sanitizeCapture(body.capture);
+        // Clients redact on-device; this catches captures from builds that predate it.
+        body.messages = body.messages.map((m) => (typeof m?.text === "string" ? { ...m, text: redactSecrets(m.text) } : m));
         const result = await ingestConversation(db, body, providers);
+        scheduleShadowMining(userId, openUserDb);
         return json(result);
       }
 
@@ -587,7 +595,7 @@ export function createRequestHandler(
         if (!body.text || body.text.trim().length === 0)
           return error(400, "text is required");
 
-        const parsed = parsePastedConversation(body.text);
+        const parsed = parsePastedConversation(redactSecrets(body.text));
         if (parsed.length === 0)
           return error(400, "Nothing parseable in the pasted text");
 
@@ -656,7 +664,7 @@ export function createRequestHandler(
         }
         let events;
         try {
-          events = parseExportFile(body.format, body.conversations);
+          events = parseExportFile(body.format, redactDeep(body.conversations));
         } catch (e) {
           return error(
             400,
@@ -666,6 +674,7 @@ export function createRequestHandler(
           );
         }
         const summary = await importIntoDb(db, events, providers);
+        scheduleShadowMining(userId, openUserDb);
         return json(summary);
       }
 
@@ -688,6 +697,19 @@ export function createRequestHandler(
         return conv ? json(conv) : error(404, "Conversation not found");
       }
 
+      // The thinking map: the idea as a Minto pyramid / IBIS structure, its gaps, and a
+      // Situation-Complication-Question-Answer hand-off. Additive -- the idea itself is unchanged.
+      const mapMatch = pathname.match(/^\/v1\/ideas\/([^/]+)\/map$/);
+      if (req.method === "GET" && mapMatch) {
+        const idea = getIdea(db, decodePathId(mapMatch[1] as string));
+        if (!idea) return error(404, "Idea not found");
+        const rows = db.query("SELECT id, type, role FROM cognitive_events").all() as { id: string; type: CognitiveEventType; role: ClaimRole | null }[];
+        const typeOf = new Map(rows.map((r) => [r.id, r.type]));
+        const roleOf = new Map(rows.filter((r) => r.role).map((r) => [r.id, r.role!]));
+        const map = buildThinkingMap(idea, typeOf, new Date(), roleOf);
+        return json({ map, handoff: scqaHandoff(map) });
+      }
+
       const ideaMatch = pathname.match(/^\/v1\/ideas\/([^/]+)(\/trace)?$/);
       if (req.method === "GET" && ideaMatch) {
         const [, rawIdeaId, isTrace] = ideaMatch;
@@ -698,7 +720,11 @@ export function createRequestHandler(
 
       if (req.method === "DELETE" && ideaMatch && !ideaMatch[2]) {
         const ideaId = decodePathId(ideaMatch[1] as string);
+        // Remember what was deleted by its thoughts, so a v2 pass can't rebuild it.
+        const thoughtIds = ideaThoughtIds(db, ideaId);
+        const statement = getIdea(db, ideaId)?.currentFormulation;
         const deleted = deleteIdea(db, ideaId);
+        if (deleted) recordCorrection(db, { kind: "not_idea", ideaId, thoughtIds, value: statement });
         return deleted ? json({ deleted: true }) : error(404, "Idea not found");
       }
 
@@ -722,17 +748,47 @@ export function createRequestHandler(
           }
           if (!setIdeaState(db, ideaId, body.state as IdeaState))
             return error(404, "Idea not found");
+          recordCorrection(db, { kind: "state", ideaId, thoughtIds: ideaThoughtIds(db, ideaId), value: body.state });
         }
         if (body.title !== undefined) {
           try {
             if (!renameIdea(db, ideaId, body.title))
               return error(404, "Idea not found");
+            recordCorrection(db, { kind: "rename", ideaId, thoughtIds: ideaThoughtIds(db, ideaId), value: body.title.trim() });
           } catch (e) {
             return error(400, e instanceof Error ? e.message : "Invalid title");
           }
         }
         const updated = getIdea(db, ideaId);
         return updated ? json(updated) : error(404, "Idea not found");
+      }
+
+      // Corrections that teach v2 grouping. They're recorded against thoughts and respected by
+      // every consolidation pass; the serving (v1) ideas are untouched until v2 serves.
+      const correctMatch = pathname.match(/^\/v1\/ideas\/([^/]+)\/(merge|split)$/);
+      if (req.method === "POST" && correctMatch) {
+        const ideaId = decodePathId(correctMatch[1] as string);
+        const thoughtIds = ideaThoughtIds(db, ideaId);
+        if (thoughtIds.length === 0) return error(404, "Idea not found");
+        let body: { intoIdeaId?: unknown; thoughtIds?: unknown };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        if (correctMatch[2] === "merge") {
+          const target = typeof body.intoIdeaId === "string" ? ideaThoughtIds(db, body.intoIdeaId) : [];
+          if (target.length === 0) return error(400, "intoIdeaId must name an existing idea");
+          recordCorrection(db, { kind: "merge", ideaId, thoughtIds, otherThoughtIds: target });
+        } else {
+          const off = Array.isArray(body.thoughtIds) ? body.thoughtIds.filter((t): t is string => typeof t === "string" && thoughtIds.includes(t)) : [];
+          if (off.length === 0 || off.length === thoughtIds.length) {
+            return error(400, "thoughtIds must be some, not all, of this idea's thoughts");
+          }
+          recordCorrection(db, { kind: "split", ideaId, thoughtIds, otherThoughtIds: off });
+        }
+        scheduleShadowMining(userId, openUserDb);
+        return json({ recorded: true });
       }
 
       const loopMatch = pathname.match(/^\/v1\/open-loops\/([^/]+)$/);
@@ -750,6 +806,40 @@ export function createRequestHandler(
         return updated
           ? json({ updated: true })
           : error(404, "Open loop not found");
+      }
+
+      // --- Thought vectors (native-first embeddings) ------------------------------------------
+      // Thread for Mac embeds thoughts on-device (Apple NaturalLanguage) and uploads the vectors;
+      // the server never needs a cloud embedding provider for them. See db/thoughts.ts.
+      if (req.method === "GET" && pathname === "/v1/thoughts/unembedded") {
+        const model = url.searchParams.get("model") ?? "";
+        if (!/^[\w.:@/-]{1,100}$/.test(model)) return error(400, "model is required");
+        const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? 200) || 200));
+        return json({ thoughts: thoughtsNeedingVectors(db, model, limit) });
+      }
+
+      if (req.method === "POST" && pathname === "/v1/thoughts/embeddings") {
+        let body: { model?: unknown; items?: unknown };
+        try {
+          body = (await req.json()) as { model?: unknown; items?: unknown };
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        if (typeof body.model !== "string" || !Array.isArray(body.items) || body.items.length === 0) {
+          return error(400, "model and a non-empty items[] are required");
+        }
+        if (body.items.length > 500) return error(400, "At most 500 vectors per request");
+        const items = body.items as { id?: unknown; vector?: unknown }[];
+        if (!items.every((i) => typeof i.id === "string" && Array.isArray(i.vector))) {
+          return error(400, "Each item needs an id and a vector");
+        }
+        try {
+          const stored = storeThoughtVectors(db, body.model, items as { id: string; vector: number[] }[]);
+          return json({ stored });
+        } catch (e) {
+          if (e instanceof VectorValidationError) return error(400, e.message);
+          throw e;
+        }
       }
 
       if (req.method === "GET" && pathname === "/v1/thinking-state") {

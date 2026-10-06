@@ -1,0 +1,47 @@
+name: Bench vectors (Apple on-device)
+
+# Embeds the thinking bench's thoughts with Apple's NLContextualEmbedding -- the same model and
+# pooling Thread for Mac uses -- so `bun run bench` can score matching by meaning natively.
+# Manual: Actions > Bench vectors > Run workflow. The vectors are committed back to the branch
+# (src/bench/vectors.apple.json) and also uploaded as an artifact.
+# Native chain: the contextual model when its asset is present, else macOS's sentence model.
+
+on:
+  workflow_dispatch:
+  # Re-embed whenever the bench corpus changes (manual dispatch needs the file on main first).
+  push:
+    branches: ["claude/**"]
+    paths: ["src/bench/storylines.ts", "macos-app/Tests/ThreadMacTests/BenchVectorsTests.swift", "src/bench/generate.ts", "src/bench/dumpTexts.ts", ".github/workflows/bench-vectors.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  vectors:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun src/bench/dumpTexts.ts > "$RUNNER_TEMP/bench-texts.json"
+      - working-directory: macos-app
+        env:
+          BENCH_TEXTS: ${{ runner.temp }}/bench-texts.json
+          BENCH_VECTORS_OUT: ${{ runner.temp }}/vectors.apple.json
+          # Give Apple's contextual model asset time to download: it's the model real Macs use.
+          BENCH_ASSET_WAIT: "900"
+        run: swift test --filter BenchVectorsTests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-vectors-apple
+          path: ${{ runner.temp }}/vectors.apple.json
+      - name: Commit vectors to the branch
+        run: |
+          cp "$RUNNER_TEMP/vectors.apple.json" src/bench/vectors.apple.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/bench/vectors.apple.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Bench: Apple on-device vectors for the thinking bench"
+          for i in 1 2 3; do git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && exit 0; sleep 5; done
+          exit 1

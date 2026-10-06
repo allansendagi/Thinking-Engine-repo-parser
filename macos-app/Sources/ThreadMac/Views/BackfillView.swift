@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// "Recover my thinking" — the first-run experience: offer → a staged "finding your thinking"
 /// pass → the graph it reconstructed, led by one strong idea. Driven by `appState.backfill`.
@@ -28,7 +29,26 @@ struct BackfillView: View {
         }
         .padding(18)
         .frame(width: 400)
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                    .padding(4)
+                    .allowsHitTesting(false)
+            }
+        }
+        // Drag a ChatGPT/Claude export straight in -- the most direct path there is.
+        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { [appState] url, _ in
+                guard let url else { return }
+                Task { @MainActor in appState.importExportFile(url) }
+            }
+            return true
+        }
     }
+
+    @State private var dropTargeted = false
 
     // MARK: offer
 
@@ -42,17 +62,46 @@ struct BackfillView: View {
             sourceRow("Recover from Cursor", "Your local Cursor history — no export needed") { appState.runCursorBackfill() }
         }
 
+        // Fastest for ChatGPT / Claude: the extension reads the history you're signed in to.
+        VStack(alignment: .leading, spacing: 6) {
+            Text("From your browser — fastest").font(.caption).fontWeight(.semibold)
+            Text(appState.browserExtensionConnected
+                 ? "Opens the site and brings in your whole history while you're signed in. Takes minutes."
+                 : "Needs the Thread browser extension. Then it reads your history while you're signed in — minutes, no export.")
+                .font(.caption2).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                ForEach(BackfillKind.allCases, id: \.self) { k in
+                    Button("\(k.displayName) →") { appState.recoverViaBrowser(k) }
+                        .controlSize(.small)
+                }
+                if !appState.browserExtensionConnected, let url = AppState.browserExtensionURL {
+                    Button("Get the extension") { NSWorkspace.shared.open(url) }
+                        .buttonStyle(.plain).font(.caption2).foregroundStyle(Theme.accent)
+                }
+            }
+        }
+        .padding(10)
+        .background(Theme.ink(0.04), in: RoundedRectangle(cornerRadius: 8))
+
+        Text("Or use a data export").font(.caption2).foregroundColor(.secondary)
+
         ForEach(exports.prefix(3)) { e in
             sourceRow("Recover from your \(e.kind.displayName) export",
                       "~\(e.conversationCount) conversations · \(Theme.ago(e.modified))") { appState.runBackfill(e) }
         }
 
         if exports.isEmpty {
-            Button { appState.lookForExports() } label: {
-                Label("I have a ChatGPT / Claude export in Downloads — check", systemImage: "folder")
-                    .font(.system(size: 12, weight: .medium))
+            HStack(spacing: 8) {
+                Button { appState.chooseExportFile() } label: {
+                    Label("Choose export file…", systemImage: "doc.badge.plus")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Check Downloads") { appState.lookForExports() }
+                    .font(.system(size: 12))
             }
-            .buttonStyle(.borderedProminent)
+            Text("Or drop the .zip anywhere on this window.")
+                .font(.caption2).foregroundColor(.secondary)
         }
 
         Divider()

@@ -77,6 +77,7 @@ struct RootView: View {
             BackfillView().environmentObject(appState)
         }
         .onReceive(NotificationCenter.default.publisher(for: .threadOpenSettings)) { _ in showSettings = true }
+        .onReceive(NotificationCenter.default.publisher(for: .threadOpenPaste)) { _ in showPaste = true }
         .onReceive(NotificationCenter.default.publisher(for: .threadOpenMainWindow)) { _ in openWindow(id: "main") }
         .onExitCommand {
             if inDetail { appState.closeIdea() }

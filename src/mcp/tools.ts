@@ -7,8 +7,9 @@ import {
   loadCanonicalEvents,
 } from "../db/queries";
 import { buildThinkingState } from "../state/thinkingState";
-import { lexicalOverlap, entityOverlap } from "../identity/signals";
-import type { IdeaNode, OpenLoop, ThinkingState } from "../types";
+import { lexicalOverlap, entityOverlap, tokenize } from "../identity/signals";
+import type { CognitiveEventType, IdeaNode, OpenLoop, ThinkingState } from "../types";
+import { buildThinkingMap, type ClaimRole } from "../mining/map";
 
 /**
  * The actual logic behind every MCP tool, deliberately separated from the MCP protocol wiring
@@ -25,19 +26,44 @@ export interface IdeaSummary {
   score: number;
 }
 
+/**
+ * Recall ranking. What a person types is a few words they half-remember -- so score how much of
+ * the QUERY an idea covers (not how similar the two word sets are, which punished any idea with a
+ * long formulation), match word forms loosely ("prices" finds "pricing"), and search everything
+ * the idea has been: its title (weighted), current formulation, earlier formulations, why it
+ * matters, and its open questions. Recency breaks ties. The Mac app layers on-device meaning
+ * search on top of this; the two lists are merged, never one replacing the other.
+ */
 export function searchIdeas(
   db: Database,
   query: string,
   limit = 10,
 ): IdeaSummary[] {
+  const qTokens = [...new Set(tokenize(query))];
+  if (qTokens.length === 0) return [];
   const ideas = loadIdeas(db);
   return ideas
-    .map((idea) => ({
-      idea,
-      score: lexicalOverlap(query, `${idea.title} ${idea.currentFormulation}`),
-    }))
+    .map((idea) => {
+      const title = new Set(tokenize(idea.title));
+      const body = new Set(
+        tokenize(
+          [
+            idea.currentFormulation,
+            idea.whyItMatters ?? "",
+            ...idea.evolution.map((s) => s.formulation),
+            ...idea.openLoops.map((l) => l.statement),
+          ].join(" "),
+        ),
+      );
+      let score = 0;
+      for (const q of qTokens) {
+        if (matchesAny(q, title)) score += 1.5;
+        else if (matchesAny(q, body)) score += 1;
+      }
+      return { idea, score: score / (qTokens.length * 1.5) };
+    })
     .filter((r) => r.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || b.idea.updatedAt.localeCompare(a.idea.updatedAt))
     .slice(0, limit)
     .map((r) => ({
       id: r.idea.id,
@@ -46,6 +72,18 @@ export function searchIdeas(
       currentFormulation: r.idea.currentFormulation,
       score: r.score,
     }));
+}
+
+/** Loose word-form match: exact, or a shared stem of 5+ letters ("pricing" ~ "prices" ~ "priced"). */
+function matchesAny(q: string, words: Set<string>): boolean {
+  if (words.has(q)) return true;
+  const stem = (w: string) => (w.length > 5 ? w.slice(0, Math.max(5, w.length - 3)) : w);
+  const qs = stem(q);
+  for (const w of words) {
+    if (w.length < 4) continue;
+    if (w.startsWith(qs) || q.startsWith(stem(w))) return true;
+  }
+  return false;
 }
 
 export function getIdea(db: Database, id: string): IdeaNode | null {
@@ -264,6 +302,10 @@ export interface ContinuationPacket {
   /** Where + when the idea was last worked on, for the "Last explored" line. */
   lastExploredSource: string | null;
   lastExploredAt: string | null;
+  /** Options the person ruled out -- a fresh chat must not re-suggest them. From the thinking map. */
+  ruledOut?: string[];
+  /** Options still being weighed (claims the extractor marked as options, not yet decided). */
+  optionsOpen?: string[];
   /** The Minto-style synthesis across this idea and any others it turned out to be part of one
    *  argument with. Null whenever no candidate cluster passed the coherence check (no provider,
    *  no candidates cleared the retrieval floor, or the model itself said they don't cohere) --
@@ -696,6 +738,17 @@ export async function buildContinuationPacket(
     provider,
   );
 
+  // The IBIS side of the pyramid: what was weighed and what was ruled out.
+  const rows = db.query("SELECT id, type, role FROM cognitive_events").all() as { id: string; type: CognitiveEventType; role: ClaimRole | null }[];
+  const map = buildThinkingMap(
+    idea,
+    new Map(rows.map((r) => [r.id, r.type])),
+    new Date(),
+    new Map(rows.filter((r) => r.role).map((r) => [r.id, r.role!])),
+  );
+  const ruledOut = map.options.filter((o) => o.status === "rejected").map((o) => o.statement).slice(-3);
+  const optionsOpen = map.options.filter((o) => o.status === "open").map((o) => o.statement).slice(-3);
+
   const packet: ContinuationPacket = {
     idea: { id: idea.id, title: idea.title, state: idea.state },
     whereYouLeftOff: idea.currentFormulation,
@@ -711,6 +764,8 @@ export async function buildContinuationPacket(
     lastExploredSource,
     lastExploredAt,
     governingThought,
+    ruledOut,
+    optionsOpen,
   };
   return { text: renderPacket(packet), packet };
 }
@@ -758,6 +813,16 @@ export function renderPacket(
       "THINKING EVOLUTION",
       "(captured before source-role verification — earlier wording unavailable)",
     );
+  }
+
+  if (p.optionsOpen && p.optionsOpen.length > 0) {
+    out.push("", "OPTIONS STILL OPEN");
+    for (const o of p.optionsOpen) out.push(o);
+  }
+
+  if (p.ruledOut && p.ruledOut.length > 0) {
+    out.push("", "RULED OUT (don't re-suggest)");
+    for (const r of p.ruledOut) out.push(r);
   }
 
   if (p.unresolvedQuestions.length > 0) {

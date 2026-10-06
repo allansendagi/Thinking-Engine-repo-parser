@@ -38,7 +38,23 @@ or, if you forgot the volume:
 Set `THREAD_DATA_DIR` and/or `THREAD_REGISTRY_PATH` explicitly to take full control of the paths
 (takes precedence over the volume mount).
 
-## Required environment variables
+## Backups: do this before real users arrive
+
+Everything is on that one volume: `registry.db` (accounts, device tokens, billing state) and one
+SQLite file per user under `users/`. A volume is durable across redeploys, but nothing protects
+it from deletion, corruption or a bad migration unless you take backups.
+
+1. **Railway volume backups:** in the service, open the volume, then **Backups**, and turn on
+   scheduled backups (daily, keeping at least 7). Restoring is one click from the same screen.
+2. **Before any risky deploy** (schema or migration changes), take a manual backup from that
+   screen first.
+3. **Test a restore once.** Restore into a staging service and check `GET /v1/health` and one
+   account's `GET /v1/thinking-state`. An untested backup isn't really a backup.
+
+The databases run in WAL mode, so a snapshot of a live volume can be a few seconds behind but
+stays consistent. SQLite recovers the WAL when it opens the file.
+
+
 
 | Var | Purpose |
 |---|---|

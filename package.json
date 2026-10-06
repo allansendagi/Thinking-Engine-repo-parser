@@ -16,7 +16,8 @@
     "mcp": "bun src/mcp/server.ts",
     "lint": "tsc --noEmit",
     "test": "bun test",
-    "mcp:http": "bun run src/mcp/server-http.ts"
+    "mcp:http": "bun run src/mcp/server-http.ts",
+    "bench": "bun src/bench/cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.32.1",

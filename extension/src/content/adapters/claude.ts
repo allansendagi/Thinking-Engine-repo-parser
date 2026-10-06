@@ -1,4 +1,5 @@
 import type { SiteAdapter, RawMessage } from "../common/siteAdapter";
+import { claudeReader, lazyReader } from "../structured";
 import { cleanText, fillComposer, firstMatch, matchFirst } from "../common/domUtils";
 
 /**
@@ -50,6 +51,7 @@ function stripChrome(raw: string): string {
 
 export const claudeAdapter: SiteAdapter = {
   source: "claude",
+  history: lazyReader(() => claudeReader()),
 
   getConversationId(): string | null {
     return matchFirst(location.pathname, [/\/chat\/([a-zA-Z0-9-]+)/]);

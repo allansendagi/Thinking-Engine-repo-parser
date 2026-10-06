@@ -290,6 +290,7 @@ private struct GeneralSection: View {
     @State private var loginNeedsApproval = LaunchAtLogin.needsApproval
     @State private var shortcut = RecallShortcut.current
     @State private var autoUpdate = AppDelegate.shared?.updater.automaticallyChecks ?? false
+    @State private var spotlight = SpotlightIndex.isEnabled
 
     private var updater: Updater? { AppDelegate.shared?.updater }
 
@@ -305,6 +306,16 @@ private struct GeneralSection: View {
                     launchAtLogin = LaunchAtLogin.isEnabled
                     loginNeedsApproval = LaunchAtLogin.needsApproval
                 }
+            Toggle("Show my ideas in Spotlight", isOn: $spotlight)
+                .font(.caption)
+                .help("Indexed on this Mac only. Turning it off removes them from Spotlight.")
+                .onChange(of: spotlight) { _, on in
+                    SpotlightIndex.isEnabled = on
+                    if on, let ideas = AppDelegate.shared?.appState.thinkingState?.currentIdeas {
+                        SpotlightIndex.sync(ideas)
+                    }
+                }
+
             if loginNeedsApproval {
                 Button("Allow in System Settings…") { LaunchAtLogin.openSystemSettings() }
                     .font(.caption2)

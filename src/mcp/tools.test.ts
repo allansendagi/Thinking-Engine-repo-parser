@@ -717,6 +717,17 @@ describe("renderPacket", () => {
     expect(text).not.toContain("Aug 11");
   });
 
+  test("the hand-off tells a fresh chat what was ruled out and what's still being weighed", () => {
+    const text = renderPacket({
+      ...basePacket([]),
+      ruledOut: ["Per-workspace billing is out; it punishes small teams."],
+      optionsOpen: ["Billing per active member."],
+    });
+    expect(text).toContain("RULED OUT (don't re-suggest)\nPer-workspace billing is out; it punishes small teams.");
+    expect(text).toContain("OPTIONS STILL OPEN\nBilling per active member.");
+    expect(renderPacket(basePacket([]))).not.toContain("RULED OUT");
+  });
+
   test("every optional section is dropped when empty", () => {
     const text = renderPacket(basePacket([]));
     for (const label of [
@@ -834,5 +845,20 @@ describe("templateTrajectory", () => {
     expect(trajectory).toHaveLength(5);
     expect(trajectory[0]).toContain("Step 0");
     expect(trajectory[trajectory.length - 1]).toContain("Step 10");
+  });
+});
+
+describe("searchIdeas recall ranking", () => {
+  test("finds an idea from a different word form and ranks by query coverage", async () => {
+    const db = await seedDb();
+    // "boundary" (singular) still finds "explicit boundaries".
+    expect(searchIdeas(db, "boundary")[0]?.title).toContain("Authority");
+    // An unrelated query finds nothing rather than noise.
+    expect(searchIdeas(db, "banana smoothie")).toHaveLength(0);
+  });
+
+  test("matches an idea by its open question, not just its title", async () => {
+    const db = await seedDb();
+    expect(searchIdeas(db, "who enforces")[0]?.title).toContain("Authority");
   });
 });

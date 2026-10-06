@@ -409,3 +409,24 @@ struct GoverningThought: Codable, Equatable {
 struct APIErrorBody: Codable {
     let error: String?
 }
+
+/// Server results first (better keyword ranking, ideas not yet in the local snapshot), then every
+/// local match the server didn't return. The server ranks by word overlap only, so for a vague,
+/// meaning-based query ("that pricing idea") it often returns nothing -- replacing the list
+/// outright made the right idea appear on the keystroke and then vanish a moment later.
+func mergeSearchResults(remote: [SearchResult], local: [SearchResult]) -> [SearchResult] {
+    let seen = Set(remote.map(\.id))
+    return remote + local.filter { !seen.contains($0.id) }
+}
+
+/// One idea as a pyramid (GET /v1/ideas/:id/map): only the parts the app shows that the on-device
+/// structure doesn't already -- the options weighed and the "unfinished thinking" gaps where the
+/// idea breaks Minto's rules (a decision with no reasons, a question with no options, ...).
+struct ThinkingMap: Codable, Equatable {
+    struct Option: Codable, Hashable { let statement: String; let status: String }
+    struct Gap: Codable, Hashable { let kind: String; let message: String }
+    let options: [Option]
+    let gaps: [Gap]
+
+    var isEmpty: Bool { options.isEmpty && gaps.isEmpty }
+}

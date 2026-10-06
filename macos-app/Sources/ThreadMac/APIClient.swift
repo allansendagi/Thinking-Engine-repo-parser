@@ -152,6 +152,13 @@ final class APIClient {
         try await request("/v1/ideas/\(Self.pathSegment(id))/trace")
     }
 
+    /// Options weighed and unfinished-thinking gaps for one idea.
+    func thinkingMap(id: String) async throws -> ThinkingMap {
+        struct Wrap: Decodable { let map: ThinkingMap }
+        let w: Wrap = try await request("/v1/ideas/\(Self.pathSegment(id))/map")
+        return w.map
+    }
+
     /// The captured messages of one source conversation -- the evidence behind an idea.
     func getConversation(id: String) async throws -> ConversationTranscript {
         try await request("/v1/conversations/\(Self.pathSegment(id))")
@@ -167,7 +174,8 @@ final class APIClient {
     /// Historical backfill: one batch of an exported `conversations.json` array. `conversations`
     /// is the raw JSON objects, sliced by the caller into batches; the backend parses + ingests.
     func importBatch(format: String, conversations: [Any]) async throws -> ImportSummary {
-        let payload: [String: Any] = ["format": format, "conversations": conversations]
+        // On-device first pass: credentials never leave the Mac.
+        let payload: [String: Any] = ["format": format, "conversations": conversations.map(Redaction.redactDeep)]
         let body = try JSONSerialization.data(withJSONObject: payload)
         return try await request("/v1/import", method: "POST", body: body)
     }
@@ -200,7 +208,7 @@ final class APIClient {
     }
 
     func pasteConversation(text: String) async throws -> IngestResult {
-        let body = try JSONEncoder().encode(["text": text])
+        let body = try JSONEncoder().encode(["text": Redaction.redact(text)])
         return try await request("/v1/paste", method: "POST", body: body)
     }
 
@@ -222,12 +230,33 @@ final class APIClient {
         var payload: [String: Any] = [
             "conversationId": id,
             "source": source,
-            "messages": messages.map { ["id": $0.id, "role": $0.role, "text": $0.text, "createdAt": $0.createdAt] },
+            "messages": messages.map { ["id": $0.id, "role": $0.role, "text": Redaction.redact($0.text), "createdAt": $0.createdAt] },
         ]
         if let capture { payload["capture"] = ["method": capture.method, "fidelity": capture.fidelity] }
         if let sourceUrl { payload["sourceUrl"] = sourceUrl }
         let body = try JSONSerialization.data(withJSONObject: payload)
         return try await request("/v1/conversations", method: "POST", body: body)
+    }
+
+    // MARK: - Thought vectors (on-device embeddings for server-side mining)
+
+    struct PendingThought: Decodable { let id: String; let text: String }
+
+    func thoughtsNeedingVectors(model: String, limit: Int) async throws -> [PendingThought] {
+        struct Wrap: Decodable { let thoughts: [PendingThought] }
+        let m = model.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? model
+        let w: Wrap = try await request("/v1/thoughts/unembedded?model=\(m)&limit=\(limit)")
+        return w.thoughts
+    }
+
+    func uploadThoughtVectors(model: String, items: [(id: String, vector: [Float])]) async throws {
+        struct Stored: Decodable { let stored: Int }
+        let payload: [String: Any] = [
+            "model": model,
+            "items": items.map { ["id": $0.id, "vector": $0.vector.map { Double($0) }] as [String: Any] },
+        ]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let _: Stored = try await request("/v1/thoughts/embeddings", method: "POST", body: body)
     }
 
     func getAccount() async throws -> AccountStatus {
@@ -240,3 +269,7 @@ final class APIClient {
         return u
     }
 }
+
+// Every stored property is an immutable `let` set at init, so sharing one across tasks/actors
+// (thought-vector sync runs off the main actor) is safe.
+extension APIClient: @unchecked Sendable {}

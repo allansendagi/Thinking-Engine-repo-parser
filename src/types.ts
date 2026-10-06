@@ -115,6 +115,11 @@ export interface CognitiveEvent {
   whyItMatters?: string;
   /** Other messages that contributed context. NOT covered by the grounding check. */
   additionalSourceEventIds: string[];
+  /** For claims: the person's position, an option being weighed, or a reason. Absent = position. */
+  role?: "position" | "option" | "reason";
+  /** The person explicitly accepted this proposal from the AI's previous message. Grounded on
+   *  both sides: `evidenceQuote` in the person's message, `quote` in the AI's. */
+  adoptedFrom?: { sourceEventId: string; quote: string };
 }
 
 /**

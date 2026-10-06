@@ -48,6 +48,43 @@ export function deriveTitle(statement: string, modelTitle?: string): string {
   return `${words.slice(0, 8).join(" ").replace(/[,;:]+$/, "")}…`;
 }
 
+/**
+ * Event types that restate WHAT THE IDEA IS NOW. Only these replace `currentFormulation`. A
+ * question, open loop, connection or rejection is *about* the idea -- it's recorded in the
+ * evolution history (and as a loop / link / state), but it must not become the idea's "current
+ * thinking": otherwise asking "who verifies this?" about an idea turned its headline, its recall
+ * text and its continuation packet's "where it stands" into the question.
+ */
+const RESTATES_IDEA: ReadonlySet<CognitiveEvent["type"]> = new Set<CognitiveEvent["type"]>([
+  "new_idea",
+  "claim",
+  "refinement",
+  "decision",
+  "contradiction",
+  "resolution",
+]);
+
+/**
+ * Which open loop a resolution closes: the unresolved loop it shares the most words with, or --
+ * when it overlaps none of them -- the most recently raised one (resolutions overwhelmingly
+ * answer the question just asked). Never every loop at once: settling one question used to mark
+ * every other unanswered question on the idea resolved too, silently dropping them from recall.
+ */
+function loopResolvedBy(statement: string, loops: IdeaNode["openLoops"]): IdeaNode["openLoops"][number] | undefined {
+  const open = loops.filter((l) => !l.resolved);
+  if (open.length === 0) return undefined;
+  let best: (typeof open)[number] | undefined;
+  let bestScore = 0;
+  for (const loop of open) {
+    const s = lexicalOverlap(statement, loop.statement);
+    if (s > bestScore) {
+      best = loop;
+      bestScore = s;
+    }
+  }
+  return best ?? open.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a));
+}
+
 function linkRelated(a: IdeaNode, b: IdeaNode): void {
   if (!a.relatedIdeaIds.includes(b.id)) a.relatedIdeaIds.push(b.id);
   if (!b.relatedIdeaIds.includes(a.id)) b.relatedIdeaIds.push(a.id);
@@ -162,7 +199,7 @@ export function applyCognitiveEvent(
     createdAt: sourceCreatedAt,
     sourceEventId: event.sourceEventId,
   });
-  idea.currentFormulation = event.statement;
+  if (RESTATES_IDEA.has(event.type)) idea.currentFormulation = event.statement;
   idea.updatedAt = sourceCreatedAt;
   if (event.whyItMatters && !idea.whyItMatters) idea.whyItMatters = event.whyItMatters;
 
@@ -200,11 +237,17 @@ export function applyCognitiveEvent(
         resolved: false,
       });
       break;
-    case "resolution":
-      for (const loop of idea.openLoops) loop.resolved = true;
-      // A resolution settles the contradiction that contested the idea.
-      if (idea.state === "contested") idea.state = "developing";
+    case "resolution": {
+      const loop = loopResolvedBy(event.statement, idea.openLoops);
+      if (loop) loop.resolved = true;
+      // A resolution settles the contradiction that contested the idea -- once no contradiction
+      // loop is left open.
+      const contradictionOpen = idea.openLoops.some(
+        (l) => !l.resolved && l.statement.startsWith("Unresolved contradiction:"),
+      );
+      if (idea.state === "contested" && !contradictionOpen) idea.state = "developing";
       break;
+    }
     case "connection":
       if (resolution.alsoRelatedIdeaId) {
         const other = ideas.get(resolution.alsoRelatedIdeaId);

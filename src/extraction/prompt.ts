@@ -86,8 +86,19 @@ Rules:
   ids shown below, never invented. These are NOT fact-checked the way evidence_quote is -- only use
   it for genuine contributing context, not as a way to attach more evidence.
 
+- For claim events, add "role": "position" if it states what the human thinks the idea IS,
+  "option" if it's one possibility they're weighing ("or we could bill per workspace"), "reason"
+  if it argues for or against something ("because small teams would overpay"). Omit for other types.
+- ADOPTION. Sometimes the human explicitly accepts a proposal the AI made in the message RIGHT
+  BEFORE theirs ("Yes, the second one.", "Let's go with that."). Then extract a decision whose
+  statement is the accepted proposal itself, in the human's voice ("Hire a senior generalist who
+  owns the backend."), with evidence_quote = the human's acceptance (verbatim, from their message),
+  adopted_from_event_id = the id of that AI message, and adopted_quote = the accepted proposal
+  copied VERBATIM from the AI message. Only for an explicit acceptance of a specific proposal --
+  never for "thanks", "interesting", or a vague "ok". When unsure, omit.
+
 Respond with JSON matching this shape exactly, and nothing else -- no commentary before or after:
-{"events": [{"type": "...", "statement": "...", "title": "... (new_idea only, optional)", "confidence": 0.0-1.0, "persistence": "high|medium|low", "persistence_reason": "...", "source_event_id": "...", "evidence_quote": "...", "why_it_matters": "... (optional)", "additional_source_event_ids": ["... (optional)"]}]}`;
+{"events": [{"type": "...", "statement": "...", "title": "... (new_idea only, optional)", "confidence": 0.0-1.0, "persistence": "high|medium|low", "persistence_reason": "...", "source_event_id": "...", "evidence_quote": "...", "why_it_matters": "... (optional)", "additional_source_event_ids": ["... (optional)"], "role": "position|option|reason (claims only, optional)", "adopted_from_event_id": "... (adoption only)", "adopted_quote": "... (adoption only)"}]}`;
 
 /**
  * `newEventIds` marks which of `events` should actually be extracted from -- the rest are
@@ -98,7 +109,7 @@ Respond with JSON matching this shape exactly, and nothing else -- no commentary
  *  the prompt. Grounding still matches quotes against the message's full text. */
 export const MAX_PROMPT_MESSAGE_CHARS = 8_000;
 
-export function buildTranscriptPrompt(events: CanonicalEvent[], newEventIds?: Set<string>): string {
+export function buildTranscriptPrompt(events: CanonicalEvent[], newEventIds?: Set<string>, dismissed: string[] = []): string {
   const validIds = events.map((e) => e.id).join(", ");
   const lines = events.map((e) => {
     const marker = !newEventIds || newEventIds.has(e.id) ? "[NEW]" : "[ALREADY PROCESSED]";
@@ -108,5 +119,11 @@ export function buildTranscriptPrompt(events: CanonicalEvent[], newEventIds?: Se
         : e.text;
     return `${marker} [${e.id}] (${e.role}, ${e.createdAt}): ${text}`;
   });
-  return `This transcript contains exactly ${events.length} message(s), no more. The only valid ids are: ${validIds}.\n\nConversation transcript:\n\n${lines.join("\n\n")}`;
+  // Personal learning: ideas this person deleted as not worth keeping. Steering only -- a
+  // genuinely new idea that merely resembles one of these is still extracted.
+  const personal =
+    dismissed.length > 0
+      ? `This person has deleted these as not worth keeping. Mark similar things persistence "low" unless the person clearly cares about them now:\n${dismissed.map((d) => `- ${d}`).join("\n")}\n\n`
+      : "";
+  return `${personal}This transcript contains exactly ${events.length} message(s), no more. The only valid ids are: ${validIds}.\n\nConversation transcript:\n\n${lines.join("\n\n")}`;
 }

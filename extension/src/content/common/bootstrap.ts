@@ -1,5 +1,6 @@
 import { startCapture } from "./capture";
 import { attachResumeNudge } from "./resumeNudge";
+import { attachHistorySync } from "../historyRunner";
 import type { SiteAdapter } from "./siteAdapter";
 
 /** Holds the previous instance's capture-teardown fn on the shared isolated-world `window`. */
@@ -21,4 +22,5 @@ export function bootstrapContentScript(adapter: SiteAdapter): void {
 
   w[TEARDOWN_KEY] = startCapture(adapter, document);
   attachResumeNudge(adapter, document);
+  attachHistorySync(adapter, document);
 }

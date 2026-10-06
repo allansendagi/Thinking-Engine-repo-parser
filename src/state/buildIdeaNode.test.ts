@@ -204,3 +204,33 @@ describe("applyCognitiveEvent", () => {
     expect(ideas.get(ideaBId as string)?.relatedIdeaIds).toContain(ideaAId);
   });
 });
+
+describe("what a matched event does to the idea", () => {
+  const seed = (ideas: Map<string, IdeaNode>) => {
+    applyCognitiveEvent(ideas, makeEvent(), { cognitiveEventId: "cog_1", matchedIdeaId: null, confidence: 1, reasoning: "seed" }, T);
+    return [...ideas.keys()][0] as string;
+  };
+  const match = (id: string, cog: string) => ({ cognitiveEventId: cog, matchedIdeaId: id, confidence: 0.95, reasoning: "same idea" });
+
+  test("a question about the idea is recorded, but doesn't replace what the idea currently says", () => {
+    const ideas = new Map<string, IdeaNode>();
+    const id = seed(ideas);
+    const before = (ideas.get(id) as IdeaNode).currentFormulation;
+    applyCognitiveEvent(ideas, makeEvent({ id: "cog_q", sourceEventId: "src_q", type: "question", statement: "Who verifies the boundaries?" }), match(id, "cog_q"), T);
+    const idea = ideas.get(id) as IdeaNode;
+    expect(idea.currentFormulation).toBe(before);
+    expect(idea.evolution).toHaveLength(2);
+    expect(idea.openLoops.map((l) => l.statement)).toEqual(["Who verifies the boundaries?"]);
+  });
+
+  test("a resolution closes the question it answers, not every open question", () => {
+    const ideas = new Map<string, IdeaNode>();
+    const id = seed(ideas);
+    applyCognitiveEvent(ideas, makeEvent({ id: "cog_q1", sourceEventId: "s1", type: "question", statement: "Who verifies the boundaries?" }), match(id, "cog_q1"), "2026-08-19T00:00:00.000Z");
+    applyCognitiveEvent(ideas, makeEvent({ id: "cog_q2", sourceEventId: "s2", type: "open_loop", statement: "How do we price enforcement?" }), match(id, "cog_q2"), "2026-08-20T00:00:00.000Z");
+    applyCognitiveEvent(ideas, makeEvent({ id: "cog_r", sourceEventId: "s3", type: "resolution", statement: "An independent auditor verifies the boundaries." }), match(id, "cog_r"), "2026-08-21T00:00:00.000Z");
+    const loops = (ideas.get(id) as IdeaNode).openLoops;
+    expect(loops.find((l) => l.statement.startsWith("Who verifies"))?.resolved).toBe(true);
+    expect(loops.find((l) => l.statement.startsWith("How do we price"))?.resolved).toBe(false);
+  });
+});

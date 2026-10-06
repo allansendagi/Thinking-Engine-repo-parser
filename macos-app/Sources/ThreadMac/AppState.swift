@@ -157,6 +157,19 @@ final class AppState: ObservableObject {
     /// skipped entirely for an idea with no server relationship at all (never-synced account,
     /// or a `local_`-prefixed id). Fetched once per idea per session; failures reset to
     /// `.notFetched` so the next open can retry rather than sticking on a stale `.loading`.
+    /// Options + unfinished thinking per idea (server thinking map). Refreshed on every open, since
+    /// a new capture can close a gap; a failed fetch just leaves the row hidden.
+    @Published var thinkingMaps: [String: ThinkingMap] = [:]
+
+    func fetchThinkingMap(for ideaId: String) {
+        guard !thinkingStateIsLocal, !ideaId.hasPrefix("local_") else { return }
+        Task {
+            if let map = try? await client.thinkingMap(id: ideaId), thinkingMaps[ideaId] != map {
+                thinkingMaps[ideaId] = map
+            }
+        }
+    }
+
     func fetchStructureIfNeeded(for ideaId: String) {
         guard !thinkingStateIsLocal, !ideaId.hasPrefix("local_") else { return }
         guard structureCache[ideaId] == nil else { return }
@@ -1250,6 +1263,7 @@ final class AppState: ObservableObject {
         }
         LocalStore.clear(userId: CredentialStore.userId)
         CredentialStore.clear()
+        SpotlightIndex.removeAll()   // a signed-out Mac must not keep surfacing the account's ideas
         resetInMemoryState()
     }
 
@@ -1322,6 +1336,8 @@ final class AppState: ObservableObject {
         }
         isLoading = false
         reconcileEmbeddings()
+        // Native-first idea mining: embed new thoughts on this Mac and hand the server the vectors.
+        if !isOffline { let c = client; Task.detached { await ThoughtVectorSync.shared.run(client: c) } }
         await refreshAccount()
         await refreshCaptureHealth()
         if listTab == .all, allMode == .activity { await loadConversations() }
@@ -1352,7 +1368,9 @@ final class AppState: ObservableObject {
         // the snapshot). If it's down or the query moved on, the local results stand.
         do {
             let remote = try await client.searchIdeas(query: q)
-            if q == searchQuery.trimmingCharacters(in: .whitespaces) { searchResults = remote }
+            if q == searchQuery.trimmingCharacters(in: .whitespaces) {
+                searchResults = mergeSearchResults(remote: remote, local: keyword + semantic)
+            }
         } catch {
             // keep the local results; offline is surfaced by refresh(), not here
         }
@@ -1435,6 +1453,7 @@ final class AppState: ObservableObject {
 
         // Fire-and-forget, after the trace is already showing -- never delays this render.
         fetchStructureIfNeeded(for: id)
+        fetchThinkingMap(for: id)
 
         do {
             let fresh = try await client.traceIdea(id: id)

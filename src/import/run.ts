@@ -1,3 +1,4 @@
+import { dismissedExamples } from "../mining/corrections";
 import type { Database } from "bun:sqlite";
 import { parseChatGptExport } from "../parser/chatgpt";
 import { parseClaudeExport } from "../parser/claude";
@@ -49,7 +50,7 @@ export async function importIntoDb(
   const relevantEvents = events.filter((e) => conversationsWithNewEvents.has(e.conversationId));
 
   const existingIdeas = new Map(loadIdeas(db).map((i) => [i.id, i]));
-  const result = await runPipeline(relevantEvents, providers, { existingIdeas, newEventIds });
+  const result = await runPipeline(relevantEvents, providers, { existingIdeas, newEventIds, dismissed: dismissedExamples(db) });
   persistPipelineResult(db, relevantEvents, result);
 
   return {

@@ -10,6 +10,7 @@ import {
   getResumeSnooze,
   getSettings,
   noteResumeShown,
+  setHistoryStatus,
   recordCaptureReport,
   setAccountInfo,
   setApiBaseUrl,
@@ -23,6 +24,7 @@ import {
   continueFromIdea,
   getAccount,
   getThinkingState,
+  importBatch,
   ingestConversation,
   isPaymentRequired,
   isUnauthorized,
@@ -31,7 +33,14 @@ import {
 } from "./lib/api";
 import { fetchDesktopPairing, PAIRING_PORT } from "./lib/pairing";
 import { suggestionFromState, type ResumeSuggestion } from "./lib/resume";
-import type { CaptureMessage, ExtensionStatus, HealthMessage, PairingState } from "./lib/types";
+import type {
+  CaptureMessage,
+  ExtensionStatus,
+  HealthMessage,
+  HistorySyncStatus,
+  ImportBatchMessage,
+  PairingState,
+} from "./lib/types";
 
 /**
  * Identity model: Thread for Mac is the account authority. It creates and owns the account and,
@@ -287,6 +296,25 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     return true;
   }
 
+  if (isImportBatchMessage(message)) {
+    handleImportBatch(message)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
+  if (isHistoryProgressMessage(message)) {
+    void setHistoryStatus(message.source, message.status);
+    return false;
+  }
+
+  if (isHistoryStartMessage(message)) {
+    startHistorySync(message.source)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
   if (isContinuePacketMessage(message)) {
     continuePacket(message.ideaId)
       .then((text) => sendResponse({ ok: true, text }))
@@ -296,6 +324,67 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
 
   return false;
 });
+
+/** One history-sync batch -> `/v1/import`. A 402 is the Free cap: tell the page to stop cleanly. */
+async function handleImportBatch(message: ImportBatchMessage): Promise<
+  { ok: true; ideaCount: number } | { ok: false; capped?: boolean; error?: string }
+> {
+  const { credentials } = await getSettings();
+  if (!credentials) return { ok: false, error: "Not connected to Thread for Mac yet" };
+  try {
+    const res = await importBatch(message.format, message.conversations);
+    return { ok: true, ideaCount: res.ideaCount };
+  } catch (err) {
+    if (isPaymentRequired(err)) return { ok: false, capped: true };
+    if (isUnauthorized(err)) {
+      await setPairingState({ status: "rejected", detail: "Sign-in expired -- reconnect from the popup." });
+    }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+const HISTORY_SITES: Record<"chatgpt" | "claude", { match: string[]; open: string }> = {
+  chatgpt: { match: ["https://chatgpt.com/*", "https://chat.openai.com/*"], open: "https://chatgpt.com/" },
+  claude: { match: ["https://claude.ai/*"], open: "https://claude.ai/" },
+};
+
+/** Run history sync in an open tab of that site, or open one (the `#thread-import` link starts it). */
+async function startHistorySync(source: "chatgpt" | "claude"): Promise<void> {
+  const site = HISTORY_SITES[source];
+  const [tab] = await chrome.tabs.query({ url: site.match });
+  if (tab?.id !== undefined) {
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: "thread:history-run" });
+      await chrome.tabs.update(tab.id, { active: true });
+      return;
+    } catch {
+      // the tab predates the content script (or is mid-navigation) -- fall through and open fresh
+    }
+  }
+  await chrome.tabs.create({ url: `${site.open}#thread-import`, active: true });
+}
+
+function isImportBatchMessage(message: unknown): message is ImportBatchMessage {
+  const m = message as { type?: unknown; format?: unknown; conversations?: unknown } | null;
+  return (
+    typeof m === "object" && m !== null && m.type === "thread:import-batch" &&
+    (m.format === "chatgpt" || m.format === "claude") && Array.isArray(m.conversations)
+  );
+}
+
+function isHistoryProgressMessage(
+  message: unknown,
+): message is { type: "thread:history-progress"; source: string; status: HistorySyncStatus } {
+  const m = message as { type?: unknown; source?: unknown; status?: unknown } | null;
+  return typeof m === "object" && m !== null && m.type === "thread:history-progress" &&
+    typeof m.source === "string" && typeof m.status === "object" && m.status !== null;
+}
+
+function isHistoryStartMessage(message: unknown): message is { type: "thread:history-start"; source: "chatgpt" | "claude" } {
+  const m = message as { type?: unknown; source?: unknown } | null;
+  return typeof m === "object" && m !== null && m.type === "thread:history-start" &&
+    (m.source === "chatgpt" || m.source === "claude");
+}
 
 /**
  * The continuation packet text for one idea -- the compact cognitive checkpoint the content
