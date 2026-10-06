@@ -147,4 +147,6 @@ export interface QueuedCapture {
   messages: CapturedMessage[];
   queuedAt: string;
   attempts: number;
+  /** Not retried before this (ISO) -- the backoff. Absent = due now. */
+  nextAttemptAt?: string;
 }

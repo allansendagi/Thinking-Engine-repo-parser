@@ -70,4 +70,15 @@ describe("adoption grounding", () => {
     );
     expect(out.events.map((e) => e.role)).toEqual(["option", undefined]);
   });
+
+  test("an odd field or one malformed event never sinks the capture", async () => {
+    const out = await run(
+      event({ type: "question", statement: "Do guests count?", evidence_quote: "per active member it is", role: "question" }),
+      event({ title: "x".repeat(200), why_it_matters: "" }),
+      { type: "claim" }, // missing everything -- dropped on its own
+    );
+    expect(out.events).toHaveLength(2);
+    expect(out.events[0]!.role).toBeUndefined();
+    expect(out.events[1]!.title).toBeUndefined();
+  });
 });

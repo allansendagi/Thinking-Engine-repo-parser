@@ -153,8 +153,21 @@ export const _foldReport = foldReport;
 
 /** Cap the queue so a long outage can't grow storage without bound. Newest conversations win. */
 export const CAPTURE_QUEUE_MAX = 25;
-/** Give up on an entry after this many failed drains -- it's not transient any more. */
-export const CAPTURE_MAX_ATTEMPTS = 8;
+/** How long a capture is kept and retried. It used to be dropped after 8 one-minute tries, so a
+ *  server problem longer than ~8 minutes silently lost the person's conversations. */
+export const CAPTURE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Backoff after `attempts` failures: 1, 2, 4, 8... minutes, capped at an hour. */
+export function retryDelayMs(attempts: number): number {
+  return Math.min(60, 2 ** Math.max(0, attempts - 1)) * 60_000;
+}
+
+/** What a drain pass does with one queued capture right now. */
+export function retryDecision(e: QueuedCapture, now: number): "send" | "wait" | "expire" {
+  if (now - new Date(e.queuedAt).getTime() > CAPTURE_MAX_AGE_MS) return "expire";
+  if (e.nextAttemptAt && new Date(e.nextAttemptAt).getTime() > now) return "wait";
+  return "send";
+}
 
 export async function getCaptureQueue(): Promise<QueuedCapture[]> {
   const { captureQueue } = await chrome.storage.local.get("captureQueue");

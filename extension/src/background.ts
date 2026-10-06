@@ -1,5 +1,6 @@
 import {
-  CAPTURE_MAX_ATTEMPTS,
+  retryDecision,
+  retryDelayMs,
   clearCredentials,
   enqueueCapture,
   getAccountInfo,
@@ -530,7 +531,8 @@ async function sendCapture(c: Capture): Promise<SendOutcome> {
 /**
  * Retry every queued conversation once. Stops the whole pass on `unauthorized` (nothing will
  * work until re-paired) and on `capped` (hammering a Free-cap account is pointless). A `transient`
- * failure bumps `attempts` and is dropped past `CAPTURE_MAX_ATTEMPTS`. Called from the retry
+ * failure bumps `attempts` and backs off (1, 2, 4... minutes, up to an hour); an entry is only
+ * given up after a week (`CAPTURE_MAX_AGE_MS`). Called from the retry
  * alarm and after any successful live capture.
  */
 async function drainQueue(): Promise<void> {
@@ -540,8 +542,15 @@ async function drainQueue(): Promise<void> {
   if (!credentials) return;
 
   const keep: typeof queue = [];
+  const now = Date.now();
   for (let i = 0; i < queue.length; i++) {
     const entry = queue[i]!;
+    const decision = retryDecision(entry, now);
+    if (decision === "expire") continue; // a week of failures: give up
+    if (decision === "wait") {
+      keep.push(entry);
+      continue;
+    }
     const outcome = await sendCapture(entry);
     if (outcome.kind === "ok") {
       await markDelivered(entry.source, new Date().toISOString()); // the popup row turns green again
@@ -552,8 +561,8 @@ async function drainQueue(): Promise<void> {
       keep.push(...queue.slice(i)); // stop the pass; leave this and the rest for next time
       break;
     }
-    if (entry.attempts + 1 < CAPTURE_MAX_ATTEMPTS) keep.push({ ...entry, attempts: entry.attempts + 1 });
-    // else: give it up -- it isn't transient any more
+    const attempts = entry.attempts + 1;
+    keep.push({ ...entry, attempts, nextAttemptAt: new Date(now + retryDelayMs(attempts)).toISOString() });
   }
   await setCaptureQueue(keep);
   await setBadge(keep.length > 0 || (await getPairingState()).status !== "paired");
