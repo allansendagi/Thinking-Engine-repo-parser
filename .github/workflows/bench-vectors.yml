@@ -1,0 +1,30 @@
+name: Bench vectors (Apple on-device)
+
+# Embeds the thinking bench's thoughts with Apple's NLContextualEmbedding -- the same model and
+# pooling Thread for Mac uses -- so `bun run bench` can score matching by meaning natively.
+# Manual: Actions > Bench vectors > Run workflow. Download the artifact into src/bench/.
+
+on:
+  workflow_dispatch:
+  # Re-embed whenever the bench corpus changes (manual dispatch needs the file on main first).
+  push:
+    branches: ["claude/**"]
+    paths: ["src/bench/storylines.ts", ".github/workflows/bench-vectors.yml"]
+
+jobs:
+  vectors:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun src/bench/dumpTexts.ts > "$RUNNER_TEMP/bench-texts.json"
+      - working-directory: macos-app
+        env:
+          BENCH_TEXTS: ${{ runner.temp }}/bench-texts.json
+          BENCH_VECTORS_OUT: ${{ runner.temp }}/vectors.apple.json
+        run: swift test --filter BenchVectorsTests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-vectors-apple
+          path: ${{ runner.temp }}/vectors.apple.json

@@ -1323,6 +1323,8 @@ final class AppState: ObservableObject {
         }
         isLoading = false
         reconcileEmbeddings()
+        // Native-first idea mining: embed new thoughts on this Mac and hand the server the vectors.
+        if !isOffline { let c = client; Task.detached { await ThoughtVectorSync.shared.run(client: c) } }
         await refreshAccount()
         await refreshCaptureHealth()
         if listTab == .all, allMode == .activity { await loadConversations() }

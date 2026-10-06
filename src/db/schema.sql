@@ -148,3 +148,18 @@ CREATE TABLE IF NOT EXISTS identity_resolutions (
   confidence REAL NOT NULL,
   reasoning TEXT NOT NULL
 );
+
+-- Meaning-vectors for thoughts (cognitive_events and discarded_events -- both are grounded
+-- thoughts). Native-first: Thread for Mac computes them on-device with Apple's NaturalLanguage
+-- framework and uploads them; a cloud provider (Voyage) only fills gaps when explicitly
+-- configured. One row per (thought, model): vectors from different models are never compared.
+-- `text_hash` is the statement the vector was computed from, so an edited thought is re-embedded.
+CREATE TABLE IF NOT EXISTS thought_vectors (
+  thought_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dims INTEGER NOT NULL,
+  vector BLOB NOT NULL,
+  text_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (thought_id, model)
+);

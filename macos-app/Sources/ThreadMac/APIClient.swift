@@ -230,6 +230,27 @@ final class APIClient {
         return try await request("/v1/conversations", method: "POST", body: body)
     }
 
+    // MARK: - Thought vectors (on-device embeddings for server-side mining)
+
+    struct PendingThought: Decodable { let id: String; let text: String }
+
+    func thoughtsNeedingVectors(model: String, limit: Int) async throws -> [PendingThought] {
+        struct Wrap: Decodable { let thoughts: [PendingThought] }
+        let m = model.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? model
+        let w: Wrap = try await request("/v1/thoughts/unembedded?model=\(m)&limit=\(limit)")
+        return w.thoughts
+    }
+
+    func uploadThoughtVectors(model: String, items: [(id: String, vector: [Float])]) async throws {
+        struct Stored: Decodable { let stored: Int }
+        let payload: [String: Any] = [
+            "model": model,
+            "items": items.map { ["id": $0.id, "vector": $0.vector.map { Double($0) }] as [String: Any] },
+        ]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let _: Stored = try await request("/v1/thoughts/embeddings", method: "POST", body: body)
+    }
+
     func getAccount() async throws -> AccountStatus {
         try await request("/v1/account")
     }
@@ -240,3 +261,7 @@ final class APIClient {
         return u
     }
 }
+
+// Every stored property is an immutable `let` set at init, so sharing one across tasks/actors
+// (thought-vector sync runs off the main actor) is safe.
+extension APIClient: @unchecked Sendable {}

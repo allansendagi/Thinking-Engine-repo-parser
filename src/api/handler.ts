@@ -46,6 +46,7 @@ import {
 } from "../db/queries";
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { captureHealthSummary } from "../db/evidence";
+import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { parsePastedConversation } from "../import/pasteParser";
 import { importIntoDb, parseExportFile } from "../import/run";
 
@@ -750,6 +751,40 @@ export function createRequestHandler(
         return updated
           ? json({ updated: true })
           : error(404, "Open loop not found");
+      }
+
+      // --- Thought vectors (native-first embeddings) ------------------------------------------
+      // Thread for Mac embeds thoughts on-device (Apple NaturalLanguage) and uploads the vectors;
+      // the server never needs a cloud embedding provider for them. See db/thoughts.ts.
+      if (req.method === "GET" && pathname === "/v1/thoughts/unembedded") {
+        const model = url.searchParams.get("model") ?? "";
+        if (!/^[\w.:@/-]{1,100}$/.test(model)) return error(400, "model is required");
+        const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? 200) || 200));
+        return json({ thoughts: thoughtsNeedingVectors(db, model, limit) });
+      }
+
+      if (req.method === "POST" && pathname === "/v1/thoughts/embeddings") {
+        let body: { model?: unknown; items?: unknown };
+        try {
+          body = (await req.json()) as { model?: unknown; items?: unknown };
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        if (typeof body.model !== "string" || !Array.isArray(body.items) || body.items.length === 0) {
+          return error(400, "model and a non-empty items[] are required");
+        }
+        if (body.items.length > 500) return error(400, "At most 500 vectors per request");
+        const items = body.items as { id?: unknown; vector?: unknown }[];
+        if (!items.every((i) => typeof i.id === "string" && Array.isArray(i.vector))) {
+          return error(400, "Each item needs an id and a vector");
+        }
+        try {
+          const stored = storeThoughtVectors(db, body.model, items as { id: string; vector: number[] }[]);
+          return json({ stored });
+        } catch (e) {
+          if (e instanceof VectorValidationError) return error(400, e.message);
+          throw e;
+        }
       }
 
       if (req.method === "GET" && pathname === "/v1/thinking-state") {
