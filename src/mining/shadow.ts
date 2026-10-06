@@ -32,6 +32,8 @@ export function loadMiningInput(db: Database): MiningInput {
     conversationId: t.conversationId,
     position: positions.get(t.sourceEventId) ?? 0,
     createdAt: t.createdAt,
+    role: t.role ?? undefined,
+    adopted: t.adoptedSourceEventId !== null,
   }));
   // Low-persistence thoughts (requests for info, formatting asks) never seed or join ideas.
   const kept = thoughts.filter((t) => t.persistence !== "low");

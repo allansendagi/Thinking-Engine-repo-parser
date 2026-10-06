@@ -15,9 +15,10 @@ import type { CognitiveEventType, IdeaNode } from "../types";
  * number seven". Surfaced quietly as unfinished thinking, which is how the pyramid moves
  * thinking forward instead of only presenting it.
  *
- * Built from thought TYPES the extractor already produces. A claim is treated as a reason when
- * it isn't the current position; telling an "option" claim from a "reason" claim needs the
- * extractor's role field (step 5) -- until then options come from what was rejected or decided.
+ * Built from thought TYPES plus the extractor's ROLE for claims: an "option" claim is a
+ * position weighed (open until chosen or ruled out), a "reason" claim supports the governing
+ * thought. Claims without a role (older captures) count as reasons when they aren't the
+ * current position. An option never becomes the governing thought or a step in its history.
  */
 
 export interface ThinkingMap {
@@ -25,7 +26,7 @@ export interface ThinkingMap {
   title: string;
   governingThought: string;
   questions: { statement: string; raisedAt: string; status: "open" | "answered"; answer?: string }[];
-  options: { statement: string; status: "rejected" | "chosen" }[];
+  options: { statement: string; status: "open" | "rejected" | "chosen" }[];
   reasons: string[];
   decisions: { statement: string; decidedAt: string }[];
   history: { statement: string; at: string; supersededAt: string | null }[];
@@ -42,9 +43,18 @@ const STALE_QUESTION_DAYS = 14;
  * @param typeOf thought id -> its type (cognitive_events / the consolidation input).
  * @param now    for "open for N days" -- injectable for tests.
  */
-export function buildThinkingMap(idea: IdeaNode, typeOf: Map<string, CognitiveEventType>, now = new Date()): ThinkingMap {
-  const steps = idea.evolution.map((s) => ({ ...s, type: typeOf.get(s.cognitiveEventId) }));
-  const positional = steps.filter((s) => s.type && POSITIONAL.has(s.type));
+export type ClaimRole = "position" | "option" | "reason";
+
+export function buildThinkingMap(
+  idea: IdeaNode,
+  typeOf: Map<string, CognitiveEventType>,
+  now = new Date(),
+  roleOf: Map<string, ClaimRole> = new Map(),
+): ThinkingMap {
+  const steps = idea.evolution.map((s) => ({ ...s, type: typeOf.get(s.cognitiveEventId), role: roleOf.get(s.cognitiveEventId) }));
+  const isOption = (s: (typeof steps)[number]) => s.type === "claim" && s.role === "option";
+  const isReason = (s: (typeof steps)[number]) => s.type === "claim" && s.role === "reason";
+  const positional = steps.filter((s) => s.type && POSITIONAL.has(s.type) && !isOption(s) && !isReason(s));
 
   const history = positional.map((s, i) => ({
     statement: s.formulation,
@@ -64,11 +74,12 @@ export function buildThinkingMap(idea: IdeaNode, typeOf: Map<string, CognitiveEv
 
   const decisions = idea.decisions.map((d) => ({ statement: d.statement, decidedAt: d.decidedAt }));
   const options: ThinkingMap["options"] = [
+    ...steps.filter(isOption).map((s) => ({ statement: s.formulation, status: "open" as const })),
     ...steps.filter((s) => s.type === "rejection").map((s) => ({ statement: s.formulation, status: "rejected" as const })),
     ...decisions.map((d) => ({ statement: d.statement, status: "chosen" as const })),
   ];
   const reasons = steps
-    .filter((s) => (s.type === "claim" || s.type === "refinement") && s.formulation !== idea.currentFormulation)
+    .filter((s) => isReason(s) || ((s.type === "claim" || s.type === "refinement") && !isOption(s) && s.formulation !== idea.currentFormulation))
     .map((s) => s.formulation);
 
   const gaps: ThinkingMap["gaps"] = [];

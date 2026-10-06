@@ -12,7 +12,11 @@ import { formatTable, runBench } from "./run";
 
 const live = process.argv.includes("--live");
 const apple = loadBenchVectors();
-const miners: Miner[] = [v1Offline, v2Miner("v2 (words + context)", null)];
+const miners: Miner[] = [
+  v1Offline,
+  v2Miner("v2 (words + context, no roles)", null, { roles: false }),
+  v2Miner("v2 (words + context + roles)", null),
+];
 if (apple) miners.push(v2Miner(`v2 + Apple on-device meaning (${apple.model})`, apple.byText));
 if (live) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("--live needs ANTHROPIC_API_KEY");

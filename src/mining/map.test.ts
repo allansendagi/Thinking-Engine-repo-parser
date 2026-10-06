@@ -60,3 +60,17 @@ describe("thinking map", () => {
     expect(text).toContain("Where it stands: Annual plans only, billed per active member.");
   });
 });
+
+describe("thinking map with claim roles", () => {
+  test("an option claim is weighed, not where the idea stands; a reason claim sits under it", () => {
+    const withOption: IdeaNode = {
+      ...idea,
+      evolution: [...idea.evolution.slice(0, 3), step("o", "Or bill per workspace.", 3), ...idea.evolution.slice(3)],
+    };
+    const roles = new Map<string, "position" | "option" | "reason">([["o", "option"], ["c", "reason"]]);
+    const map = buildThinkingMap(withOption, new Map([...types, ["o", "claim"]]), new Date("2026-09-10"), roles);
+    expect(map.options).toContainEqual({ statement: "Or bill per workspace.", status: "open" });
+    expect(map.reasons).toEqual(["The bill should grow with headcount."]);
+    expect(map.history.map((h) => h.statement)).not.toContain("Or bill per workspace.");
+  });
+});

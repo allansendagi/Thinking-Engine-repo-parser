@@ -48,7 +48,7 @@ import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
-import { buildThinkingMap, scqaHandoff } from "../mining/map";
+import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
 import { parsePastedConversation } from "../import/pasteParser";
 import { importIntoDb, parseExportFile } from "../import/run";
 
@@ -699,10 +699,10 @@ export function createRequestHandler(
       if (req.method === "GET" && mapMatch) {
         const idea = getIdea(db, decodePathId(mapMatch[1] as string));
         if (!idea) return error(404, "Idea not found");
-        const typeOf = new Map(
-          (db.query("SELECT id, type FROM cognitive_events").all() as { id: string; type: CognitiveEventType }[]).map((r) => [r.id, r.type]),
-        );
-        const map = buildThinkingMap(idea, typeOf);
+        const rows = db.query("SELECT id, type, role FROM cognitive_events").all() as { id: string; type: CognitiveEventType; role: ClaimRole | null }[];
+        const typeOf = new Map(rows.map((r) => [r.id, r.type]));
+        const roleOf = new Map(rows.filter((r) => r.role).map((r) => [r.id, r.role!]));
+        const map = buildThinkingMap(idea, typeOf, new Date(), roleOf);
         return json({ map, handoff: scqaHandoff(map) });
       }
 

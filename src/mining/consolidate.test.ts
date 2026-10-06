@@ -8,6 +8,19 @@ const th = (statement: string, type: MiningThought["type"], conv: string, positi
 });
 
 describe("v2 consolidation", () => {
+  test("an option being weighed joins the idea but never becomes where it stands", () => {
+    const idea = th("Charge per seat for team billing.", "new_idea", "c1", 0);
+    const option = th("One option is billing per workspace for teams.", "claim", "c1", 1, 1, { role: "option" });
+    const ideas = consolidate([idea, option]);
+    expect(ideas).toHaveLength(1);
+    expect(ideas[0]!.node.currentFormulation).toBe(idea.statement);
+  });
+
+  test("an adopted AI suggestion said once is an idea, not a spark", () => {
+    const adopted = th("Ship the import before the redesign.", "claim", "c1", 2, 1, { adopted: true });
+    expect(consolidate([adopted])[0]!.isSpark).toBe(false);
+  });
+
   test("a question asked right after an idea attaches to it, even with no shared words", () => {
     const idea = th("We should charge per seat rather than a flat monthly fee.", "new_idea", "c1", 0);
     const q = th("Do guest collaborators count toward the bill?", "question", "c1", 2);

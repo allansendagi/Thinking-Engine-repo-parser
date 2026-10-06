@@ -118,7 +118,7 @@ export function loadBenchVectors(): { model: string; byText: Map<string, number[
 }
 
 /** Answer-key thoughts in the shape the v2 miner consumes (same as what the server extracts). */
-export function oracleMiningThoughts(s: Scenario): MiningThought[] {
+export function oracleMiningThoughts(s: Scenario, withRoles = true): MiningThought[] {
   const events = new Map(s.events.map((e) => [e.id, e]));
   return s.thoughts.map((t, i) => {
     const e = events.get(t.messageId)!;
@@ -131,15 +131,17 @@ export function oracleMiningThoughts(s: Scenario): MiningThought[] {
       conversationId: e.conversationId,
       position: e.index,
       createdAt: e.createdAt,
+      role: withRoles && t.type === "claim" ? (t.role === "option" ? "option" : "position") : undefined,
+      adopted: withRoles && !!t.adopted,
     };
   });
 }
 
-export function v2Miner(name: string, vectors: Map<string, number[]> | null): Miner {
+export function v2Miner(name: string, vectors: Map<string, number[]> | null, opts: { roles?: boolean } = {}): Miner {
   return {
     name,
     async mine(s) {
-      const thoughts = oracleMiningThoughts(s);
+      const thoughts = oracleMiningThoughts(s, opts.roles ?? true);
       const byThought = new Map<string, number[]>();
       if (vectors) for (const t of thoughts) {
         const v = vectors.get(t.statement);

@@ -34,6 +34,10 @@ export interface MiningThought {
   /** Message position within its conversation. */
   position: number;
   createdAt: string;
+  /** For claims: an OPTION being weighed or a REASON is about the idea but isn't where it stands. */
+  role?: "position" | "option" | "reason";
+  /** Adopted from an AI suggestion (grounded at extraction) -- kept, even when said once. */
+  adopted?: boolean;
 }
 
 export interface Constraints {
@@ -63,7 +67,10 @@ export interface ConsolidatedIdea {
 }
 
 const ANCHOR_TYPES: ReadonlySet<CognitiveEventType> = new Set(["new_idea", "claim", "refinement", "contradiction", "decision"]);
-const POSITIONAL: ReadonlySet<CognitiveEventType> = ANCHOR_TYPES;
+/** Does this thought state where the idea stands? Options and reasons are about it, not it. */
+function isPositional(t: MiningThought): boolean {
+  return ANCHOR_TYPES.has(t.type) && !(t.type === "claim" && (t.role === "option" || t.role === "reason"));
+}
 
 // ------------------------------------------------------------------------------- similarity
 
@@ -289,7 +296,7 @@ function buildIdea(
 ): ConsolidatedIdea {
   const ts = ids.map((id) => byId.get(id)!);
   const first = ts[0]!;
-  const positional = ts.filter((t) => POSITIONAL.has(t.type));
+  const positional = ts.filter(isPositional);
   const current = positional.at(-1) ?? ts.at(-1)!;
   const founder = ts.find((t) => t.type === "new_idea") ?? positional[0] ?? first;
 
@@ -335,7 +342,11 @@ function buildIdea(
 
   const distinctConversations = new Set(ts.map((t) => t.conversationId)).size;
   const isSpark =
-    ts.length === 1 && !(first.type === "decision") && !(first.type === "new_idea" && first.persistence === "high") && distinctConversations === 1;
+    ts.length === 1 &&
+    !(first.type === "decision") &&
+    !first.adopted &&
+    !(first.type === "new_idea" && first.persistence === "high") &&
+    distinctConversations === 1;
 
   const node: IdeaNode = {
     id: keptId ?? `idea_${founder.id}`,
