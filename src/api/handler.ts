@@ -1014,14 +1014,14 @@ function dataProcessors(p: PipelineProviders): Record<string, unknown>[] {
     {
       name: "Anthropic",
       purpose: "Reads the text of a conversation to find ideas, decisions and open questions.",
-      receives: "Conversation text (secrets are stripped first).",
+      receives: "Conversation text (secrets are stripped first). Not used to train its models by default, and not retained by default; its published exceptions apply (certain models, safety-flagged content, legal holds).",
     },
   ];
   if (process.env.VOYAGE_API_KEY)
     list.push({
       name: "Voyage AI",
       purpose: "Turns idea statements into meaning-vectors so related thinking can be connected.",
-      receives: "Short idea statements Thread derived -- not whole conversations.",
+      receives: "Short idea statements Thread derived -- not whole conversations. Thread has opted out of Voyage using submitted data for training; opted-out data is deleted after processing.",
     });
   list.push({
     name: "Railway",

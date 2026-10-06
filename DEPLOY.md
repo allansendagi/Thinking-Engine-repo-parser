@@ -68,6 +68,8 @@ stays consistent. SQLite recovers the WAL when it opens the file.
 |---|---|
 | `THREAD_ADMIN_EMAILS` | Comma-separated. These accounts can read `GET /v1/events/downloads` (the `/admin` dashboard). Nobody is admin if unset. |
 | `THREAD_RATE_LIMIT` | Set to `off` to disable the per-IP limiter on the unauthenticated routes (`/v1/users`, `/v1/auth/start`, `/v1/events/download`). **Never set in production** — the tests and e2e sims set it for themselves. |
+| `VOYAGE_API_KEY` | Enables Voyage AI meaning-vectors (fills gaps the Mac's on-device vectors don't cover). **Opt out of training use first:** Voyage's terms let it train on submitted data unless you opt out (dashboard → Terms of Service → toggle to *Opted Out*; needs an org Admin and a payment method). Opted out on 2026-10-06; the privacy page and the in-app "Your data" screen say so. Don't set this key on an account that hasn't opted out. |
+| `THREAD_BACKUP_DAYS` | How many days the volume's backups are kept, shown to users wherever deletion is promised (default 7). **Keep it equal to the retention actually set on the Railway volume.** |
 | `THREAD_ALLOW_EPHEMERAL` | `1` lets the server boot on non-durable storage instead of failing fast. Only for throwaway environments. |
 
 ### Unauthenticated-route protection
