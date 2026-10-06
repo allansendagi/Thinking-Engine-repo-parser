@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { openDb } from "./client";
+import { dataSummary, purgeUserFiles, type AccountDeletion } from "./privacy";
 
 /**
  * Where the per-user SQLite files live. Read lazily, not as a module-level const -- see auth.ts's
@@ -34,6 +35,37 @@ export function dbPathForUser(userId: string): string {
   return join(dataDir(), `${userId}.db`);
 }
 
+/**
+ * Accounts deleted by this process. Background work (a deferred extraction, a mining pass) may
+ * still hold a userId when the account is deleted; without this it would reopen the path and
+ * silently recreate an empty database for a person who asked for everything to be removed.
+ */
+const purged = new Set<string>();
+
 export function openUserDb(userId: string): Database {
+  if (purged.has(userId)) throw new Error("This account has been deleted");
   return openDb(dbPathForUser(userId));
+}
+
+/** Delete an account's database from disk and return what was removed (counted first). */
+export function purgeUser(userId: string): AccountDeletion {
+  const path = dbPathForUser(userId);
+  let counts = { conversations: 0, messages: 0, ideas: 0, thoughts: 0, vectors: 0, corrections: 0, evidenceRecords: 0 };
+  const db = openDb(path);
+  try {
+    const s = dataSummary(db);
+    counts = {
+      conversations: s.conversations,
+      messages: s.messages,
+      ideas: s.ideas,
+      thoughts: s.thoughts + s.setAsideThoughts,
+      vectors: s.vectors,
+      corrections: s.corrections,
+      evidenceRecords: s.evidenceRecords,
+    };
+  } finally {
+    db.close();
+  }
+  purged.add(userId);
+  return { ...counts, filesRemoved: purgeUserFiles(path) };
 }

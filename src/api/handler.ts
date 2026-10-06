@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   attachEmail,
+  deleteAccountRecords,
   createUser,
   deviceLabel,
   AccountHasEmailError,
@@ -32,7 +33,8 @@ import {
   isProActive,
   verifyPaddleSignature,
 } from "./billing";
-import { dataDir, openUserDb } from "../db/tenancy";
+import { dataDir, openUserDb, purgeUser } from "../db/tenancy";
+import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
 import { storageMode } from "../db/durability";
 import { downloadSummary, isAdmin, recordDownload } from "./metrics";
 import { addToWaitlist, waitlistSummary } from "./waitlist";
@@ -551,6 +553,38 @@ export function createRequestHandler(
       }
     }
 
+    // --- Delete everything ---------------------------------------------------------------
+    // Removes the account and every byte Thread holds for it. The caller must type the
+    // confirmation (a stray request can't do this), and a live paid subscription must be handled
+    // first -- deleting the account doesn't cancel billing at the payment processor.
+    if (req.method === "DELETE" && pathname === "/v1/account/data") {
+      let body: { confirm?: string; acknowledgeSubscription?: boolean } = {};
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        // an empty body is rejected below
+      }
+      if (body.confirm !== "delete everything")
+        return error(400, 'Send {"confirm":"delete everything"} to delete this account and all of its data', "confirmation_required");
+      const account = getAccount(userId);
+      const billing = account?.plan === "pro" && (account.status === "active" || account.status === "past_due" || account.status === "trialing");
+      if (billing && !body.acknowledgeSubscription)
+        return error(
+          409,
+          "This account has an active subscription. Cancel it from Manage Subscription first, or confirm you understand billing continues until you do.",
+          "subscription_active",
+        );
+      const removedData = purgeUser(userId);
+      const removedAccount = deleteAccountRecords(userId);
+      return json({
+        deleted: true,
+        data: removedData,
+        account: removedAccount,
+        subscriptionStillActive: billing,
+        backups: backupNote(),
+      });
+    }
+
     const db = openUserDb(userId);
     // Captures saved while the AI was unavailable resume on their own (throttled, off-path).
     scheduleDeferredRetry(userId, openUserDb, providers);
@@ -698,6 +732,37 @@ export function createRequestHandler(
       if (req.method === "GET" && pathname === "/v1/ideas") {
         const q = url.searchParams.get("q") ?? "";
         return json(searchIdeas(db, q));
+      }
+
+      // --- Your data: what Thread holds, a full copy, and removing a conversation ----------
+      if (req.method === "GET" && pathname === "/v1/account/data-summary") {
+        const account = getAccount(userId);
+        return json({
+          stored: dataSummary(db),
+          account: { email: account?.email ?? null, plan: account?.plan ?? "free" },
+          processors: dataProcessors(providers),
+          retention: {
+            rawConversations: "Kept while your account exists, or until you delete the conversation or the account.",
+            vectors: "Kept while your account exists; removed with the conversation they came from.",
+            backups: backupNote(),
+          },
+        });
+      }
+      if (req.method === "GET" && pathname === "/v1/account/export") {
+        const out = exportAll(db);
+        out.account = { email: getAccount(userId)?.email ?? null };
+        return new Response(JSON.stringify(out, null, 2), {
+          headers: {
+            "content-type": "application/json",
+            "content-disposition": 'attachment; filename="thread-export.json"',
+          },
+        });
+      }
+      const delConv = pathname.match(/^\/v1\/conversations\/(.+)$/);
+      if (req.method === "DELETE" && delConv) {
+        const removed = deleteConversation(db, decodePathId(delConv[1] as string));
+        if (removed) scheduleShadowMining(userId, openUserDb);
+        return removed ? json({ deleted: true, removed, backups: backupNote() }) : error(404, "Conversation not found");
       }
 
       // Activity feed: every conversation Thread has captured, newest first, with the ideas each
@@ -935,6 +1000,35 @@ export function createRequestHandler(
       db.close();
     }
   };
+}
+
+/** Plain-language note on backups, shown wherever deletion is promised. */
+function backupNote(): string {
+  const days = Number(process.env.THREAD_BACKUP_DAYS ?? 7) || 7;
+  return `Deleted data can remain in the server's rolling backups for up to ${days} days, then it is gone for good. Nothing restores it into your account.`;
+}
+
+/** Who else receives what -- derived from what's actually configured, not a fixed claim. */
+function dataProcessors(p: PipelineProviders): Record<string, unknown>[] {
+  const list: Record<string, unknown>[] = [
+    {
+      name: "Anthropic",
+      purpose: "Reads the text of a conversation to find ideas, decisions and open questions.",
+      receives: "Conversation text (secrets are stripped first).",
+    },
+  ];
+  if (process.env.VOYAGE_API_KEY)
+    list.push({
+      name: "Voyage AI",
+      purpose: "Turns idea statements into meaning-vectors so related thinking can be connected.",
+      receives: "Short idea statements Thread derived -- not whole conversations.",
+    });
+  list.push({
+    name: "Railway",
+    purpose: "Hosts Thread's server and the database volume.",
+    receives: "Everything Thread stores, at rest.",
+  });
+  return list;
 }
 
 /**

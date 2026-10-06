@@ -51,6 +51,8 @@ export function openRegistry(): Database {
   const db = new Database(path, { create: true });
   // Concurrent writers (two server processes during a deploy overlap) wait instead of failing.
   db.exec("PRAGMA busy_timeout = 5000;");
+  // Deleting an account must not leave its email readable in the file's free pages.
+  db.exec("PRAGMA secure_delete = ON;");
   const { user_version } = db.query("PRAGMA user_version").get() as { user_version: number };
   if (user_version < REGISTRY_SCHEMA_VERSION) {
     // Persistent per file; readers never block the writer (and backups snapshot consistently).
@@ -130,6 +132,33 @@ function migrateRegistry(db: Database): void {
   // migration. On a free-plan account that's meaningless and leaks to the client (the Mac app
   // shows "trialing"). Normalize once.
   db.exec("UPDATE users SET subscription_status = 'free' WHERE plan = 'free' AND subscription_status <> 'free';");
+}
+
+/**
+ * Delete the account itself: its row (email, plan, billing ids), every device token, and any
+ * pending sign-in code for its email. Returns what was removed. The per-user database is removed
+ * separately (db/tenancy.ts `purgeUser`).
+ */
+export function deleteAccountRecords(userId: string): { account: number; devices: number; signInCodes: number } {
+  const db = openRegistry();
+  try {
+    return db.transaction(() => {
+      const email = (db.query("SELECT email FROM users WHERE id = ?").get(userId) as { email: string | null } | null)?.email ?? null;
+      const devices = db.prepare("DELETE FROM auth_tokens WHERE user_id = ?").run(userId).changes;
+      let signInCodes = 0;
+      if (email) {
+        try {
+          signInCodes = db.prepare("DELETE FROM login_codes WHERE email = ?").run(email.trim().toLowerCase()).changes;
+        } catch {
+          // table is created lazily on first sign-in code; none exist yet
+        }
+      }
+      const account = db.prepare("DELETE FROM users WHERE id = ?").run(userId).changes;
+      return { account, devices, signInCodes };
+    })();
+  } finally {
+    db.close();
+  }
 }
 
 /** A short, safe device label. Falls back to a rough parse of a User-Agent, then "Unknown device". */
