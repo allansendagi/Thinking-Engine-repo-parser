@@ -262,7 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         appState.unpair()
     }
-    @objc private func quitFromMenu() { NSApp.terminate(nil) }
+    @objc private func quitFromMenu() { AppQuit.now() }
 
     /// Sign Out only makes sense while there's an account attached to this Mac -- or a reconnect
     /// pending (so "Start fresh" is reachable from the menu too).
