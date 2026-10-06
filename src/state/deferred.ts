@@ -154,6 +154,34 @@ async function retryUnlocked(
   return { processed, error: null };
 }
 
+/**
+ * Work through the whole backlog, a few conversations at a time, until it's empty, the AI fails
+ * again, or the time budget runs out. Each batch takes the per-account lock separately, so a
+ * live capture slips in between batches instead of waiting behind a long import. This is what
+ * turns a 500-conversation history import into ideas in minutes rather than hours.
+ */
+export async function drainDeferredExtraction(
+  db: Database,
+  providers: PipelineProviders,
+  budgetMs = 240_000,
+  batch = 5,
+  now: () => number = Date.now,
+): Promise<{ processed: number; error: string | null; remaining: number }> {
+  const deadline = now() + budgetMs;
+  let processed = 0;
+  let error: string | null = null;
+  while (now() < deadline) {
+    const r = await retryDeferredExtraction(db, providers, batch);
+    processed += r.processed;
+    if (r.error) {
+      error = r.error;
+      break;
+    }
+    if (deferredStatus(db).count === 0) break;
+  }
+  return { processed, error, remaining: deferredStatus(db).count };
+}
+
 export interface DeferredStatus {
   /** Messages saved but waiting for idea extraction. */
   count: number;
@@ -204,9 +232,10 @@ const running = new Set<string>();
 const RETRY_EVERY_MS = 120_000;
 
 /**
- * Retry this account's waiting captures off the request path, at most every 2 minutes. Called on
- * every authenticated request (the Mac app syncs each minute), so processing resumes on its own
- * within minutes of the AI coming back -- no user action. Failures stay recorded, never thrown.
+ * Retry this account's waiting captures off the request path (a drain of up to 4 minutes, then at
+ * most one new drain every 2 minutes). Called on every authenticated request (the Mac app syncs
+ * each minute), so processing resumes on its own within minutes of the AI coming back -- no user
+ * action. Failures stay recorded, never thrown.
  */
 export function scheduleDeferredRetry(
   userId: string,
@@ -222,8 +251,8 @@ export function scheduleDeferredRetry(
     try {
       db = open(userId);
       if (deferredStatus(db).count === 0) return;
-      const r = await retryDeferredExtraction(db, providers);
-      if (r.processed > 0) console.log(`[Thread] resumed extraction for ${userId}: ${r.processed} messages`);
+      const r = await drainDeferredExtraction(db, providers);
+      if (r.processed > 0) console.log(`[Thread] resumed extraction for ${userId}: ${r.processed} messages, ${r.remaining} left`);
       if (r.error) console.error(`[Thread] extraction still waiting for ${userId}: ${r.error}`);
     } catch (e) {
       console.error(`[Thread] deferred retry failed for ${userId}:`, e);

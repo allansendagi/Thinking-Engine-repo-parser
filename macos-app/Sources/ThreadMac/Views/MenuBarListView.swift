@@ -397,7 +397,8 @@ private struct ActivityListView: View {
                 Spacer()
                 Image(systemName: appState.conversationsLoading ? "arrow.triangle.2.circlepath" : "clock")
                     .font(.system(size: 24, weight: .light)).foregroundStyle(Theme.ink(0.3))
-                Text(appState.conversationsLoading ? "Loading…" : "Nothing captured yet")
+                Text(appState.conversationsLoading ? "Loading…" : (appState.conversationsError.map { "Couldn't load activity: \($0)" } ?? "Nothing captured yet"))
+                    .multilineTextAlignment(.center).padding(.horizontal, 16)
                     .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.ink(0.5))
                 Spacer()
             }
