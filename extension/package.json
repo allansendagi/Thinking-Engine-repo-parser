@@ -11,7 +11,7 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/chrome": "^0.0.280",
-    "happy-dom": "^15.11.7",
+    "happy-dom": "^20.14.5",
     "typescript": "^5.6.0"
   }
 }
