@@ -3,6 +3,7 @@ name: Bench vectors (Apple on-device)
 # Embeds the thinking bench's thoughts with Apple's NLContextualEmbedding -- the same model and
 # pooling Thread for Mac uses -- so `bun run bench` can score matching by meaning natively.
 # Manual: Actions > Bench vectors > Run workflow. Download the artifact into src/bench/.
+# Native chain: the contextual model when its asset is present, else macOS's sentence model.
 
 on:
   workflow_dispatch:
