@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { openDb } from "../db/client";
 import { storeThoughtVectors } from "../db/thoughts";
 import { dismissedExamples, loadCorrections, recordCorrection } from "./corrections";
-import { loadShadowIdeas, runShadowMining } from "./shadow";
+import { loadShadowIdeas, runShadowMining, voyageFallback } from "./shadow";
+import { VoyageEmbeddingProvider } from "../providers/voyage";
 
 function seed() {
   const db = openDb(":memory:");
@@ -68,5 +69,33 @@ describe("shadow v2 mining", () => {
     recordCorrection(db, { kind: "state", ideaId: id, thoughtIds: ["cog_m1_0"], value: "dormant" });
     const node = runShadowMining(db).ideas.find((i) => i.node.id === id)!.node;
     expect([node.title, node.state]).toEqual(["Pricing", "dormant"]);
+  });
+
+  test("a native model the bench showed doesn't separate ideas is not used for grouping", () => {
+    const db = seed();
+    storeThoughtVectors(db, "apple:nlembedding.sentence.en.r1", [
+      { id: "cog_m1_0", vector: Array.from({ length: 16 }, (_, i) => i) },
+      { id: "cog_m2_0", vector: Array.from({ length: 16 }, (_, i) => i + 1) },
+    ]);
+    expect(runShadowMining(db).run.vectorModel).toBeNull();
+  });
+
+  test("Voyage fills in only when no trusted native vectors exist", async () => {
+    let calls = 0;
+    const fetcher = (async (_url: string, init: RequestInit) => {
+      calls++;
+      const input = (JSON.parse(String(init.body)) as { input: string[] }).input;
+      return new Response(JSON.stringify({ data: input.map((_, index) => ({ index, embedding: Array(8).fill(index + 1) })) }));
+    }) as unknown as typeof fetch;
+    const voyage = new VoyageEmbeddingProvider("test-key", "voyage-3.5-lite", fetcher);
+
+    const native = seed();
+    storeThoughtVectors(native, "apple:nlcontextual.r1", [{ id: "cog_m1_0", vector: Array(16).fill(1) }]);
+    expect(await voyageFallback(native, voyage)).toBe(0);
+    expect(calls).toBe(0);
+
+    const db = seed();
+    expect(await voyageFallback(db, voyage)).toBe(3);
+    expect(runShadowMining(db).run.vectorModel).toBe("voyage:voyage-3.5-lite");
   });
 });

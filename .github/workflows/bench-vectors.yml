@@ -11,7 +11,7 @@ on:
   # Re-embed whenever the bench corpus changes (manual dispatch needs the file on main first).
   push:
     branches: ["claude/**"]
-    paths: ["src/bench/storylines.ts", ".github/workflows/bench-vectors.yml"]
+    paths: ["src/bench/storylines.ts", "src/bench/generate.ts", "src/bench/dumpTexts.ts", ".github/workflows/bench-vectors.yml"]
 
 permissions:
   contents: write

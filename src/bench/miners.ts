@@ -19,8 +19,8 @@ export class OracleExtractionProvider implements CompletionProvider {
       .filter((t) => newIds.has(t.messageId))
       .map((t) => ({
         type: t.type,
-        statement: t.statement,
-        title: t.type === "new_idea" ? t.statement.split(/\s+/).slice(0, 5).join(" ") : null,
+        statement: t.said,
+        title: t.type === "new_idea" ? t.said.split(/\s+/).slice(0, 5).join(" ") : null,
         confidence: 0.95,
         persistence: "high",
         persistence_reason: "bench oracle",
@@ -107,14 +107,24 @@ export type { CognitiveEvent };
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { consolidate, type MiningThought } from "../mining/consolidate";
+import { standardSuite } from "./generate";
 
 /** Apple on-device vectors for the bench corpus, if they've been generated (bench-vectors
- *  workflow / BenchVectorsTests), keyed by statement text. */
+ *  workflow / BenchVectorsTests), keyed by the text the miners see (`said`). */
 export function loadBenchVectors(): { model: string; byText: Map<string, number[]> } | null {
   const path = join(import.meta.dir, "vectors.apple.json");
   if (!existsSync(path)) return null;
   const raw = JSON.parse(readFileSync(path, "utf-8")) as { model: string; vectors: Record<string, number[]> };
-  return { model: raw.model, byText: new Map(Object.entries(raw.vectors)) };
+  const byText = new Map(Object.entries(raw.vectors));
+  // Stale vectors (the corpus changed since they were made) would silently score as words-only
+  // under a "meaning" label -- refuse them instead.
+  const needed = [...new Set(standardSuite().flatMap((s) => s.thoughts.map((t) => t.said)))];
+  const missing = needed.filter((t) => !byText.has(t)).length;
+  if (missing > 0) {
+    console.warn(`vectors.apple.json is stale (${missing}/${needed.length} texts missing) -- re-run the bench-vectors workflow.`);
+    return null;
+  }
+  return { model: raw.model, byText };
 }
 
 /** Answer-key thoughts in the shape the v2 miner consumes (same as what the server extracts). */
@@ -125,7 +135,7 @@ export function oracleMiningThoughts(s: Scenario, withRoles = true): MiningThoug
     return {
       id: `cog_${t.messageId}_${i}`,
       type: t.type,
-      statement: t.statement,
+      statement: t.said,
       persistence: "high",
       sourceEventId: t.messageId,
       conversationId: e.conversationId,
@@ -137,7 +147,11 @@ export function oracleMiningThoughts(s: Scenario, withRoles = true): MiningThoug
   });
 }
 
-export function v2Miner(name: string, vectors: Map<string, number[]> | null, opts: { roles?: boolean } = {}): Miner {
+export function v2Miner(
+  name: string,
+  vectors: Map<string, number[]> | null,
+  opts: { roles?: boolean; meaningWeight?: number; anchorThreshold?: number } = {},
+): Miner {
   return {
     name,
     async mine(s) {
@@ -147,7 +161,11 @@ export function v2Miner(name: string, vectors: Map<string, number[]> | null, opt
         const v = vectors.get(t.statement);
         if (v) byThought.set(t.id, v);
       }
-      const ideas = consolidate(thoughts, { vectors: vectors ? byThought : undefined });
+      const ideas = consolidate(thoughts, {
+        vectors: vectors ? byThought : undefined,
+        meaningWeight: opts.meaningWeight,
+        anchorThreshold: opts.anchorThreshold,
+      });
       const msgOfThought = new Map(thoughts.map((t) => [t.id, t.sourceEventId]));
       const mined = ideas.filter((i) => !i.isSpark).map((i) => {
         const node = fromIdeaNode(i.node);

@@ -26,6 +26,9 @@ export interface GoldThought {
   role: ThoughtRole;
   /** The thought, decontextualized: readable on its own, in the person's voice. */
   statement: string;
+  /** How THIS person actually put it (the message variant). Miners see this, not `statement`:
+   *  a real extractor restates what was said, so paraphrase across seeds is part of the test. */
+  said: string;
   /** Verbatim substring of the message that grounds it. */
   quote: string;
   /** Opens (question) or closes (answer) an open loop -- the loop's key. */

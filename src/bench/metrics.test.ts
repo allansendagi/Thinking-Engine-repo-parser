@@ -4,7 +4,7 @@ import { generateScenario, standardSuite } from "./generate";
 import type { MinedIdea, Scenario } from "./types";
 
 const t = (messageId: string, idea: string, role: "position" | "question" | "answer" | "decision", loop?: string) => ({
-  messageId, idea, role, loop, type: "claim" as const, statement: messageId, quote: messageId,
+  messageId, idea, role, loop, type: "claim" as const, statement: messageId, said: messageId, quote: messageId,
 });
 
 const scenario: Scenario = {

@@ -62,7 +62,7 @@ describe("v2 consolidation", () => {
 
   test("a person's split (cannot-link) and merge (must-link) are respected", () => {
     const a = th("Verify a creator's identity before payout.", "new_idea", "c1", 0);
-    const b = th("Verify institutional authority independently.", "new_idea", "c1", 1);
+    const b = th("Verify institutional authority independently.", "claim", "c1", 1);
     expect(consolidate([a, b]).length).toBe(1); // close in one chat, overlapping words
     expect(consolidate([a, b], { constraints: { cannotLink: [[a.id, b.id]] } }).length).toBe(2);
     const c = th("Totally unrelated: move the offsite to May.", "decision", "c9", 0, 20);
@@ -119,4 +119,23 @@ describe("v2 consolidation at real-account scale", () => {
     expect(ideas.length).toBeGreaterThan(30);
     expect(ms).toBeLessThan(15_000);
   }, 30_000);
+});
+
+describe("v2 grouping signals", () => {
+  test("two new ideas raised in one chat stay apart unless their words say otherwise", () => {
+    const a = th("Add an AI reviewer that comments on pull requests.", "new_idea", "c1", 0);
+    const b = th("Build a reusable security questionnaire kit.", "new_idea", "c1", 2);
+    expect(consolidate([a, b]).length).toBe(2);
+  });
+
+  test("rare shared words count, common ones don't", () => {
+    // "first" appears everywhere in this person's thinking; "SOC" only in the security thoughts.
+    const filler = [1, 2, 3, 4, 5].map((i) => th(`First thing on item ${i} for the first time.`, "claim", `f${i}`, 0, i));
+    const soc = th("We need SOC 2 for the first enterprise deal.", "new_idea", "s1", 0, 1);
+    const soc2 = th("Is SOC 2 required before the first enterprise customer?", "question", "s2", 0, 9);
+    const hire = th("Is the first engineer remote?", "question", "h1", 0, 9);
+    const ideas = consolidate([...filler, soc, soc2, hire]);
+    expect(ideas.find((i) => i.thoughtIds.includes(soc.id))!.thoughtIds).toContain(soc2.id);
+    expect(ideas.find((i) => i.thoughtIds.includes(soc.id))!.thoughtIds).not.toContain(hire.id);
+  });
 });

@@ -104,6 +104,7 @@ export function generateScenario(opts: GenerateOptions): Scenario {
           type: gold.type,
           role: gold.role,
           statement: beat.statement,
+          said: variant.text,
           quote: variant.quote,
           loop: beat.loop,
           adopted:

@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
-import { listThoughts, loadThoughtVectors, vectorModels } from "../db/thoughts";
+import { listThoughts, loadThoughtVectors, storeThoughtVectors, thoughtsNeedingVectors, vectorModels } from "../db/thoughts";
+import { VoyageEmbeddingProvider, voyageConfigured } from "../providers/voyage";
 import type { CognitiveEventType, IdeaNode } from "../types";
-import { consolidate, type ConsolidatedIdea, type MiningThought } from "./consolidate";
+import { consolidate, meaningWeightFor, type ConsolidatedIdea, type MiningThought } from "./consolidate";
 import { loadCorrections, type LearnedCorrections } from "./corrections";
 
 /**
@@ -43,7 +44,10 @@ export function loadMiningInput(db: Database): MiningInput {
   const learned = loadCorrections(db);
   const kept = thoughts.filter((t) => t.persistence !== "low" && !learned.dismissedThoughtIds.has(t.id));
 
-  const model = vectorModels(db).find((m) => m.startsWith("apple:")) ?? null;
+  // Native first; a native model only counts if the bench showed it helps (meaningWeightFor).
+  // Voyage is the fallback when no trusted on-device vectors exist (and only if configured).
+  const models = vectorModels(db).filter((m) => meaningWeightFor(m) > 0);
+  const model = models.find((m) => m.startsWith("apple:")) ?? models.find((m) => m.startsWith("voyage:")) ?? null;
   const vectors = model ? loadThoughtVectors(db, model) : undefined;
   const previousIdeaOf = new Map(
     (db.query("SELECT idea_id, cognitive_event_id FROM evolution_steps").all() as { idea_id: string; cognitive_event_id: string }[]).map(
@@ -69,6 +73,7 @@ export function runShadowMining(db: Database): { run: ShadowRun; ideas: Consolid
     vectors: input.vectors,
     previousIdeaOf: input.previousIdeaOf,
     constraints: input.learned.constraints,
+    meaningWeight: meaningWeightFor(input.vectorModel),
   });
   // The person's own title and state win over anything derived.
   for (const i of ideas) {
@@ -109,6 +114,25 @@ export function loadShadowIdeas(db: Database): { node: IdeaNode; isSpark: boolea
   );
 }
 
+/**
+ * Cloud fallback, only when there is no trusted native model for this account (no Mac, or a Mac
+ * without the contextual asset) and VOYAGE_API_KEY is set. Embeds up to `max` thoughts per run.
+ */
+export async function voyageFallback(db: Database, provider?: VoyageEmbeddingProvider, max = 500): Promise<number> {
+  const nativeTrusted = vectorModels(db).some((m) => m.startsWith("apple:") && meaningWeightFor(m) > 0);
+  if (nativeTrusted || (!provider && !voyageConfigured())) return 0;
+  const voyage = provider ?? new VoyageEmbeddingProvider();
+  let done = 0;
+  while (done < max) {
+    const batch = thoughtsNeedingVectors(db, voyage.modelId, Math.min(100, max - done));
+    if (batch.length === 0) break;
+    const vectors = await voyage.embedMany(batch.map((t) => t.text));
+    storeThoughtVectors(db, voyage.modelId, batch.map((t, i) => ({ id: t.id, vector: vectors[i]! })));
+    done += batch.length;
+  }
+  return done;
+}
+
 // ------------------------------------------------------------------------------ scheduling
 
 const pending = new Map<string, ReturnType<typeof setTimeout>>();
@@ -120,11 +144,16 @@ const pending = new Map<string, ReturnType<typeof setTimeout>>();
  */
 export function scheduleShadowMining(userId: string, open: (userId: string) => Database, delayMs = 120_000): void {
   if (process.env.THREAD_SHADOW_MINER === "off" || pending.has(userId)) return;
-  const timer = setTimeout(() => {
+  const timer = setTimeout(async () => {
     pending.delete(userId);
     let db: Database | null = null;
     try {
       db = open(userId);
+      try {
+        await voyageFallback(db);
+      } catch (e) {
+        console.error(`[Thread] voyage fallback failed for ${userId}:`, e); // mine on words instead
+      }
       const { run } = runShadowMining(db);
       console.log(`[Thread] shadow v2 mining ${userId}: ${run.ideas} ideas, ${run.sparks} sparks from ${run.thoughts} thoughts (${run.vectors} vectors) in ${run.ms}ms`);
     } catch (e) {

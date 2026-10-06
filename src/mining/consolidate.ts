@@ -57,6 +57,9 @@ export interface ConsolidateOptions {
   anchorThreshold?: number;
   /** Below this, a satellite becomes its own idea instead of attaching. */
   attachFloor?: number;
+  /** How much meaning counts against words (0..1). Set per vector model by how well it
+   *  separates ideas on the bench -- see meaningWeightFor. */
+  meaningWeight?: number;
 }
 
 export interface ConsolidatedIdea {
@@ -90,12 +93,21 @@ export function wordSimilarity(a: string, b: string): number {
   return wordSimilarityOf([...new Set(tokenize(a))], [...new Set(tokenize(b))]);
 }
 
-function wordSimilarityOf(A: string[], B: string[]): number {
+function wordSimilarityOf(A: string[], B: string[], weight: (w: string) => number = () => 1): number {
   if (A.length === 0 || B.length === 0) return 0;
   const [small, big] = A.length <= B.length ? [A, B] : [B, A];
-  const shared = small.filter((w) => big.some((x) => sameWord(w, x))).length;
-  return shared / small.length;
+  let shared = 0;
+  let total = 0;
+  for (const w of small) {
+    const k = weight(w);
+    total += k;
+    if (big.some((x) => sameWord(w, x))) shared += k;
+  }
+  return total === 0 ? 0 : shared / total;
 }
+
+/** Word-family key for document frequency: the shared-beginning rule of sameWord, approximated. */
+const family = (w: string) => (w.length > 5 ? w.slice(0, 5) : w);
 
 function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
   let dot = 0, na = 0, nb = 0;
@@ -130,10 +142,21 @@ class Similarity {
   private readonly vec: Map<string, Float64Array>;
   private readonly cache = new Map<string, number>();
   private readonly words = new Map<string, string[]>();
-  constructor(private readonly byId: Map<string, MiningThought>, vectors?: Map<string, ArrayLike<number>>) {
-    this.vec = vectors && vectors.size > 1 ? centered(vectors) : new Map();
+  constructor(
+    private readonly byId: Map<string, MiningThought>,
+    vectors?: Map<string, ArrayLike<number>>,
+    private readonly meaningWeight = 0.65,
+  ) {
+    this.vec = vectors && vectors.size > 1 && meaningWeight > 0 ? centered(vectors) : new Map();
     for (const [id, t] of byId) this.words.set(id, [...new Set(tokenize(t.statement))]);
+    // Rare words carry the topic; words this person uses everywhere ("first", "team", "users")
+    // don't. IDF over the person's own thoughts, so it adapts to their vocabulary.
+    const df = new Map<string, number>();
+    for (const ws of this.words.values()) for (const f of new Set(ws.map(family))) df.set(f, (df.get(f) ?? 0) + 1);
+    const n = Math.max(1, this.words.size);
+    this.idf = (w) => Math.log(1 + n / (df.get(family(w)) ?? 1));
   }
+  private readonly idf: (w: string) => number;
 
   /** Meaning (when both thoughts have vectors) blended with words, plus conversational context. */
   between(a: string, b: string): number {
@@ -142,20 +165,22 @@ class Similarity {
     if (hit !== undefined) return hit;
     const ta = this.byId.get(a)!;
     const tb = this.byId.get(b)!;
-    const words = wordSimilarityOf(this.words.get(a)!, this.words.get(b)!);
+    const words = wordSimilarityOf(this.words.get(a)!, this.words.get(b)!, this.idf);
     const va = this.vec.get(a);
     const vb = this.vec.get(b);
     // Centred cosine: ~0.25+ is a real match, <= 0 unrelated. Map to 0..1 around that.
     const meaning = va && vb ? Math.max(0, Math.min(1, cosine(va, vb) / 0.45)) : null;
-    const base = meaning === null ? words : 0.65 * meaning + 0.35 * words;
+    const base = meaning === null ? words : this.meaningWeight * meaning + (1 - this.meaningWeight) * words;
     const s = Math.min(1, base + this.context(ta, tb));
     this.cache.set(key, s);
     return s;
   }
 
-  /** Same conversation, close together -> probably the same line of thought. */
+  /** Same conversation, close together -> probably the same line of thought. Never between two
+   *  NEW ideas: introducing one is, by definition, not continuing the other. */
   private context(a: MiningThought, b: MiningThought): number {
     if (a.conversationId !== b.conversationId) return 0;
+    if (a.type === "new_idea" && b.type === "new_idea") return 0;
     const gap = Math.abs(a.position - b.position);
     return gap <= 2 ? 0.3 : gap <= 6 ? 0.15 : 0.05;
   }
@@ -243,14 +268,32 @@ function groupAnchors(anchors: string[], sim: Similarity, threshold: number, con
   return groups.filter((g): g is string[] => g !== null);
 }
 
+/**
+ * How much a vector model's "meaning" may count, from what the bench measured -- a model is
+ * only trusted as far as it actually separates ideas.
+ *  - apple:nlembedding.sentence.* (macOS's older sentence model, the native fallback when the
+ *    contextual asset isn't downloaded): AUC 0.69 same-vs-different idea, and every weight > 0
+ *    scored WORSE than words alone (more wrong merges). Not used for grouping.
+ *  - apple contextual (NLContextualEmbedding) and voyage: full weight. The contextual model's bench
+ *    score is pending a run on a Mac that has the asset; the shadow miner never serves either way.
+ */
+export function meaningWeightFor(model: string | null): number {
+  if (!model) return 0;
+  if (model.startsWith("apple:nlembedding.sentence")) return 0;
+  return 0.65;
+}
+
 // ------------------------------------------------------------------------------- the pass
 
 export function consolidate(thoughts: MiningThought[], options: ConsolidateOptions = {}): ConsolidatedIdea[] {
   const byId = new Map(thoughts.map((t) => [t.id, t]));
-  const sim = new Similarity(byId, options.vectors as Map<string, ArrayLike<number>> | undefined);
+  const meaningWeight = options.meaningWeight ?? 0.65;
+  const sim = new Similarity(byId, options.vectors as Map<string, ArrayLike<number>> | undefined, meaningWeight);
   const constraints = options.constraints ?? {};
-  const hasVectors = !!options.vectors && options.vectors.size > 1;
-  const anchorThreshold = options.anchorThreshold ?? (hasVectors ? 0.42 : 0.5);
+  const hasVectors = !!options.vectors && options.vectors.size > 1 && meaningWeight > 0;
+  // Words-only 0.35: on held-out bench seeds it lifted "where I stand" 23% -> 41% and decisions
+  // 40% -> 58% over 0.5 with about the same wrong merges; below it, wrong merges climb fast.
+  const anchorThreshold = options.anchorThreshold ?? (hasVectors ? 0.42 : 0.35);
   const attachFloor = options.attachFloor ?? 0.2;
   const time = (id: string) => byId.get(id)!.createdAt;
 
