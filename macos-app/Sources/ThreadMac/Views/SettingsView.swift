@@ -90,6 +90,10 @@ struct SettingsView: View {
 
             Divider()
 
+            CaptureSection()
+
+            Divider()
+
             AppearanceSection()
 
             Divider()
@@ -412,5 +416,74 @@ private struct AccentSwatch: View {
         Circle()
             .stroke(Color.primary.opacity(selected ? 0.85 : 0), lineWidth: 1.5)
             .padding(-2.5)
+    }
+}
+
+
+/// What Thread captures on this Mac, beyond the browser: AI tools whose history is in files here
+/// (read natively the moment it changes), and -- opt-in -- desktop AI apps read through
+/// Accessibility.
+private struct CaptureSection: View {
+    @EnvironmentObject var appState: AppState
+    @State private var desktopApps = CaptureSettings.desktopApps
+    @State private var detected: [(source: String, name: String)] = []
+    @State private var enabled: [String: Bool] = [:]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("AI tools on this Mac", systemImage: "cpu")
+                .font(.subheadline).fontWeight(.medium)
+
+            if detected.isEmpty {
+                Text("No local AI tool history found yet (Claude Code, Codex, Gemini CLI, Copilot Chat, LM Studio, Jan…). Thread starts capturing one as soon as you use it.")
+                    .font(.caption).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Captured the moment a conversation changes. Read-only; earlier history isn't sent — use Recover for that.")
+                    .font(.caption).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(detected, id: \.source) { tool in
+                    Toggle(tool.name, isOn: Binding(
+                        get: { enabled[tool.source] ?? true },
+                        set: { on in
+                            enabled[tool.source] = on
+                            CaptureSettings.setLocalSource(tool.source, enabled: on)
+                        }
+                    ))
+                    .font(.caption)
+                }
+            }
+
+            Toggle("Desktop apps: ChatGPT, Claude (beta)", isOn: $desktopApps)
+                .font(.caption)
+                .help("Reads the conversation on screen in the ChatGPT and Claude Mac apps through Accessibility. macOS asks you to allow it once.")
+                .onChange(of: desktopApps) { _, on in
+                    CaptureSettings.desktopApps = on
+                    if on { AppDelegate.shared?.startDesktopAppCapture() } else { AppDelegate.shared?.stopDesktopAppCapture() }
+                }
+            if desktopApps {
+                Text(desktopStatus).font(.caption2).foregroundColor(.secondary)
+                if appState.desktopCaptureStatus == .needsPermission {
+                    Button("Open Accessibility settings…") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                    }
+                    .font(.caption2)
+                }
+            }
+        }
+        .onAppear {
+            detected = AppDelegate.shared?.localHistory?.detectedSources() ?? []
+            enabled = Dictionary(uniqueKeysWithValues: detected.map { ($0.source, CaptureSettings.isLocalSourceEnabled($0.source)) })
+        }
+    }
+
+    private var desktopStatus: String {
+        switch appState.desktopCaptureStatus {
+        case .idle: return "Starting…"
+        case .needsPermission: return "Needs Accessibility permission — allow Thread, then relaunch it."
+        case .waiting: return "Ready — switch to ChatGPT or Claude to capture."
+        case .watching(let source, _): return "Capturing from \(source)"
+        case .error(let m): return "Not working: \(m)"
+        }
     }
 }

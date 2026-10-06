@@ -51,6 +51,8 @@ final class AppState: ObservableObject {
     /// True when the last sync attempt failed. A quiet "showing last synced" hint — never a
     /// blocking error; the cached graph stays fully usable.
     @Published var isOffline = false
+    /// The desktop-app (Accessibility) sensor's state, for Settings.
+    @Published var desktopCaptureStatus: AXSensorStatus = .idle
 
     private func persistSnapshot() {
         // When we're showing the on-device graph, don't persist it as the "last synced" state —
