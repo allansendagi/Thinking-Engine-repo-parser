@@ -11,6 +11,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Railway builds and runs the API with its OWN pinned Bun (see nixpacks.toml / the deploy logs:
+  # 1.1.43), which is older than `latest` above. A runtime API or import that exists in `latest`
+  # but not there passes every job below and then crashes the server at startup in production --
+  # exactly what a single `statfsSync` import did. This job reproduces Railway: its Bun, its plain
+  # `bun install`, then the tests and a real boot-and-request smoke test.
+  railway-runtime:
+    name: backend on Railway's Bun (boot + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.1.43
+      - run: bun install
+      # Explicit files: this older Bun treats a path-like filter as an entry point, and a bare
+      # `src/` filter also matches extension/src (which needs the extension's own deps).
+      - run: bun test $(find src -name '*.test.ts' | sort | sed 's|^|./|')
+      - run: ./scripts/smoke-boot.sh
+
   backend:
     name: backend (bun · tsc · test)
     runs-on: ubuntu-latest
