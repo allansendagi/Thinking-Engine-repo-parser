@@ -19,7 +19,7 @@ import { dirname } from "node:path";
 //
 // The token registry MUST outlive a redeploy or every issued credential 401s. Same resolution
 // order as the per-user DBs: explicit override, else Railway's attached volume, else local.
-function registryPath(): string {
+export function registryPath(): string {
   if (process.env.THREAD_REGISTRY_PATH) return process.env.THREAD_REGISTRY_PATH;
   if (process.env.RAILWAY_VOLUME_MOUNT_PATH) {
     return `${process.env.RAILWAY_VOLUME_MOUNT_PATH}/registry.db`;
