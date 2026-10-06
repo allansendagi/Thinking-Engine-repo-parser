@@ -370,12 +370,19 @@ final class AppState: ObservableObject {
     /// each `refresh()` while it's showing.
     @Published var conversations: [ConversationSummary] = []
     @Published var conversationsLoading = false
+    /// Why the Activity feed couldn't load, shown instead of a misleading "Nothing captured yet".
+    @Published var conversationsError: String?
 
     func loadConversations() async {
         guard isPaired, reconnect == nil else { return }
         conversationsLoading = true
         defer { conversationsLoading = false }
-        if let list = try? await client.listConversations() { conversations = list }
+        do {
+            conversations = try await client.listConversations()
+            conversationsError = nil
+        } catch {
+            conversationsError = error.localizedDescription
+        }
     }
 
     /// Idea ids the user has pinned. Shown as a "Pinned" group at the top of the All tab.
