@@ -178,9 +178,14 @@ struct ConversationSummary: Codable, Identifiable {
     let firstAt: String
     let lastAt: String
     let ideas: [IdeaRef]
+    /// Opening of the conversation and how many messages still wait for the AI. Optional so an
+    /// older server (before these fields) still decodes.
+    var preview: String? = nil
+    var pendingMessages: Int? = nil
 
     var id: String { conversationId }
     var sourceLabel: String { displaySourceLabel(source) ?? source.capitalized }
+    var isWaiting: Bool { (pendingMessages ?? 0) > 0 }
 }
 
 /// The captured messages behind an idea -- the "evidence" layer. Fetched on demand when the

@@ -241,11 +241,15 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
         source: string;
         messageCount: number;
         ideas: { id: string; title: string }[];
+        preview: string;
+        pendingMessages: number;
       }[];
     };
     const row = list.conversations.find((c) => c.conversationId === "conv_1");
     expect(row).toBeDefined();
     expect(row!.messageCount).toBe(1);
+    expect(row!.preview.length).toBeGreaterThan(0);
+    expect(row!.pendingMessages).toBe(0);
     expect(row!.ideas.map((i) => i.id)).toContain(ideaId);
   });
 

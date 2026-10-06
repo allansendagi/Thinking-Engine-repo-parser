@@ -290,6 +290,10 @@ export interface ConversationSummary {
   lastAt: string;
   /** Ideas this conversation moved (via an evolution step or a decision). Newest-touched first. */
   ideas: { id: string; title: string }[];
+  /** The opening of the conversation (first thing the user said), one line -- so a row says what it was about. */
+  preview: string;
+  /** Messages saved but not yet turned into ideas (AI unavailable or still working through them). */
+  pendingMessages: number;
 }
 
 /** Every conversation Thread has captured, newest activity first -- the "Activity" feed. Two
@@ -324,6 +328,22 @@ export function listConversations(db: Database): ConversationSummary[] {
     )
     .all() as { cid: string; idea_id: string; title: string }[];
 
+  const previews = new Map<string, string>();
+  for (const r of db
+    .query(
+      `SELECT conversation_id AS cid, text FROM canonical_events
+       WHERE role = 'user' ORDER BY idx ASC`,
+    )
+    .all() as { cid: string; text: string }[]) {
+    if (!previews.has(r.cid)) previews.set(r.cid, r.text.replace(/\s+/g, " ").trim().slice(0, 140));
+  }
+  const pending = new Map(
+    (db.query("SELECT conversation_id AS cid, COUNT(*) AS n FROM pending_extraction GROUP BY conversation_id").all() as {
+      cid: string;
+      n: number;
+    }[]).map((r) => [r.cid, r.n]),
+  );
+
   const ideasByConv = new Map<string, { id: string; title: string }[]>();
   for (const l of links) {
     const list = ideasByConv.get(l.cid) ?? [];
@@ -339,6 +359,8 @@ export function listConversations(db: Database): ConversationSummary[] {
     firstAt: c.first_at,
     lastAt: c.last_at,
     ideas: ideasByConv.get(c.cid) ?? [],
+    preview: previews.get(c.cid) ?? "",
+    pendingMessages: pending.get(c.cid) ?? 0,
   }));
 }
 

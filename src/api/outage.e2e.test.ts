@@ -115,8 +115,10 @@ describe("the September outage, end to end", () => {
     expect(((await imported.json()) as { extractionPending: number }).extractionPending).toBe(1);
 
     // Everything is in the activity feed; no ideas yet; the app is told plainly.
-    const convs = await get<{ conversations: { id: string }[] }>("/v1/conversations");
+    const convs = await get<{ conversations: { preview: string; pendingMessages: number }[] }>("/v1/conversations");
     expect(convs.conversations.length).toBe(3);
+    // Each row says what it was about and that it's saved, waiting for the AI.
+    expect(convs.conversations.every((c) => c.preview.length > 0 && c.pendingMessages > 0)).toBe(true);
     const health = await get<{ healthy: boolean; pendingExtraction: { count: number; lastError: string } }>("/v1/capture-health");
     expect(health.healthy).toBe(false);
     expect(health.pendingExtraction.count).toBe(5); // 2 live + 2 pasted + 1 imported
