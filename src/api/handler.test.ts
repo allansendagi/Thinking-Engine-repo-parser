@@ -1190,3 +1190,13 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     }
   });
 });
+
+describe("deep health check", () => {
+  test("reports whether each AI model the captures depend on actually answers", async () => {
+    const failing = { complete: async () => { throw Object.assign(new Error("model: claude-old not found"), { status: 404 }); } };
+    const handler = createRequestHandler({ extraction: new FakeProvider(["ok"]), reasoning: failing });
+    const body = (await (await handler(new Request("http://x/v1/health?deep=1"))).json()) as { models: Record<string, string> };
+    expect(body.models.extraction).toBe("ok");
+    expect(body.models.reasoning).toContain("404: model: claude-old not found");
+  });
+});
