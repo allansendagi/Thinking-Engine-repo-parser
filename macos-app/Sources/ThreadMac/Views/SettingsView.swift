@@ -218,7 +218,7 @@ struct SettingsView: View {
 
     @ViewBuilder private var footer: some View {
         HStack {
-            Button("Quit Thread") { NSApp.terminate(nil) }
+            Button("Quit Thread") { AppQuit.now() }
                 .controlSize(.small)
                 .keyboardShortcut("q", modifiers: .command)
             Spacer()
