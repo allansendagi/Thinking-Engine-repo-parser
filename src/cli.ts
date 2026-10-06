@@ -221,6 +221,36 @@ switch (command) {
     console.log("");
     break;
   }
+  case "mine-v2": {
+    // Run the v2 (consolidation) miner in shadow for one user and compare it with the serving v1
+    // ideas. Writes only the shadow tables (idea_view_v2, mining_runs); serving is untouched.
+    //   bun src/cli.ts mine-v2 --user=user_<24hex>
+    const only = process.argv.find((a) => a.startsWith("--user="))?.split("=")[1];
+    if (!only) {
+      console.error("Usage: bun src/cli.ts mine-v2 --user=user_<24hex>");
+      process.exit(1);
+    }
+    const { openUserDb } = await import("./db/tenancy");
+    const { loadIdeas } = await import("./db/queries");
+    const { runShadowMining } = await import("./mining/shadow");
+    const db = openUserDb(only);
+    try {
+      const v1 = loadIdeas(db);
+      const { run, ideas } = runShadowMining(db);
+      console.log(`v1 (serving): ${v1.length} ideas`);
+      console.log(`v2 (shadow):  ${run.ideas} ideas + ${run.sparks} sparks from ${run.thoughts} thoughts`);
+      console.log(`              vectors: ${run.vectors} (${run.vectorModel ?? "none -- words only; open Thread for Mac to embed on-device"}), ${run.ms}ms\n`);
+      for (const i of ideas.filter((x) => !x.isSpark).sort((a, b) => b.thoughtIds.length - a.thoughtIds.length).slice(0, 25)) {
+        const open = i.node.openLoops.filter((l) => !l.resolved).length;
+        console.log(`• ${i.node.title}  [${i.thoughtIds.length} thoughts, ${i.node.decisions.length} decisions, ${open} open]`);
+        console.log(`    now: ${i.node.currentFormulation}`);
+      }
+    } finally {
+      db.close();
+    }
+    break;
+  }
+
   case "dedup": {
     // Retroactively collapse near-identical duplicate idea nodes -- the ones that predate
     // buildIdeaNode's in-pipeline lexical backstop. Dry-run by default; --apply writes, and only

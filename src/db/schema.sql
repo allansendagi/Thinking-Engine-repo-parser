@@ -163,3 +163,26 @@ CREATE TABLE IF NOT EXISTS thought_vectors (
   created_at TEXT NOT NULL,
   PRIMARY KEY (thought_id, model)
 );
+
+-- v2 idea mining output, computed in SHADOW next to the serving idea_nodes (mining/shadow.ts):
+-- recomputed from all thoughts after captures, compared against v1, and not served until it
+-- scores better. One row per idea or spark; `json` is the IdeaNode shape the API already serves.
+CREATE TABLE IF NOT EXISTS idea_view_v2 (
+  idea_id TEXT PRIMARY KEY,
+  is_spark INTEGER NOT NULL,
+  thought_ids TEXT NOT NULL,
+  json TEXT NOT NULL,
+  computed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mining_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  miner TEXT NOT NULL,
+  vector_model TEXT,
+  thoughts INTEGER NOT NULL,
+  vectors INTEGER NOT NULL,
+  ideas INTEGER NOT NULL,
+  sparks INTEGER NOT NULL,
+  ms INTEGER NOT NULL,
+  ran_at TEXT NOT NULL
+);

@@ -102,3 +102,64 @@ export const v1Offline: Miner = v1Miner("v1 (offline: answer-key extraction, wor
 }));
 
 export type { CognitiveEvent };
+
+// ------------------------------------------------------------------------------ v2 (consolidation)
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { consolidate, type MiningThought } from "../mining/consolidate";
+
+/** Apple on-device vectors for the bench corpus, if they've been generated (bench-vectors
+ *  workflow / BenchVectorsTests), keyed by statement text. */
+export function loadBenchVectors(): { model: string; byText: Map<string, number[]> } | null {
+  const path = join(import.meta.dir, "vectors.apple.json");
+  if (!existsSync(path)) return null;
+  const raw = JSON.parse(readFileSync(path, "utf-8")) as { model: string; vectors: Record<string, number[]> };
+  return { model: raw.model, byText: new Map(Object.entries(raw.vectors)) };
+}
+
+/** Answer-key thoughts in the shape the v2 miner consumes (same as what the server extracts). */
+export function oracleMiningThoughts(s: Scenario): MiningThought[] {
+  const events = new Map(s.events.map((e) => [e.id, e]));
+  return s.thoughts.map((t, i) => {
+    const e = events.get(t.messageId)!;
+    return {
+      id: `cog_${t.messageId}_${i}`,
+      type: t.type,
+      statement: t.statement,
+      persistence: "high",
+      sourceEventId: t.messageId,
+      conversationId: e.conversationId,
+      position: e.index,
+      createdAt: e.createdAt,
+    };
+  });
+}
+
+export function v2Miner(name: string, vectors: Map<string, number[]> | null): Miner {
+  return {
+    name,
+    async mine(s) {
+      const thoughts = oracleMiningThoughts(s);
+      const byThought = new Map<string, number[]>();
+      if (vectors) for (const t of thoughts) {
+        const v = vectors.get(t.statement);
+        if (v) byThought.set(t.id, v);
+      }
+      const ideas = consolidate(thoughts, { vectors: vectors ? byThought : undefined });
+      const msgOfThought = new Map(thoughts.map((t) => [t.id, t.sourceEventId]));
+      const mined = ideas.filter((i) => !i.isSpark).map((i) => {
+        const node = fromIdeaNode(i.node);
+        return {
+          ...node,
+          openLoops: i.node.openLoops.map((l) => ({
+            statement: l.statement,
+            resolved: l.resolved,
+            messageId: msgOfThought.get(l.id.slice("loop_".length)),
+          })),
+        };
+      });
+      const sparks = ideas.filter((i) => i.isSpark).flatMap((i) => i.thoughtIds.map((id) => msgOfThought.get(id)!));
+      return { ideas: mined, sparkMessageIds: sparks };
+    },
+  };
+}

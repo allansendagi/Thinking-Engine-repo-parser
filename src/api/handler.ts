@@ -47,6 +47,7 @@ import {
 import { ingestConversation, type IngestConversationInput } from "./ingest";
 import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
+import { scheduleShadowMining } from "../mining/shadow";
 import { parsePastedConversation } from "../import/pasteParser";
 import { importIntoDb, parseExportFile } from "../import/run";
 
@@ -572,6 +573,7 @@ export function createRequestHandler(
         // browser_extension/high downstream anyway (THREAD.md §7).
         body.capture = sanitizeCapture(body.capture);
         const result = await ingestConversation(db, body, providers);
+        scheduleShadowMining(userId, openUserDb);
         return json(result);
       }
 
@@ -667,6 +669,7 @@ export function createRequestHandler(
           );
         }
         const summary = await importIntoDb(db, events, providers);
+        scheduleShadowMining(userId, openUserDb);
         return json(summary);
       }
 

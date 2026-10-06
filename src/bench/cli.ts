@@ -7,11 +7,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createExtractionProvider, createReasoningProvider } from "../providers/anthropic";
 import { standardSuite } from "./generate";
-import { v1Miner, v1Offline, type Miner } from "./miners";
+import { loadBenchVectors, v1Miner, v1Offline, v2Miner, type Miner } from "./miners";
 import { formatTable, runBench } from "./run";
 
 const live = process.argv.includes("--live");
-const miners: Miner[] = [v1Offline];
+const apple = loadBenchVectors();
+const miners: Miner[] = [v1Offline, v2Miner("v2 (words + context)", null)];
+if (apple) miners.push(v2Miner(`v2 + Apple on-device meaning (${apple.model})`, apple.byText));
 if (live) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("--live needs ANTHROPIC_API_KEY");
   miners.push(v1Miner("v1 (live models)", () => ({ extraction: createExtractionProvider(), reasoning: createReasoningProvider() })));
