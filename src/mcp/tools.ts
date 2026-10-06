@@ -8,7 +8,8 @@ import {
 } from "../db/queries";
 import { buildThinkingState } from "../state/thinkingState";
 import { lexicalOverlap, entityOverlap, tokenize } from "../identity/signals";
-import type { IdeaNode, OpenLoop, ThinkingState } from "../types";
+import type { CognitiveEventType, IdeaNode, OpenLoop, ThinkingState } from "../types";
+import { buildThinkingMap, type ClaimRole } from "../mining/map";
 
 /**
  * The actual logic behind every MCP tool, deliberately separated from the MCP protocol wiring
@@ -301,6 +302,10 @@ export interface ContinuationPacket {
   /** Where + when the idea was last worked on, for the "Last explored" line. */
   lastExploredSource: string | null;
   lastExploredAt: string | null;
+  /** Options the person ruled out -- a fresh chat must not re-suggest them. From the thinking map. */
+  ruledOut?: string[];
+  /** Options still being weighed (claims the extractor marked as options, not yet decided). */
+  optionsOpen?: string[];
   /** The Minto-style synthesis across this idea and any others it turned out to be part of one
    *  argument with. Null whenever no candidate cluster passed the coherence check (no provider,
    *  no candidates cleared the retrieval floor, or the model itself said they don't cohere) --
@@ -733,6 +738,17 @@ export async function buildContinuationPacket(
     provider,
   );
 
+  // The IBIS side of the pyramid: what was weighed and what was ruled out.
+  const rows = db.query("SELECT id, type, role FROM cognitive_events").all() as { id: string; type: CognitiveEventType; role: ClaimRole | null }[];
+  const map = buildThinkingMap(
+    idea,
+    new Map(rows.map((r) => [r.id, r.type])),
+    new Date(),
+    new Map(rows.filter((r) => r.role).map((r) => [r.id, r.role!])),
+  );
+  const ruledOut = map.options.filter((o) => o.status === "rejected").map((o) => o.statement).slice(-3);
+  const optionsOpen = map.options.filter((o) => o.status === "open").map((o) => o.statement).slice(-3);
+
   const packet: ContinuationPacket = {
     idea: { id: idea.id, title: idea.title, state: idea.state },
     whereYouLeftOff: idea.currentFormulation,
@@ -748,6 +764,8 @@ export async function buildContinuationPacket(
     lastExploredSource,
     lastExploredAt,
     governingThought,
+    ruledOut,
+    optionsOpen,
   };
   return { text: renderPacket(packet), packet };
 }
@@ -795,6 +813,16 @@ export function renderPacket(
       "THINKING EVOLUTION",
       "(captured before source-role verification — earlier wording unavailable)",
     );
+  }
+
+  if (p.optionsOpen && p.optionsOpen.length > 0) {
+    out.push("", "OPTIONS STILL OPEN");
+    for (const o of p.optionsOpen) out.push(o);
+  }
+
+  if (p.ruledOut && p.ruledOut.length > 0) {
+    out.push("", "RULED OUT (don't re-suggest)");
+    for (const r of p.ruledOut) out.push(r);
   }
 
   if (p.unresolvedQuestions.length > 0) {

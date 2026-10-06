@@ -717,6 +717,17 @@ describe("renderPacket", () => {
     expect(text).not.toContain("Aug 11");
   });
 
+  test("the hand-off tells a fresh chat what was ruled out and what's still being weighed", () => {
+    const text = renderPacket({
+      ...basePacket([]),
+      ruledOut: ["Per-workspace billing is out; it punishes small teams."],
+      optionsOpen: ["Billing per active member."],
+    });
+    expect(text).toContain("RULED OUT (don't re-suggest)\nPer-workspace billing is out; it punishes small teams.");
+    expect(text).toContain("OPTIONS STILL OPEN\nBilling per active member.");
+    expect(renderPacket(basePacket([]))).not.toContain("RULED OUT");
+  });
+
   test("every optional section is dropped when empty", () => {
     const text = renderPacket(basePacket([]));
     for (const label of [
