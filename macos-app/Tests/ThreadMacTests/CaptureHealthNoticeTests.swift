@@ -39,13 +39,6 @@ final class CaptureHealthNoticeTests: XCTestCase {
         let n = try XCTUnwrap(makeCaptureHealthNotice(health(false, unresolved: 2, degraded: ["browser_extension"])))
         XCTAssertEqual(n.title, "Thread isn't reliably reading your browser right now")
     }
-}
-
-private extension Array where Element: Hashable {
-    func uniqued() -> [Element] {
-        var seen = Set<Element>()
-        return filter { seen.insert($0).inserted }
-    }
 
     func testCapturesWaitingForTheAIComeFirstAndReassure() throws {
         var h = health(false, unresolved: 2, degraded: ["browser_extension"])
@@ -60,5 +53,12 @@ private extension Array where Element: Hashable {
         let json = #"{"windowDays":7,"healthy":false,"sensors":[],"unresolvedConversations":0,"pendingExtraction":{"count":2,"lastError":"x","oldestQueuedAt":"2026-10-06T09:00:00Z"}}"#
         let h = try JSONDecoder().decode(CaptureHealth.self, from: Data(json.utf8))
         XCTAssertEqual(h.pendingExtraction?.count, 2)
+    }
+}
+
+private extension Array where Element: Hashable {
+    func uniqued() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
     }
 }
