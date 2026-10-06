@@ -440,9 +440,13 @@ private struct ActivityRow: View {
                     Text("\(conv.messageCount) msg")
                         .font(.system(size: 10)).monospacedDigit().foregroundStyle(Theme.ink(0.3))
                 }
+                if let p = conv.preview, !p.isEmpty {
+                    Text(p).lineLimit(2)
+                        .font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.8))
+                }
                 if conv.ideas.isEmpty {
-                    Text("No idea extracted yet")
-                        .font(.system(size: 12)).italic().foregroundStyle(Theme.ink(0.4))
+                    Text(conv.isWaiting ? "Saved · waiting for AI to find ideas" : "No ideas found in this one")
+                        .font(.system(size: 11.5)).italic().foregroundStyle(Theme.ink(0.4))
                 } else {
                     FlowChips(ideas: conv.ideas) { id in Task { await appState.openIdea(id) } }
                 }
