@@ -295,10 +295,13 @@ export function nativeIsSufficient(model: string): boolean {
  * Which stored vector model to group with: a sufficient native model first; otherwise the cloud
  * fallback if the account has it; otherwise the best partial native model; otherwise none.
  */
-export function chooseMeaningModel(models: string[]): string | null {
+export function chooseMeaningModel(models: string[], preferredVoyage: string = `voyage:${process.env.VOYAGE_MODEL ?? "voyage-4-large"}`): string | null {
   const usable = models.filter((m) => meaningWeightFor(m) > 0);
+  // An account can hold vectors from more than one Voyage model (e.g. lite from before the default
+  // changed). Take the configured one, never "whichever was stored first".
   return (
     usable.find(nativeIsSufficient) ??
+    usable.find((m) => m === preferredVoyage) ??
     usable.find((m) => m.startsWith("voyage:")) ??
     usable.find((m) => m.startsWith("apple:")) ??
     null

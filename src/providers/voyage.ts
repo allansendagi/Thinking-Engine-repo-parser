@@ -6,10 +6,12 @@ import type { EmbeddingProvider } from "./types";
  * thoughts no Mac has embedded yet, and only when VOYAGE_API_KEY is set -- unset (the default)
  * means it's never constructed and nothing leaves the server for embedding.
  *
- * Default voyage-4-lite: the current small model, with 200M free tokens per account (older
- * models like voyage-3.5-lite get none) and $0.02 per million tokens after that.
+ * Default voyage-4-large: the best on the held-out thinking bench (grouping F1 80.8% vs 75.1% for
+ * voyage-4-lite and 65.4% for Apple's on-device model; wrong merges of look-alike ideas 1 vs 8).
+ * Idea statements are a few dozen tokens, so cost is negligible: $0.12 per million tokens after
+ * 200M free tokens per model (lite is $0.02; voyage-4 $0.06). Override with VOYAGE_MODEL.
  */
-export const VOYAGE_MODEL = process.env.VOYAGE_MODEL ?? "voyage-4-lite";
+export const VOYAGE_MODEL = process.env.VOYAGE_MODEL ?? "voyage-4-large";
 
 export function voyageConfigured(): boolean {
   return !!process.env.VOYAGE_API_KEY;
