@@ -4,6 +4,7 @@ import { storeThoughtVectors } from "../db/thoughts";
 import { dismissedExamples, loadCorrections, recordCorrection } from "./corrections";
 import { loadShadowIdeas, runShadowMining, voyageFallback } from "./shadow";
 import { VoyageEmbeddingProvider } from "../providers/voyage";
+import { chooseMeaningModel } from "./consolidate";
 
 function seed() {
   const db = openDb(":memory:");
@@ -107,5 +108,16 @@ describe("shadow v2 mining", () => {
     storeThoughtVectors(db, "apple:nlcontextual.r1", [{ id: "cog_m1_0", vector: Array(16).fill(1) }]);
     expect(await voyageFallback(db, voyage)).toBe(3);
     expect(runShadowMining(db).run.vectorModel).toBe("voyage:voyage-3.5-lite");
+  });
+});
+
+describe("chooseMeaningModel", () => {
+  test("prefers the configured Voyage model over an older one stored first", () => {
+    expect(chooseMeaningModel(["voyage:voyage-4-lite", "voyage:voyage-4-large"], "voyage:voyage-4-large")).toBe("voyage:voyage-4-large");
+  });
+  test("falls back to any Voyage model, then Apple, then none", () => {
+    expect(chooseMeaningModel(["apple:ctx.r1", "voyage:voyage-4-lite"], "voyage:voyage-4-large")).toBe("voyage:voyage-4-lite");
+    expect(chooseMeaningModel(["apple:ctx.r1"], "voyage:voyage-4-large")).toBe("apple:ctx.r1");
+    expect(chooseMeaningModel([], "voyage:voyage-4-large")).toBeNull();
   });
 });
