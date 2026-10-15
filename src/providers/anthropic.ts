@@ -9,6 +9,42 @@ import type { CompletionProvider } from "./types";
 const FAST_MODEL = process.env.ANTHROPIC_FAST_MODEL ?? "claude-haiku-4-5-20251001";
 const STRONG_MODEL = process.env.ANTHROPIC_STRONG_MODEL ?? "claude-sonnet-4-5";
 
+/** Token counts for one call -- the fields of the API's `usage` we pay attention to. */
+interface Usage {
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+}
+
+/** Running totals since this process started, per model. Read via `aiUsageTotals()`. */
+const totals = new Map<string, { calls: number; input: number; output: number; cacheRead: number; cacheWrite: number }>();
+
+/**
+ * One log line per model call, plus running totals. Cost can't be managed if it can't be seen:
+ * without this, nobody could say what a message, a conversation or an import actually costs.
+ * Never throws -- accounting must not be able to break extraction.
+ */
+export function recordUsage(model: string, usage: Usage | undefined): void {
+  try {
+    if (!usage) return;
+    const input = usage.input_tokens ?? 0;
+    const output = usage.output_tokens ?? 0;
+    const cacheRead = usage.cache_read_input_tokens ?? 0;
+    const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+    const t = totals.get(model) ?? { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    t.calls++; t.input += input; t.output += output; t.cacheRead += cacheRead; t.cacheWrite += cacheWrite;
+    totals.set(model, t);
+    console.log(`[Thread] ai-usage model=${model} in=${input} out=${output} cache_read=${cacheRead} cache_write=${cacheWrite}`);
+  } catch {
+    /* accounting is best-effort */
+  }
+}
+
+export function aiUsageTotals(): Record<string, { calls: number; input: number; output: number; cacheRead: number; cacheWrite: number }> {
+  return Object.fromEntries(totals);
+}
+
 export class AnthropicProvider implements CompletionProvider {
   constructor(
     private readonly model: string,
@@ -22,6 +58,7 @@ export class AnthropicProvider implements CompletionProvider {
       system,
       messages: [{ role: "user", content: user }],
     });
+    recordUsage(this.model, response.usage);
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
       throw new Error("Anthropic response contained no text block");
