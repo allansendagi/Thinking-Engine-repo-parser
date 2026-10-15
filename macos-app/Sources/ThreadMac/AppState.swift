@@ -1033,18 +1033,19 @@ final class AppState: ObservableObject {
     /// Where the founder buys Pro / manages the account -- payment lives on the website.
     static let marketingBaseURL = "https://www.threadnow.app"
 
-    /// The Chrome Web Store listing, once the extension is published. Until then the pairing
-    /// screen points at the get-started page instead -- no dead link either way.
+    /// The Chrome Web Store listing, once the extension is published -- THE one switch for browser
+    /// capture. Set this (e.g. "https://chromewebstore.google.com/detail/<slug>/<id>") and first
+    /// run gains "Connect Browser", opening the listing and holding the pairing window open so the
+    /// installed extension connects by itself. While nil the browser is never mentioned as setup.
     static let chromeWebStoreURL: String? = nil
     static var browserExtensionURL: URL? {
         URL(string: chromeWebStoreURL ?? "\(marketingBaseURL)/get-started")
     }
 
-    /// Native-first launch. While false, Thread presents itself as working purely with the AI
-    /// apps on the Mac -- first run says "just open one", the browser is never mentioned as
-    /// setup. Flip to true when the extension is a public, one-click install and browser capture
-    /// becomes part of the story ("Thread now follows you into the browser too").
-    static let browserCapturePublic = false
+    /// Native-first launch. False until the extension is a public, one-click install (i.e. until
+    /// `chromeWebStoreURL` is set): first run says "just open one" and never mentions the browser.
+    /// Derived, not a second flag, so the listing can't go live without the button or vice versa.
+    static var browserCapturePublic: Bool { chromeWebStoreURL != nil }
 
     @Published var authBusy = false
     @Published var authError: String?
