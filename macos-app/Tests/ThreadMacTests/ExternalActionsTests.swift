@@ -24,6 +24,11 @@ final class ExternalActionsTests: XCTestCase {
         XCTAssertEqual(parse("thread://open-loops"), .openLoops)
     }
 
+    func testPair() {
+        XCTAssertEqual(parse("thread://pair"), .pair)
+        XCTAssertEqual(parse("THREAD://PAIR"), .pair)
+    }
+
     func testContinueIdea() {
         XCTAssertEqual(parse("thread://continue?idea=abc123"), .continueIdea("abc123"))
         XCTAssertEqual(parse("thread://continue/abc123"), .continueIdea("abc123"))

@@ -175,7 +175,9 @@ async function connect(): Promise<void> {
     if (res.ok) {
       await refresh();
       if (res.state.status !== "paired") {
-        showError("Thread for Mac isn't reachable. Open the app, or pair with a code below.");
+        // Same guided page as first install: it knows whether the app is missing or just needs
+        // its pairing window reopened, and says which.
+        void chrome.tabs.create({ url: chrome.runtime.getURL("dist/welcome.html") });
       }
     } else {
       showError(res.error);

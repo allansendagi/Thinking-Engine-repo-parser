@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchDesktopPairing, parsePairingString, PAIRING_URL } from "./pairing";
+import { fetchDesktopPairing, parsePairingString, PAIRING_URL, probeDesktop } from "./pairing";
 
 const VALID_ID = "user_" + "a".repeat(24);
 const VALID_TOKEN = "b".repeat(64);
@@ -65,5 +65,35 @@ describe("fetchDesktopPairing", () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ userId: "nope", token: "nope" }), { status: 200 })) as unknown as typeof fetch;
     await expect(fetchDesktopPairing()).rejects.toThrow(/malformed/);
+  });
+});
+
+describe("probeDesktop", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+  const stub = (res: Response | Error) => {
+    globalThis.fetch = (async () => {
+      if (res instanceof Error) throw res;
+      return res;
+    }) as unknown as typeof fetch;
+  };
+
+  test("absent when nothing is listening", async () => {
+    stub(new TypeError("Failed to fetch"));
+    expect(await probeDesktop()).toBe("absent");
+  });
+
+  test("closed when the app is up but the pairing window is shut (404 or 403)", async () => {
+    stub(new Response("", { status: 404 }));
+    expect(await probeDesktop()).toBe("closed");
+    stub(new Response("", { status: 403 }));
+    expect(await probeDesktop()).toBe("closed");
+  });
+
+  test("open when the app is serving credentials", async () => {
+    stub(new Response("{}", { status: 200 }));
+    expect(await probeDesktop()).toBe("open");
   });
 });

@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Welcome to Thread</title>
+    <link rel="stylesheet" href="shared.css" />
+    <style>
+      body { display: grid; place-items: center; min-height: 100vh; }
+      .card { width: min(440px, 92vw); padding: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+      h1 { font-size: 20px; margin-bottom: 10px; }
+      p { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+      .actions { display: flex; flex-direction: column; gap: 10px; }
+      a.btn { display: block; text-align: center; text-decoration: none; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); color: var(--text); font-size: 14px; }
+      a.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1 id="title">Welcome to Thread</h1>
+      <p id="body"></p>
+      <div class="actions" id="actions"></div>
+    </main>
+    <script type="module" src="welcome.js"></script>
+  </body>
+</html>

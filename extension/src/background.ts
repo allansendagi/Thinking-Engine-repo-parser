@@ -234,6 +234,12 @@ chrome.runtime.onInstalled.addListener((details) => {
     void chrome.runtime.lastError; // already exists after an update -- fine
   });
   if (details.reason === "install" || details.reason === "update") void reinjectOpenTabs();
+  // First install only: the welcome page shows the one next step (download the Mac app / one click
+  // to connect) and finishes pairing on its own -- so installing never ends at a bare
+  // "Not connected" popup.
+  if (details.reason === "install") {
+    void chrome.tabs.create({ url: chrome.runtime.getURL("dist/welcome.html") });
+  }
 });
 chrome.runtime.onStartup.addListener(() => void ensurePaired("startup"));
 

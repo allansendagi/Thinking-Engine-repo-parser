@@ -36,9 +36,9 @@ const contentResult = await build(
 
 // Background (declared type:"module" in the manifest) and popup/sidepanel (loaded via
 // <script type="module">) can use ESM.
-const moduleResult = await build(["src/background.ts", "src/popup/popup.ts", "src/sidepanel/sidepanel.ts"], "esm");
+const moduleResult = await build(["src/background.ts", "src/popup/popup.ts", "src/sidepanel/sidepanel.ts", "src/welcome/welcome.ts"], "esm");
 
-for (const file of ["src/popup/popup.html", "src/sidepanel/sidepanel.html", "src/shared.css"]) {
+for (const file of ["src/popup/popup.html", "src/sidepanel/sidepanel.html", "src/welcome/welcome.html", "src/shared.css"]) {
   copyFileSync(join(import.meta.dir, file), join(outdir, file.split("/").pop() as string));
 }
 
