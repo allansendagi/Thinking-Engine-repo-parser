@@ -82,3 +82,49 @@ describe("adoption grounding", () => {
     expect(out.events[1]!.title).toBeUndefined();
   });
 });
+
+describe("narration and duplicate hygiene", () => {
+  test("third-person narration is repaired from the person's own quoted words, capped at medium", async () => {
+    const out = await run(
+      event({
+        statement: "The user decides to bill per active member.",
+        persistence: "high",
+        persistence_reason: "makes a decision",
+      }),
+    );
+    expect(out.rejected).toEqual([]);
+    expect(out.events[0]!.statement).toBe("per active member it is");
+    expect(out.events[0]!.persistence).toBe("medium");
+    expect(out.events[0]!.persistenceReason).toContain("repaired");
+  });
+
+  test("a legitimate sentence about other people is not touched", async () => {
+    const out = await run(event({ statement: "They are overpaying for seats.", persistence: "high" }));
+    expect(out.events[0]!.statement).toBe("They are overpaying for seats.");
+    expect(out.events[0]!.persistence).toBe("high");
+  });
+
+  test("narration whose quote is too short to stand on its own is dropped", async () => {
+    const out = await run(event({ statement: "The human is asking about pricing.", evidence_quote: "do that" }));
+    expect(out.events).toEqual([]);
+    expect(out.rejected[0]!.reason).toContain("third-person");
+  });
+
+  test("the same statement twice from one message becomes one event, ignoring case and punctuation", async () => {
+    const out = await run(
+      event({ statement: "Bill per active member." }),
+      event({ statement: "bill per active member" }),
+    );
+    expect(out.events).toHaveLength(1);
+    expect(out.rejected).toHaveLength(1);
+    expect(out.rejected[0]!.reason).toContain("duplicate");
+  });
+
+  test("the same statement from two different messages is left for identity resolution", async () => {
+    const out = await run(
+      event({ statement: "Annual plans only.", source_event_id: "c1_m2", evidence_quote: "per active member it is" }),
+      event({ statement: "Annual plans only.", source_event_id: "c1_m5", evidence_quote: "annual plans only" }),
+    );
+    expect(out.events).toHaveLength(2);
+  });
+});

@@ -164,6 +164,23 @@ export function planExtractionCalls(events: CanonicalEvent[], newEventIds?: Set<
   return calls.length > 0 ? calls : [{ context: events, newIds: newEventIds }];
 }
 
+/**
+ * The prompt forbids third-person narration ("The user is asking...") and shows the model what
+ * to write instead, yet it still leaks into the graph -- a rule that lives only in a prompt isn't
+ * a rule. This is the deterministic check. It is deliberately narrow ("the/this user|human", or
+ * "user is/asks/wants..."): "They are overpaying" can be the person's own, true sentence.
+ */
+const NARRATION = /^\s*(?:(?:the|this)\s+(?:user|human)\b|user\s+(?:is|has|asks?|wants?|decides?|claims?|proposes?|needs?|seeks?|requests?)\b)/i;
+
+export function isNarration(statement: string): boolean {
+  return NARRATION.test(statement);
+}
+
+/** Same words, ignoring case, punctuation and spacing -- "I will sign the papers." == "i will sign the papers". */
+function normalizeStatement(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s+/g, " ").trim();
+}
+
 async function extractOnce(
   contextEvents: CanonicalEvent[],
   provider: CompletionProvider,
@@ -182,6 +199,7 @@ async function extractOnce(
 
   const events: CognitiveEvent[] = [];
   const rejected: ExtractionOutcome["rejected"] = [];
+  const seen = new Set<string>();
 
   for (const [i, candidate] of parsed.events.entries()) {
     if (newEventIds && !newEventIds.has(candidate.source_event_id)) {
@@ -193,14 +211,41 @@ async function extractOnce(
       rejected.push({ event: candidate, reason: grounding.reason });
       continue;
     }
+
+    // The same thought twice from one message (e.g. "I will sign the papers" as events 1 and 2)
+    // would become two ideas. Keep the first.
+    const key = `${candidate.source_event_id}\u0000${normalizeStatement(candidate.statement)}`;
+    if (seen.has(key)) {
+      rejected.push({ event: candidate, reason: "duplicate of an event already extracted from the same message" });
+      continue;
+    }
+    seen.add(key);
+
+    // Third-person narration: the person's own verbatim words (the evidence quote, already
+    // grounded) are by construction in their voice. Use them, and never let a repaired statement
+    // outrank "medium" -- the model didn't phrase it as a thought, so it must earn its place.
+    let statement = candidate.statement;
+    let persistence = candidate.persistence;
+    let persistenceReason = candidate.persistence_reason ?? undefined;
+    if (isNarration(statement)) {
+      const quote = candidate.evidence_quote.replace(/\s+/g, " ").trim();
+      if (quote.length < 12) {
+        rejected.push({ event: candidate, reason: "third-person narration with no usable quote to repair it from" });
+        continue;
+      }
+      statement = quote;
+      if (persistence === "high") persistence = "medium";
+      persistenceReason = `${persistenceReason ? `${persistenceReason}; ` : ""}statement repaired from the evidence quote (model wrote third-person narration)`;
+    }
+
     events.push({
       id: `cog_${candidate.source_event_id}_${i}`,
       type: candidate.type,
-      statement: candidate.statement,
+      statement,
       title: candidate.title ?? undefined,
       confidence: candidate.confidence,
-      persistence: candidate.persistence,
-      persistenceReason: candidate.persistence_reason ?? undefined,
+      persistence,
+      persistenceReason,
       sourceEventId: candidate.source_event_id,
       evidenceQuote: candidate.evidence_quote,
       whyItMatters: candidate.why_it_matters ?? undefined,
