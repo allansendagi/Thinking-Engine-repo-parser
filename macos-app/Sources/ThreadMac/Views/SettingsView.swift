@@ -608,6 +608,11 @@ private struct DataSection: View {
             let panel = NSSavePanel()
             panel.nameFieldStringValue = "thread-export.json"
             panel.allowedContentTypes = [.json]
+            // Thread is a menu-bar app: without activating it, a save panel can open BEHIND other
+            // windows -- it looks like nothing happened, and each further click stacks another one.
+            // The import picker (chooseExportFile) does the same two things for the same reason.
+            NSApp.activate(ignoringOtherApps: true)
+            panel.level = .modalPanel
             guard panel.runModal() == .OK, let dest = panel.url else { return }
             do {
                 try? FileManager.default.removeItem(at: dest)
