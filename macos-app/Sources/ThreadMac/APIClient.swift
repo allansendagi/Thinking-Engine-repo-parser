@@ -31,7 +31,7 @@ final class APIClient {
         self.decoder = JSONDecoder()
     }
 
-    private func rawRequest(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
+    private func rawRequest(_ path: String, method: String = "GET", body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Data {
         // A base URL with no scheme (e.g. a bare host typed into Settings) still yields a non-nil
         // *relative* URL here, which URLSession then rejects with the opaque "unsupported URL".
         // Catch it with a clear message instead.
@@ -40,6 +40,7 @@ final class APIClient {
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
+        if let timeout { req.timeoutInterval = timeout }
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         if let credentials {
             req.setValue("Bearer \(credentials.userId):\(credentials.token)", forHTTPHeaderField: "authorization")
@@ -184,7 +185,9 @@ final class APIClient {
 
     /// A full copy of everything Thread holds for this account, as the server's JSON.
     func exportData() async throws -> Data {
-        try await rawRequest("/v1/account/export")
+        // A full copy of a large account can take well over the 60s default -- and a timeout here
+        // used to look like the button doing nothing.
+        try await rawRequest("/v1/account/export", timeout: 600)
     }
 
     /// Remove one conversation and everything derived from it.

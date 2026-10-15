@@ -756,7 +756,9 @@ export function createRequestHandler(
       if (req.method === "GET" && pathname === "/v1/account/export") {
         const out = exportAll(db);
         out.account = { email: getAccount(userId)?.email ?? null };
-        return new Response(JSON.stringify(out, null, 2), {
+        // Compact, not pretty-printed: indentation more than doubled the size of a large account's
+        // export, and a big response is what made the app's request time out.
+        return new Response(JSON.stringify(out), {
           headers: {
             "content-type": "application/json",
             "content-disposition": 'attachment; filename="thread-export.json"',
