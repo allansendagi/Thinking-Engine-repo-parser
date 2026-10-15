@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { basename } from "node:path";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { dismissedExamples } from "../mining/corrections";
 import { applyRetention } from "../db/retention";
@@ -41,6 +42,22 @@ async function exclusive<T>(db: Database, fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Backlog pause: accounts listed in THREAD_PAUSE_BACKLOG_USERS (comma-separated user ids, or `*`
+ * for everyone) keep their waiting captures in `pending_extraction` but nothing spends AI on
+ * them -- neither the background drain nor the "clear the backlog first" step of a live capture.
+ * Live captures themselves still extract. Unset the variable and the queue resumes, oldest first,
+ * exactly as before. For a large history import you don't want to pay for yet.
+ */
+export function backlogPaused(db: Database): boolean {
+  const raw = process.env.THREAD_PAUSE_BACKLOG_USERS?.trim();
+  if (!raw) return false;
+  const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (ids.includes("*")) return true;
+  const owner = basename(db.filename).replace(/\.db$/, "");
+  return ids.includes(owner);
+}
+
 export interface ExtractOutcome {
   result: PipelineResult | null;
   /** New messages saved but not yet turned into ideas. */
@@ -68,7 +85,7 @@ async function extractOrDeferLocked(
 
   // 2. Older captures still waiting go first, so ideas build in the order the thinking happened.
   //    (Before this capture is marked waiting -- otherwise the backlog pass would process it too.)
-  const backlog = deferredStatus(db).count > 0 ? await retryUnlocked(db, providers) : null;
+  const backlog = deferredStatus(db).count > 0 && !backlogPaused(db) ? await retryUnlocked(db, providers) : null;
 
   const now = new Date().toISOString();
   const mark = db.prepare(
@@ -258,7 +275,7 @@ export function scheduleDeferredRetry(
     let db: Database | null = null;
     try {
       db = open(userId);
-      if (deferredStatus(db).count === 0) return;
+      if (deferredStatus(db).count === 0 || backlogPaused(db)) return;
       const r = await drainDeferredExtraction(db, providers);
       if (r.processed > 0) console.log(`[Thread] resumed extraction for ${userId}: ${r.processed} messages, ${r.remaining} left`);
       if (r.error) console.error(`[Thread] extraction still waiting for ${userId}: ${r.error}`);
