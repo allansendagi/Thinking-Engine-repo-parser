@@ -598,16 +598,31 @@ private struct DataSection: View {
 
     private func export() {
         Task {
-            guard let tmp = await appState.exportDataFile() else { return }
+            guard let tmp = await appState.exportDataFile() else {
+                // The reason lives in dataSummaryError, which this screen only shows when the summary
+                // itself failed -- so a failed export used to look like nothing happening.
+                showExportAlert("Couldn't export your data", appState.dataSummaryError ?? "The export didn't complete. Check your connection and try again.")
+                return
+            }
+            defer { try? FileManager.default.removeItem(at: tmp) }
             let panel = NSSavePanel()
             panel.nameFieldStringValue = "thread-export.json"
             panel.allowedContentTypes = [.json]
-            if panel.runModal() == .OK, let dest = panel.url {
+            guard panel.runModal() == .OK, let dest = panel.url else { return }
+            do {
                 try? FileManager.default.removeItem(at: dest)
-                try? FileManager.default.copyItem(at: tmp, to: dest)
+                try FileManager.default.copyItem(at: tmp, to: dest)
+            } catch {
+                showExportAlert("Couldn't save the file", error.localizedDescription)
             }
-            try? FileManager.default.removeItem(at: tmp)
         }
+    }
+
+    private func showExportAlert(_ title: String, _ text: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = text
+        alert.runModal()
     }
 
     private func deleteEverything() {
