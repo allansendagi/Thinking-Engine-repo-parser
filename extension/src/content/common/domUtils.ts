@@ -43,15 +43,45 @@ function isEditable(el: HTMLElement): boolean {
   return attr === "" || attr === "true";
 }
 
+/** Caret to the end of a contenteditable, so the user lands after the inserted text. */
+function caretToEnd(el: HTMLElement): void {
+  const sel = typeof window !== "undefined" ? window.getSelection() : null;
+  if (!sel) return;
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+/**
+ * A synthetic paste of plain text. ProseMirror, Lexical, Slate and Quill all convert a
+ * `text/plain` paste into a proper document mutation through their own model -- more reliable
+ * across those editors than `execCommand` or writing `textContent`. No-ops where `ClipboardEvent`
+ * / `DataTransfer` aren't constructable (the test env).
+ */
+function pasteText(el: HTMLElement, text: string): void {
+  try {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", text);
+    el.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
+  } catch {
+    /* not constructable here -- caller falls through to execCommand / textContent */
+  }
+}
+
 /**
  * Put `text` into a message composer -- a `<textarea>`/`<input>` or a contenteditable (ProseMirror,
- * Lexical, Quill). Sets the value the way React / the framework expects (native setter + a
- * bubbling `input` event, or `execCommand("insertText")` for contenteditable so the editor's own
- * pipeline runs), focuses it, and leaves the caret at the end. Does NOT submit.
+ * Lexical, Quill). Focuses it, leaves the caret at the end, does NOT submit.
  *
- * Returns false -- writing nothing -- if `el` is neither a text field nor editable, OR if it
- * already holds a non-whitespace draft. The caller must never clobber something the user typed;
- * a false here means "fall back to the hand-off".
+ * contenteditable path tries, in order: a synthetic `text/plain` paste (the editor's own model
+ * runs), then `execCommand("insertText")`, then writing the node + a full `beforeinput`/`input`/
+ * `change` burst. It only returns true if the text actually landed -- so a caller can hand off to
+ * the Mac app rather than believe a silent failure.
+ *
+ * Returns false -- writing nothing -- if `el` is neither a text field nor editable, if it already
+ * holds a non-whitespace draft (never clobber what the user typed), or if every insertion path
+ * left the composer unchanged.
  */
 export function fillComposer(el: HTMLElement, text: string): boolean {
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
@@ -62,41 +92,49 @@ export function fillComposer(el: HTMLElement, text: string): boolean {
     if (setter) setter.call(el, text);
     else el.value = text;
     el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
     el.focus();
     try {
       el.setSelectionRange(text.length, text.length);
     } catch {
       /* some input types disallow selection */
     }
-    return true;
+    return el.value.includes(text);
   }
 
   if (isEditable(el)) {
     if ((el.textContent ?? "").trim().length > 0) return false;
     el.focus();
-    const selection = typeof window !== "undefined" ? window.getSelection() : null;
-    if (selection) {
-      const all = document.createRange();
-      all.selectNodeContents(el);
-      selection.removeAllRanges();
-      selection.addRange(all);
+
+    const has = () => (el.textContent ?? "").includes(text.slice(0, 40));
+
+    pasteText(el, text);
+
+    if (!has() && typeof document.execCommand === "function") {
+      try {
+        document.execCommand("insertText", false, text);
+      } catch {
+        /* deprecated / disabled in some builds */
+      }
     }
-    const viaCommand =
-      typeof document.execCommand === "function" && document.execCommand("insertText", false, text);
-    if (!viaCommand) {
+
+    if (!has()) {
       el.textContent = text;
-      el.dispatchEvent(
-        new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }),
-      );
+      for (const type of ["beforeinput", "input"] as const) {
+        el.dispatchEvent(
+          new InputEvent(type, {
+            bubbles: true,
+            cancelable: type === "beforeinput",
+            inputType: "insertText",
+            data: text,
+          }),
+        );
+      }
+      el.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    if (selection) {
-      const end = document.createRange();
-      end.selectNodeContents(el);
-      end.collapse(false);
-      selection.removeAllRanges();
-      selection.addRange(end);
-    }
-    return true;
+
+    caretToEnd(el);
+    return has();
   }
 
   return false;

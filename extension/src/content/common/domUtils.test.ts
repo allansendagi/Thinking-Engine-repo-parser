@@ -57,4 +57,37 @@ describe("fillComposer", () => {
     expect(fillComposer(el, "checkpoint")).toBe(false);
     expect(el.textContent).toBe("draft in progress");
   });
+
+  test("stops at the paste event when an editor handles it (doesn't also write textContent)", () => {
+    const w = setupDom("https://x.test/", `<div id="c" contenteditable="true"></div>`);
+    const el = w.document.getElementById("c") as unknown as HTMLElement;
+    // Stand in for ProseMirror/Lexical: consume the paste and apply the text through the model.
+    el.addEventListener("paste", (e) => {
+      const t = (e as ClipboardEvent).clipboardData?.getData("text/plain") ?? "";
+      el.textContent = t;
+      e.preventDefault();
+    });
+    let inputs = 0;
+    el.addEventListener("input", () => inputs++);
+
+    const ok = fillComposer(el, "resume the verifier thread");
+    expect(ok).toBe(true);
+    expect(el.textContent).toBe("resume the verifier thread"); // exactly once, no double-append
+    expect(inputs).toBe(0); // the fallback burst never ran
+  });
+
+  test("returns false when nothing takes -- so the caller hands off instead of believing a silent no-op", () => {
+    const w = setupDom("https://x.test/", `<div id="c" contenteditable="true"></div>`);
+    const el = w.document.getElementById("c") as unknown as HTMLElement;
+    // An editor that swallows every insertion path and never actually changes.
+    el.addEventListener("paste", (e) => e.preventDefault());
+    el.addEventListener("beforeinput", (e) => e.preventDefault());
+    const origExec = (w.document as unknown as { execCommand: unknown }).execCommand;
+    (w.document as unknown as { execCommand: () => boolean }).execCommand = () => false;
+    // Freeze textContent so even the last-resort write is inert.
+    Object.defineProperty(el, "textContent", { get: () => "", set: () => {}, configurable: true });
+
+    expect(fillComposer(el, "checkpoint")).toBe(false);
+    (w.document as unknown as { execCommand: unknown }).execCommand = origExec;
+  });
 });

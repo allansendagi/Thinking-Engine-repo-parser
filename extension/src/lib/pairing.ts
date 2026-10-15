@@ -64,6 +64,30 @@ export async function fetchDesktopPairing(timeoutMs = 1500): Promise<DesktopPair
   return { credentials: { userId: body.userId, token: body.token }, apiBaseUrl };
 }
 
+/**
+ * Where Thread for Mac stands, from the extension's side -- what the welcome page needs to tell
+ * the user the one next step:
+ *   "absent"  nothing is listening on the loopback port: the app isn't installed or isn't running
+ *   "closed"  the app is up but its pairing window is shut (`thread://pair` reopens it)
+ *   "open"    the app is serving credentials right now
+ * The body is never read here; adopting credentials stays `fetchDesktopPairing`'s job.
+ */
+export type DesktopState = "absent" | "closed" | "open";
+
+export async function probeDesktop(timeoutMs = 1500): Promise<DesktopState> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(PAIRING_URL, { signal: controller.signal, cache: "no-store" });
+    if (res.status === 404 || res.status === 403) return "closed";
+    return res.ok ? "open" : "closed";
+  } catch {
+    return "absent";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Parses a hand-copied pairing string of the form `user_<24hex>:<64hex>`. */
 export function parsePairingString(raw: string): Credentials | null {
   const parts = raw.trim().split(":");

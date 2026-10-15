@@ -11,7 +11,7 @@ copy stays in one place. Nothing in this folder ships in the package.
 `Thread — Continuity Layer`
 
 **Summary** (≤ 132 chars)
-`Recover and continue the thinking you do in ChatGPT, Claude, and Gemini — the thought, not the chat log.`
+`Recover and continue the thinking you do in ChatGPT, Claude, Gemini, and Perplexity — the thought, not the chat log.`
 
 **Category**
 `Productivity`
@@ -26,8 +26,8 @@ Thread keeps the ideas you develop while talking to AI.
 
 You have a long exchange in ChatGPT working out an approach. Three days later you need it back —
 not the transcript, the conclusion and the open questions. Normally that means scrolling a dead
-chat. Thread captures the idea as you go, across ChatGPT, Claude, and Gemini, and lets you pick
-it up where you left off.
+chat. Thread captures the idea as you go, across ChatGPT, Claude, Gemini, and Perplexity, and lets you
+pick it up where you left off.
 
 • Automatic capture — no button. When you develop an idea in a conversation, Thread records its
   formulation and how it evolved.
@@ -35,8 +35,10 @@ it up where you left off.
   what's still unresolved.
 • A gentle nudge to return — when you reopen a site with an unfinished thread, Thread offers to
   continue it.
-• Works with the Thread app for Mac. The extension connects to it automatically on the same
-  machine; your ideas live locally.
+• Capture from anywhere — select any AI conversation on any site, right-click, "Capture in
+  Thread".
+• Works with the Thread app for Mac. After you install the extension, a short setup page walks
+  you through it — one click to connect, then it just works.
 
 Thread is free to start: capture up to 25 ideas, unlimited recall, no account required. The app
 quietly creates a local account so it works immediately — you attach an email later only if you
@@ -44,7 +46,7 @@ want to sign in elsewhere or go Pro.
 ```
 
 **Single purpose** (Developer Dashboard requires one sentence)
-`Capture the ideas a user develops in AI chat conversations (ChatGPT, Claude, Gemini) so they can be recalled and continued later.`
+`Capture the ideas a user develops in AI chat conversations (ChatGPT, Claude, Gemini, Perplexity) so they can be recalled and continued later.`
 
 ---
 
@@ -57,8 +59,11 @@ Paste each into the matching field. Keep them literal — reviewers reject vague
 | `storage` | Stores the user's pairing credential and local UI state (last-seen resume nudge, dismissed items). No browsing data. |
 | `sidePanel` | The extension's main UI — the user's list of ideas and each idea's evolution — is shown in the Chrome side panel. |
 | `alarms` | Periodically re-checks whether an unfinished thread on the current site is old enough to surface the "continue where you left off" nudge, without polling on every page event. |
-| `host_permissions: chatgpt.com, chat.openai.com, claude.ai, gemini.google.com` | Content scripts read the visible conversation on these three AI products to extract the idea being developed. No other sites are accessed. |
-| `host_permissions: http://localhost, http://127.0.0.1` | The Thread app for Mac runs a loopback-only pairing server; the extension fetches a one-time pairing token from it during setup. Never leaves the machine. |
+| `host_permissions: chatgpt.com, chat.openai.com, claude.ai, gemini.google.com, perplexity.ai, www.perplexity.ai` | Content scripts read the visible conversation on these four AI products to extract the idea being developed. No other sites are accessed automatically. |
+| `scripting` | Re-injects the capture script into already-open tabs on these AI sites right after the extension installs or updates, so capture starts without the user reloading each tab; also reads the user's text selection for "Capture in Thread". |
+| `contextMenus` | Adds the single "Capture in Thread" item to the right-click menu on selected text, so the user can send a conversation from any site on purpose. |
+| `activeTab` | Granted only when the user clicks "Capture in Thread"; lets the extension read the selected text on that one page. No standing access to other sites. |
+| `host_permissions: http://127.0.0.1` | The Thread app for Mac runs a loopback-only pairing server; the extension fetches a one-time pairing token from it during setup. Never leaves the machine. |
 | `host_permissions: thinking-engine-repo-parser-production.up.railway.app` | The Thread backend. The extension sends extracted ideas here (authenticated with the pairing token) and reads them back for the side panel. |
 
 **Remote code:** none. All JavaScript is bundled in the package (`dist/`), built from `src/`. No
@@ -79,7 +84,8 @@ Paste each into the matching field. Keep them literal — reviewers reject vague
 ```
 The extension pairs with a companion Mac app, but you can review it without the app:
 
-1. Load the extension. Open the popup — it shows "Not connected" (expected without the app).
+1. Load the extension. A "Get Thread for Mac" setup page opens automatically, and the popup shows
+   "Not connected" (both expected without the Mac app).
 2. Click "Pair with a code instead" and paste:  user_000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000
    (a syntactically valid dummy — it will fail auth against the backend, which is the expected
    path when there is no real account; no crash, a visible error.)
@@ -100,7 +106,7 @@ No login is required to install or to review the UI. The backend URL is fixed an
 - [ ] Small promo tile 440×280 — `promo-440x280.png` (run `swift store-listing/promo.swift`)
 - [ ] Marquee 1400×560 — `promo-1400x560.png` (same script) — optional, only if featured
 - [ ] 1–5 screenshots 1280×800 — see `screenshots.md`
-- [ ] Privacy policy URL — host the extension section of the site privacy page and link it
+- [ ] Privacy policy URL — `https://www.threadnow.app/privacy` (confirm its extension section matches the disclosures above)
 
 ## Package
 

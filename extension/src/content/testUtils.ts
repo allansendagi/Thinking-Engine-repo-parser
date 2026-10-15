@@ -23,6 +23,9 @@ export function setupDom(url: string, bodyHtml: string): Window {
   g.HTMLElement = window.HTMLElement;
   g.Event = window.Event;
   g.InputEvent = window.InputEvent;
+  // The contenteditable path of `fillComposer` pastes via these; without them it silently skips.
+  g.DataTransfer = window.DataTransfer;
+  g.ClipboardEvent = window.ClipboardEvent;
 
   return window;
 }

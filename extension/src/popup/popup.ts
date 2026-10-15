@@ -72,22 +72,29 @@ function renderCapture(health: CaptureHealth, paired: boolean, queued: number): 
 
   const rows = SOURCE_ORDER.map((src) => {
     const h: SourceHealth | undefined = health[src];
-    const state = h?.state ?? "idle";
-    const cls =
-      state === "ok" ? "ok" : state === "degraded" || state === "error" ? "bad" : "muted";
-    const line =
-      state === "ok"
-        ? h?.lastCaptureAt
+    const cls = !h
+      ? "muted"
+      : h.state === "ok"
+        ? "ok"
+        : h.state === "degraded" || h.state === "error"
+          ? "bad"
+          : "muted";
+    // No entry at all = we've never heard from a content script for this tool. Almost always:
+    // the tab was open before the extension (re)loaded and needs a reload to attach.
+    const line = !h
+      ? "open a tab, or reload it if it's already open"
+      : h.state === "ok"
+        ? h.lastCaptureAt
           ? `last capture ${ago(h.lastCaptureAt)}`
           : "up to date"
-        : state === "idle"
+        : h.state === "idle"
           ? "no conversation open"
-          : (h?.detail ?? "not working");
+          : (h.detail ?? "not working");
     return `
       <div class="srow">
         <span class="sdot ${cls}"></span>
         <span class="sname">${SOURCE_LABEL[src]}</span>
-        <span class="sdetail ${state === "degraded" || state === "error" ? "warn" : ""}">${line}</span>
+        <span class="sdetail ${h && (h.state === "degraded" || h.state === "error") ? "warn" : ""}">${line}</span>
       </div>`;
   }).join("");
 
@@ -168,7 +175,9 @@ async function connect(): Promise<void> {
     if (res.ok) {
       await refresh();
       if (res.state.status !== "paired") {
-        showError("Thread for Mac isn't reachable. Open the app, or pair with a code below.");
+        // Same guided page as first install: it knows whether the app is missing or just needs
+        // its pairing window reopened, and says which.
+        void chrome.tabs.create({ url: chrome.runtime.getURL("dist/welcome.html") });
       }
     } else {
       showError(res.error);

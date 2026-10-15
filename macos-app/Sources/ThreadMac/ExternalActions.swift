@@ -27,6 +27,10 @@ enum ThreadAction: Equatable {
     /// Resolve a free-text topic to its best-matching idea, then continue it. For voice/Shortcuts,
     /// where the caller names a topic rather than an id.
     case continueTopic(String)
+    /// Open the browser-pairing window. The Chrome extension's welcome page links here when it
+    /// can't pair because the window had closed -- so installing the extension never depends on
+    /// having done it within a couple of minutes of launching the app.
+    case pair
 
     /// Parse a `thread://` URL. Returns nil for anything unrecognised.
     ///
@@ -35,6 +39,7 @@ enum ThreadAction: Equatable {
     ///   thread://loops
     ///   thread://continue?idea=<id>     thread://continue/<id>
     ///   thread://continue?topic=<text>
+    ///   thread://pair
     static func parse(_ url: URL) -> ThreadAction? {
         guard url.scheme?.lowercased() == "thread" else { return nil }
         let host = (url.host ?? "").lowercased()
@@ -70,6 +75,8 @@ enum ThreadAction: Equatable {
             if let topic = query("topic") { return .continueTopic(topic) }
             guard let id = query("idea", "id") ?? firstPath() else { return nil }
             return .continueIdea(id)
+        case "pair":
+            return .pair
         default:
             return nil
         }

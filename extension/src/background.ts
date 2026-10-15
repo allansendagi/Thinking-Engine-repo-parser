@@ -234,6 +234,12 @@ chrome.runtime.onInstalled.addListener((details) => {
     void chrome.runtime.lastError; // already exists after an update -- fine
   });
   if (details.reason === "install" || details.reason === "update") void reinjectOpenTabs();
+  // First install only: the welcome page shows the one next step (download the Mac app / one click
+  // to connect) and finishes pairing on its own -- so installing never ends at a bare
+  // "Not connected" popup.
+  if (details.reason === "install") {
+    void chrome.tabs.create({ url: chrome.runtime.getURL("dist/welcome.html") });
+  }
 });
 chrome.runtime.onStartup.addListener(() => void ensurePaired("startup"));
 
@@ -281,11 +287,14 @@ function flashBadge(text: string, color: string): void {
   setTimeout(() => void chrome.action.setBadgeText({ text: "" }), 3000);
 }
 
-// On every service-worker start (including a manual reload), tell the Mac right away if we're
-// already paired -- so "Browser connected" appears without waiting for the 1-minute alarm.
+// On every service-worker start (including a manual dev reload of an unpacked build), tell the
+// Mac we're here AND re-inject the content script into any already-open AI tab. `onInstalled`
+// doesn't fire reliably on a dev reload, so without this a reloaded extension silently stops
+// capturing from tabs that were open at the time -- the popup then shows the tool as untracked.
 void (async () => {
   const { userId, status } = await getPairingState();
   if (status === "paired" && userId) void pingDesktop(userId);
+  await reinjectOpenTabs();
 })();
 
 chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 1 });

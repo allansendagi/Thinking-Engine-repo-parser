@@ -1499,6 +1499,12 @@ final class AppState: ObservableObject {
     func perform(_ action: ThreadAction) {
         func present() { NotificationCenter.default.post(name: .threadPresentPanel, object: nil) }
 
+        // Not gated on `isPaired`: the window only ever serves credentials once there are some.
+        if action == .pair {
+            openPairingWindow(seconds: 120)
+            return
+        }
+
         guard isPaired else { present(); return }
 
         switch action {
@@ -1523,6 +1529,8 @@ final class AppState: ObservableObject {
                 await openIdea(id)
                 await continueThinking(sendTo: nil)
             }
+        case .pair:
+            break  // handled above, before the isPaired guard
         case .continueTopic(let topic):
             present()
             Task {
