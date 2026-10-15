@@ -5,7 +5,10 @@ import { ingestConversation } from "../api/ingest";
 import { importIntoDb } from "../import/run";
 import { FakeProvider } from "../providers/fake";
 import type { CompletionProvider } from "../providers/types";
-import { deferredStatus, drainDeferredExtraction, retryDeferredExtraction } from "./deferred";
+import { backlogPaused, deferredStatus, drainDeferredExtraction, retryDeferredExtraction } from "./deferred";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /** An AI provider that's down the way an unpaid account is: every call refused. */
 const unpaid: CompletionProvider = {
@@ -133,5 +136,53 @@ describe("a big backlog drains in one pass", () => {
     expect(r.processed).toBe(0);
     expect(r.error).toContain("credit balance");
     expect(r.remaining).toBe(6);
+  });
+});
+
+describe("backlog pause", () => {
+  const prev = process.env.THREAD_PAUSE_BACKLOG_USERS;
+  const restore = () => {
+    if (prev === undefined) delete process.env.THREAD_PAUSE_BACKLOG_USERS;
+    else process.env.THREAD_PAUSE_BACKLOG_USERS = prev;
+  };
+
+  test("a paused account keeps its queue untouched while a live capture still extracts", async () => {
+    // A real file named like a per-user database, so the pause can match the account id.
+    const dir = mkdtempSync(join(tmpdir(), "pause-"));
+    const db = openDb(join(dir, "user_aaaaaaaaaaaaaaaaaaaaaaaa.db"));
+    try {
+      await ingestConversation(db, capture("c1", "m1", "We should charge per seat, not a flat fee."), { extraction: unpaid, reasoning: unpaid });
+      expect(deferredStatus(db).count).toBe(1);
+
+      process.env.THREAD_PAUSE_BACKLOG_USERS = "user_aaaaaaaaaaaaaaaaaaaaaaaa";
+      const r = await ingestConversation(db, capture("c2", "m2", "Annual plans only for teams."), {
+        extraction: new FakeProvider([extraction("m2", "Annual plans only for teams.", "Annual plans only")]),
+        reasoning: new FakeProvider([newIdea]),
+      });
+      expect(r.extractionError ?? null).toBeNull();
+      expect(loadIdeas(db)).toHaveLength(1); // the live capture became an idea...
+      expect(deferredStatus(db).count).toBe(1); // ...and the old one is still waiting, unprocessed
+    } finally {
+      restore();
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("another account is not paused, and `*` pauses everyone", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pause-"));
+    const db = openDb(join(dir, "user_bbbbbbbbbbbbbbbbbbbbbbbb.db"));
+    try {
+      process.env.THREAD_PAUSE_BACKLOG_USERS = "user_aaaaaaaaaaaaaaaaaaaaaaaa";
+      expect(backlogPaused(db)).toBe(false);
+      process.env.THREAD_PAUSE_BACKLOG_USERS = "*";
+      expect(backlogPaused(db)).toBe(true);
+      delete process.env.THREAD_PAUSE_BACKLOG_USERS;
+      expect(backlogPaused(db)).toBe(false);
+    } finally {
+      restore();
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
