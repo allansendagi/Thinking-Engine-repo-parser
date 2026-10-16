@@ -42,6 +42,11 @@ final class APIClient {
         req.httpMethod = method
         if let timeout { req.timeoutInterval = timeout }
         req.setValue("application/json", forHTTPHeaderField: "content-type")
+        // Which build is talking: lets the server count active installs by version (so old ones
+        // that can't self-update are visible). Version only -- nothing about the person.
+        if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+            req.setValue("ThreadMac/\(v)", forHTTPHeaderField: "x-thread-app")
+        }
         if let credentials {
             req.setValue("Bearer \(credentials.userId):\(credentials.token)", forHTTPHeaderField: "authorization")
         }
