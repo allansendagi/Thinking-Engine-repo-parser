@@ -37,7 +37,7 @@ import { dataDir, openUserDb, purgeUser } from "../db/tenancy";
 import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
 import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary, scheduleRetentionSweep, setRetentionDays } from "../db/retention";
 import { storageMode } from "../db/durability";
-import { downloadSummary, isAdmin, recordDownload } from "./metrics";
+import { appVersionFrom, downloadSummary, forgetActivity, isAdmin, noteActive, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
 import { addToWaitlist, waitlistSummary } from "./waitlist";
 import {
   deleteIdea,
@@ -244,6 +244,11 @@ export function createRequestHandler(
         /* body is optional here */
       }
       const user = await createUser(undefined, deviceNameFrom(uBody, req));
+      try {
+        recordAccountCreated(appVersionFrom(req.headers.get("x-thread-app"), req.headers.get("user-agent")));
+      } catch {
+        /* metrics must never fail account creation */
+      }
       return json(user, 201);
     }
 
@@ -416,6 +421,7 @@ export function createRequestHandler(
     if (auth instanceof Response) return auth;
     const { userId, tokenHash } = auth;
     touchToken(tokenHash); // throttled last-seen bump for the session list
+    noteActive(userId, appVersionFrom(req.headers.get("x-thread-app"), req.headers.get("user-agent")));
 
     // Admin-only product metrics (THREAD_ADMIN_EMAILS). Downloads for now.
     if (req.method === "GET" && pathname === "/v1/events/downloads") {
@@ -425,7 +431,7 @@ export function createRequestHandler(
         365,
         Math.max(1, Number(url.searchParams.get("days") ?? 30) || 30),
       );
-      return json(downloadSummary(days));
+      return json({ ...downloadSummary(days), usage: usageSummary() });
     }
 
     // Admin-only: the actual waitlist -- who to onboard, not just a count. `bun src/cli.ts
@@ -578,6 +584,7 @@ export function createRequestHandler(
         );
       const removedData = purgeUser(userId);
       const removedAccount = deleteAccountRecords(userId);
+      forgetActivity(userId);
       return json({
         deleted: true,
         data: removedData,
