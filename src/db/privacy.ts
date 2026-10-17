@@ -97,6 +97,7 @@ const EXPORT_TABLES = [
   "related_ideas",
   "identity_resolutions",
   "idea_corrections",
+  "idea_verdicts",
   "pending_extraction",
 ] as const;
 
@@ -194,6 +195,20 @@ export function deleteConversation(db: Database, conversationId: string): Conver
       });
       if (mentioned) {
         db.prepare("DELETE FROM idea_corrections WHERE id = ?").run(c.id);
+        out.corrections++;
+      }
+    }
+
+    // "Keep" verdicts that mention these thoughts go with them (same rule as corrections).
+    for (const v of db.query("SELECT id, thought_ids FROM idea_verdicts").all() as { id: number; thought_ids: string }[]) {
+      let mentioned = false;
+      try {
+        mentioned = (JSON.parse(v.thought_ids) as string[]).some((t) => thoughtSet.has(t));
+      } catch {
+        mentioned = false;
+      }
+      if (mentioned) {
+        db.prepare("DELETE FROM idea_verdicts WHERE id = ?").run(v.id);
         out.corrections++;
       }
     }

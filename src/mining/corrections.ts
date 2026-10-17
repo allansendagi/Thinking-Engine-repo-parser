@@ -33,6 +33,56 @@ export function recordCorrection(
   );
 }
 
+/** A person's explicit "keep": this idea is worth having. Idempotent per idea. */
+export function recordKeep(db: Database, ideaId: string, thoughtIds: string[]): void {
+  if (db.query("SELECT 1 FROM idea_verdicts WHERE idea_id = ? AND verdict = 'keep'").get(ideaId)) return;
+  db.prepare("INSERT INTO idea_verdicts (verdict, idea_id, thought_ids, created_at) VALUES ('keep', ?, ?, ?)").run(
+    ideaId,
+    JSON.stringify(thoughtIds),
+    new Date().toISOString(),
+  );
+}
+
+export interface TasteLabels {
+  /** Thoughts from ideas the person kept. */
+  positives: Set<string>;
+  /** Thoughts from ideas the person deleted as not ideas. */
+  negatives: Set<string>;
+  /** Idea ids the person explicitly kept. */
+  keptIdeaIds: Set<string>;
+  /** Verdicts in the order given, newest last -- for the acceptance rate. */
+  history: { verdict: "keep" | "not_idea"; at: string }[];
+}
+
+/** Everything the person has said about what is, and isn't, an idea. */
+export function loadTasteLabels(db: Database): TasteLabels {
+  const out: TasteLabels = { positives: new Set(), negatives: new Set(), keptIdeaIds: new Set(), history: [] };
+  const parse = (j: string): string[] => {
+    try {
+      return JSON.parse(j) as string[];
+    } catch {
+      return [];
+    }
+  };
+  for (const r of db.query("SELECT idea_id, thought_ids, created_at FROM idea_verdicts WHERE verdict = 'keep' ORDER BY id").all() as {
+    idea_id: string; thought_ids: string; created_at: string;
+  }[]) {
+    out.keptIdeaIds.add(r.idea_id);
+    for (const t of parse(r.thought_ids)) out.positives.add(t);
+    out.history.push({ verdict: "keep", at: r.created_at });
+  }
+  for (const r of db.query("SELECT thought_ids, created_at FROM idea_corrections WHERE kind = 'not_idea' ORDER BY id").all() as {
+    thought_ids: string; created_at: string;
+  }[]) {
+    for (const t of parse(r.thought_ids)) out.negatives.add(t);
+    out.history.push({ verdict: "not_idea", at: r.created_at });
+  }
+  out.history.sort((a, b) => a.at.localeCompare(b.at));
+  // A thought judged both ways (kept once, then deleted) takes the later word: the deletion.
+  for (const t of out.negatives) out.positives.delete(t);
+  return out;
+}
+
 export interface LearnedCorrections {
   constraints: Constraints;
   /** Thoughts from ideas the person deleted -- never mined into an idea again. */

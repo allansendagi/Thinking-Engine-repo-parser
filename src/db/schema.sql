@@ -205,6 +205,19 @@ CREATE TABLE IF NOT EXISTS idea_corrections (
 );
 CREATE INDEX IF NOT EXISTS idx_idea_corrections_kind ON idea_corrections(kind);
 
+-- A person's explicit "keep" on an idea: the positive half of what Thread learns about how they
+-- think (the negative half is a `not_idea` correction). Kept in its own table because the
+-- corrections table's `kind` CHECK cannot be widened on existing databases. Recorded against the
+-- idea's THOUGHTS, like corrections, and removed with them when a conversation is deleted.
+CREATE TABLE IF NOT EXISTS idea_verdicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  verdict TEXT NOT NULL CHECK (verdict IN ('keep')),
+  idea_id TEXT NOT NULL,
+  thought_ids TEXT NOT NULL,          -- JSON array: the idea's thoughts when confirmed
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_idea_verdicts_idea ON idea_verdicts(idea_id);
+
 -- Captured messages whose idea extraction hasn't run yet: the model was unavailable (billing,
 -- outage, rate limit) when they arrived. The messages themselves are already in canonical_events
 -- -- a capture is never lost to an AI failure -- and these rows are retried until they succeed.

@@ -58,7 +58,8 @@ import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
 import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
-import { ideaThoughtIds, recordCorrection } from "../mining/corrections";
+import { ideaThoughtIds, recordCorrection, recordKeep } from "../mining/corrections";
+import { tasteReport } from "../taste/taste";
 import { redactDeep, redactSecrets } from "../capture/redact";
 import { parsePastedConversation } from "../import/pasteParser";
 import { importIntoDb, parseExportFile } from "../import/run";
@@ -740,6 +741,13 @@ export function createRequestHandler(
         return json(summary);
       }
 
+      // What Thread has learned about what this person keeps: a tier per idea (confirmed / likely /
+      // unsure / unlikely / suggested -- "unlikely" is the Maybe tray, never a deletion), readiness,
+      // and the acceptance rate (share of the last 20 verdicts that were Keep).
+      if (req.method === "GET" && pathname === "/v1/taste") {
+        return json(tasteReport(db));
+      }
+
       if (req.method === "GET" && pathname === "/v1/ideas") {
         const q = url.searchParams.get("q") ?? "";
         return json(searchIdeas(db, q));
@@ -847,14 +855,21 @@ export function createRequestHandler(
 
       if (req.method === "PATCH" && ideaMatch && !ideaMatch[2]) {
         const ideaId = decodePathId(ideaMatch[1] as string);
-        let body: { state?: string; title?: string };
+        let body: { state?: string; title?: string; verdict?: string };
         try {
-          body = (await req.json()) as { state?: string; title?: string };
+          body = (await req.json()) as { state?: string; title?: string; verdict?: string };
         } catch {
           return error(400, "Invalid JSON body");
         }
-        if (body.state === undefined && body.title === undefined) {
-          return error(400, "Provide at least one of: state, title");
+        if (body.state === undefined && body.title === undefined && body.verdict === undefined) {
+          return error(400, "Provide at least one of: state, title, verdict");
+        }
+        // "Keep": the person confirms this idea is worth having. The other half of "Not an idea"
+        // (DELETE). Together they are what Thread learns about how this person thinks.
+        if (body.verdict !== undefined) {
+          if (body.verdict !== "keep") return error(400, 'verdict must be "keep" (use DELETE for "not an idea")');
+          if (!getIdea(db, ideaId)) return error(404, "Idea not found");
+          recordKeep(db, ideaId, ideaThoughtIds(db, ideaId));
         }
         if (body.state !== undefined) {
           if (!VALID_IDEA_STATES.includes(body.state as IdeaState)) {
