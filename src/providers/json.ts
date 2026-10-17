@@ -1,5 +1,5 @@
 import type { ZodType, ZodTypeDef } from "zod";
-import type { CompletionProvider } from "./types";
+import type { CompleteOptions, CompletionProvider } from "./types";
 
 /**
  * Pull the JSON object out of a model reply: a fenced ```json block if there is one, else the
@@ -27,8 +27,9 @@ export async function completeJson<T>(
   user: string,
   maxTokens: number,
   schema: ZodType<T, ZodTypeDef, unknown>,
+  options?: CompleteOptions,
 ): Promise<T> {
-  const first = await provider.complete(system, user, maxTokens);
+  const first = await provider.complete(system, user, maxTokens, options);
   try {
     return schema.parse(extractJson(first));
   } catch (err) {
@@ -37,6 +38,7 @@ export async function completeJson<T>(
       system,
       `${user}\n\nYour previous reply could not be used (${problem}). Reply again with ONLY the JSON object in the exact shape specified -- no prose, no code fence.`,
       maxTokens,
+      options, // the retry only APPENDS to `user`, so the same prefix is still a cache hit
     );
     return schema.parse(extractJson(retry));
   }

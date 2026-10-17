@@ -186,3 +186,70 @@ describe("backlog pause", () => {
     }
   });
 });
+
+describe("coding-assistant sessions wait for quiet", () => {
+  const agentCapture = (conversationId: string, id: string, text: string) => ({ ...capture(conversationId, id, text), source: "claude_code" as const });
+  const countingProvider = () => {
+    let n = 0;
+    return { calls: () => n, provider: { async complete() { n++; return extraction("m1", "Charge per seat rather than a flat fee.", "charge per seat"); } } as CompletionProvider };
+  };
+  const prev = process.env.THREAD_AGENT_QUIET_MINUTES;
+  const restore = () => { if (prev === undefined) delete process.env.THREAD_AGENT_QUIET_MINUTES; else process.env.THREAD_AGENT_QUIET_MINUTES = prev; };
+
+  test("an active session is stored and queued without spending a model call", async () => {
+    delete process.env.THREAD_AGENT_QUIET_MINUTES;
+    const db = openDb(":memory:");
+    const c = countingProvider();
+    const r = await ingestConversation(db, agentCapture("s1", "m1", "We should charge per seat, not a flat fee."), { extraction: c.provider, reasoning: new FakeProvider([newIdea]) });
+    expect(c.calls()).toBe(0);
+    expect(r.extractionPending).toBe(1);
+    expect(r.extractionError ?? null).toBeNull();
+    expect(loadIdeas(db)).toHaveLength(0);
+    expect(deferredStatus(db).count).toBe(1);
+  });
+
+  test("it is processed, once, after the quiet period -- and not before", async () => {
+    delete process.env.THREAD_AGENT_QUIET_MINUTES;
+    const db = openDb(":memory:");
+    const c = countingProvider();
+    const providers = { extraction: c.provider, reasoning: new FakeProvider([newIdea]) };
+    await ingestConversation(db, agentCapture("s1", "m1", "We should charge per seat, not a flat fee."), providers);
+    const early = await retryDeferredExtraction(db, providers, 10, Date.now() + 60_000);
+    expect(early).toMatchObject({ processed: 0, waiting: 1 });
+    expect(c.calls()).toBe(0);
+    const later = await retryDeferredExtraction(db, providers, 10, Date.now() + 11 * 60_000);
+    expect(later.processed).toBe(1);
+    expect(c.calls()).toBe(1);
+    expect(loadIdeas(db)).toHaveLength(1);
+  });
+
+  test("the drain loop stops when only active sessions are left (it does not spin)", async () => {
+    delete process.env.THREAD_AGENT_QUIET_MINUTES;
+    const db = openDb(":memory:");
+    const c = countingProvider();
+    const providers = { extraction: c.provider, reasoning: new FakeProvider([newIdea]) };
+    await ingestConversation(db, agentCapture("s1", "m1", "We should charge per seat, not a flat fee."), providers);
+    let ticks = 0;
+    const r = await drainDeferredExtraction(db, providers, 240_000, 5, () => { ticks++; return Date.now() + ticks; });
+    expect(r.processed).toBe(0);
+    expect(r.remaining).toBe(1);
+    expect(ticks).toBeLessThan(6); // a spinning loop would tick until the 4-minute budget ran out
+  });
+
+  test("browser chats are unaffected, and THREAD_AGENT_QUIET_MINUTES=0 turns the wait off", async () => {
+    const db = openDb(":memory:");
+    const c = countingProvider();
+    await ingestConversation(db, capture("b1", "m1", "We should charge per seat, not a flat fee."), { extraction: c.provider, reasoning: new FakeProvider([newIdea]) });
+    expect(c.calls()).toBe(1); // source "claude" (browser): immediate
+
+    process.env.THREAD_AGENT_QUIET_MINUTES = "0";
+    try {
+      const db2 = openDb(":memory:");
+      const c2 = countingProvider();
+      await ingestConversation(db2, agentCapture("s2", "m1", "We should charge per seat, not a flat fee."), { extraction: c2.provider, reasoning: new FakeProvider([newIdea]) });
+      expect(c2.calls()).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+});
