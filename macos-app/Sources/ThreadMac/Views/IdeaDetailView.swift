@@ -150,7 +150,7 @@ struct IdeaDetailView: View {
                     }
                 }
                 Divider()
-                Button("Delete idea", role: .destructive) { Task { await appState.deleteSelected() } }
+                IdeaVerdictItems(ideaId: trace.idea.id)
             } label: {
                 Glyph(kind: .ellipsis, size: 12).foregroundStyle(Theme.ink(0.4))
                     .frame(width: 16, height: 16)

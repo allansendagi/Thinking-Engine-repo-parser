@@ -321,6 +321,9 @@ final class AppState: ObservableObject {
     @Published var searchQuery: String = ""
     @Published var searchResults: [SearchResult] = []
     @Published var thinkingState: ThinkingStateResponse?
+    /// What Thread has learned about which ideas this person keeps (see Taste.swift). Nil until the
+    /// first sync, or against an older backend -- everything is then just a suggestion.
+    @Published var taste: TasteReport?
     @Published var selectedIdeaId: String?
     @Published var selectedTrace: IdeaTrace?
 
@@ -1457,6 +1460,7 @@ final class AppState: ObservableObject {
         if !isOffline { let c = client; Task.detached { await ThoughtVectorSync.shared.run(client: c) } }
         await refreshAccount()
         await refreshCaptureHealth()
+        await refreshTaste()
         if listTab == .all, allMode == .activity { await loadConversations() }
     }
 
@@ -1645,6 +1649,8 @@ final class AppState: ObservableObject {
             if let j = localGraph.ideas[i].openQuestions.firstIndex(where: { $0.id == loopId }) {
                 localGraph.ideas[i].openQuestions[j].resolved = resolved
             }
+        case .keep:
+            break   // an on-device-only idea has no server verdict to send
         case .delete:
             localGraph.ideas.remove(at: i)
         }
@@ -1664,8 +1670,18 @@ final class AppState: ObservableObject {
 
     func deleteSelected() async {
         guard let id = selectedIdeaId else { return }
+        notAnIdea(id)
+    }
+
+    /// "Keep": this idea is worth having. Applies at once and syncs in the background.
+    func keepIdea(_ id: String) {
+        enqueueEdit(.keep(id))
+    }
+
+    /// "Not an idea": removes it now, and tells the server so it stops proposing things like it.
+    func notAnIdea(_ id: String) {
         snapshot.traces[id] = nil
-        closeIdea()
+        if selectedIdeaId == id { closeIdea() }
         enqueueEdit(.delete(id))
     }
 
@@ -1711,6 +1727,8 @@ final class AppState: ObservableObject {
             _ = try await client.setIdeaState(id: edit.ideaId, state: state)
         case .resolveLoop(let loopId, let resolved):
             try await client.setOpenLoopResolved(id: loopId, resolved: resolved)
+        case .keep:
+            try await client.keepIdea(id: edit.ideaId)
         case .delete:
             do { try await client.deleteIdea(id: edit.ideaId) }
             catch APIError.http(404, _) { /* already gone — done */ }

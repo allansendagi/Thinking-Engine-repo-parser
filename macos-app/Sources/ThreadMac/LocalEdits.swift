@@ -15,6 +15,10 @@ struct PendingEdit: Codable, Identifiable, Equatable {
         case rename(String)
         case setState(String)
         case resolveLoop(loopId: String, resolved: Bool)
+        /// "Keep": the person confirms the idea is worth having (the positive half of "Not an
+        /// idea", which is `delete`). Changes nothing the read model shows; it only has to reach
+        /// the server, where it teaches Thread what this person keeps.
+        case keep
         case delete
     }
 
@@ -27,6 +31,9 @@ struct PendingEdit: Codable, Identifiable, Equatable {
     static func resolveLoop(_ ideaId: String, loopId: String, resolved: Bool) -> PendingEdit {
         PendingEdit(id: UUID().uuidString, ideaId: ideaId,
                     kind: .resolveLoop(loopId: loopId, resolved: resolved), createdAt: Date())
+    }
+    static func keep(_ ideaId: String) -> PendingEdit {
+        PendingEdit(id: UUID().uuidString, ideaId: ideaId, kind: .keep, createdAt: Date())
     }
     static func delete(_ ideaId: String) -> PendingEdit {
         PendingEdit(id: UUID().uuidString, ideaId: ideaId, kind: .delete, createdAt: Date())
@@ -48,6 +55,8 @@ func coalesced(_ queue: [PendingEdit], adding edit: PendingEdit) -> [PendingEdit
         q.removeAll { $0.ideaId == edit.ideaId && isSetState($0.kind) }
     case .resolveLoop(let loopId, _):
         q.removeAll { if case .resolveLoop(let l, _) = $0.kind { return l == loopId }; return false }
+    case .keep:
+        q.removeAll { $0.ideaId == edit.ideaId && isKeep($0.kind) }
     }
     q.append(edit)
     return q
@@ -55,6 +64,7 @@ func coalesced(_ queue: [PendingEdit], adding edit: PendingEdit) -> [PendingEdit
 
 private func isRename(_ k: PendingEdit.Kind) -> Bool { if case .rename = k { return true }; return false }
 private func isSetState(_ k: PendingEdit.Kind) -> Bool { if case .setState = k { return true }; return false }
+private func isKeep(_ k: PendingEdit.Kind) -> Bool { if case .keep = k { return true }; return false }
 
 func applyAll(_ edits: [PendingEdit], to state: ThinkingStateResponse) -> ThinkingStateResponse {
     edits.reduce(state) { apply($1.kind, to: $0, ideaId: $1.ideaId) }
@@ -72,6 +82,8 @@ func apply(_ kind: PendingEdit.Kind, to state: ThinkingStateResponse, ideaId: St
         ideas = ideas.map { $0.id == ideaId ? $0.with(state: s) : $0 }
     case .resolveLoop(let loopId, let resolved):
         loops = loops.map { $0.loopId == loopId ? $0.with(resolved: resolved) : $0 }
+    case .keep:
+        break   // nothing in the read model changes; the verdict only has to reach the server
     case .delete:
         ideas.removeAll { $0.id == ideaId }
         loops.removeAll { $0.ideaId == ideaId }
@@ -95,6 +107,7 @@ func applyAll(_ edits: [PendingEdit], to trace: IdeaTrace) -> IdeaTrace {
             return IdeaTrace(idea: t.idea.with(loops: t.idea.openLoops.map {
                 $0.id == lid ? $0.with(resolved: r) : $0
             }), provenance: t.provenance)
+        case .keep:                  return t
         case .delete:                return t   // the detail closes on delete; nothing to overlay
         }
     }
