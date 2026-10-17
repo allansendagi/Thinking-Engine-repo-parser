@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { runPipeline } from "./pipeline";
 import { FakeProvider } from "../providers/fake";
 import type { CanonicalEvent } from "../types";
+import { SIGNAL_GATE_VERSION } from "../types";
 
 function extractionResponse(events: object[]): string {
   return JSON.stringify({ events });
@@ -152,7 +153,7 @@ describe("runPipeline (FakeProvider, no API key)", () => {
     expect(result.cognitiveEvents).toHaveLength(0);
     expect(result.discardedEvents).toHaveLength(1);
     expect(result.discardedEvents[0]?.gateReason).toContain("persistence=low");
-    expect(result.discardedEvents[0]?.gateVersion).toBe(2);
+    expect(result.discardedEvents[0]?.gateVersion).toBe(SIGNAL_GATE_VERSION);
   });
 
   test("a medium-persistence claim is kept only when it extends an existing idea", async () => {

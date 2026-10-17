@@ -46,6 +46,29 @@ const STRUCTURAL_TYPES: ReadonlySet<CognitiveEventType> = new Set<CognitiveEvent
   "open_loop",
 ]);
 
+/**
+ * v3 -- a plain information request phrased as a question ("What does Raycast do?", "Where is
+ * Codex?", "Can you explain X"). The extraction prompt already says these are not questions the
+ * person is trying to resolve, yet the model still emits them -- and rates them persistence
+ * "high", so the persistence routing never saw them. Measured on 50 of one person's extracted
+ * thoughts: questions were kept only 20% of the time, and this narrow pattern caught 3 thoughts,
+ * all 3 not ideas, with no real idea lost. Deliberately NARROW: short, no first-person
+ * ("What should we do about X?" and "What is the minimum viable authority?" stay), and only for
+ * `question`. Blunter rules (all questions, all short statements) lost real ideas -- "Pricing
+ * communicates positioning" -- so they are NOT here; "worth keeping" is personal and is learned
+ * per person instead (see the personal-taste work).
+ */
+const LOOKUP_QUESTION =
+  /^\s*(?:(?:what|where|who|when|which)\s+(?:is|are|was|were|does|do|did)\b|(?:can|could|would|will)\s+you\b|(?:tell|show|explain|give|list|write|make)\b)/i;
+// "me"/"us" are not here: "Can you give me the clips" is exactly the request this rule is for.
+const FIRST_PERSON = /\b(?:i|i'm|i've|i'll|my|we|we're|our)\b/i;
+
+export function isLookupQuestion(event: Pick<CognitiveEvent, "type" | "statement">): boolean {
+  if (event.type !== "question") return false;
+  const s = event.statement.trim();
+  return s.length <= 100 && LOOKUP_QUESTION.test(s) && !FIRST_PERSON.test(s);
+}
+
 export type GateMode = "off" | "lenient" | "strict";
 
 export type QuickGate =
@@ -74,6 +97,13 @@ export function strongMatchScore(override?: number): number {
  */
 export function quickGate(event: CognitiveEvent, mode: GateMode = resolveMode()): QuickGate {
   if (mode === "off") return { decision: "persist" };
+
+  // Before the persistence routing: the model rates these "high", so routing on persistence alone
+  // never catches them. The reason must NOT contain the replayable marker -- an information
+  // request doesn't become an idea later; it is a permanent no, like persistence=low.
+  if (isLookupQuestion(event)) {
+    return { decision: "discard", reason: "information request, not a question the person is trying to resolve" };
+  }
 
   const persistence = event.persistence ?? "high";
   if (persistence === "high") return { decision: "persist" };
