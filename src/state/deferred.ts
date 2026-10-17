@@ -58,6 +58,20 @@ export function backlogPaused(db: Database): boolean {
   return ids.includes(owner);
 }
 
+/**
+ * Coding assistants (Cursor, Claude Code, ...) are read from local history, and each turn re-sends
+ * the WHOLE growing session. Extracting after every turn re-reads ~20K tokens each time and, in a
+ * live session, mostly finds nothing (measured: ~21K input / ~17 output tokens per call). So their
+ * extraction waits for the session to go quiet, then runs once. Browser chats are unaffected.
+ * THREAD_AGENT_QUIET_MINUTES: default 10; 0 turns the wait off.
+ */
+export const AGENT_SOURCES: ReadonlySet<string> = new Set(["cursor", "claude_code", "codex", "gemini_cli", "copilot", "windsurf", "zed"]);
+
+export function agentQuietMs(): number {
+  const m = Number(process.env.THREAD_AGENT_QUIET_MINUTES ?? 10);
+  return Number.isFinite(m) && m > 0 ? m * 60_000 : 0;
+}
+
 export interface ExtractOutcome {
   result: PipelineResult | null;
   /** New messages saved but not yet turned into ideas. */
@@ -101,6 +115,15 @@ async function extractOrDeferLocked(
     return { result: null, deferred: extractIds.size, error: backlog.error };
   }
 
+  // A coding-assistant session: wait for it to go quiet (see AGENT_SOURCES). It is already marked
+  // waiting above; the retry loop picks it up once nothing new has arrived for the quiet period.
+  if (agentQuietMs() > 0 && extractIds.size > 0) {
+    const bySource = new Map(contextEvents.map((e) => [e.id, e.source as string]));
+    if ([...extractIds].every((id) => AGENT_SOURCES.has(bySource.get(id) ?? ""))) {
+      return { result: null, deferred: extractIds.size, error: null };
+    }
+  }
+
   // 3. This capture.
   try {
     const existing = new Map(loadIdeas(db).map((i) => [i.id, i]));
@@ -129,21 +152,37 @@ export function retryDeferredExtraction(
   db: Database,
   providers: PipelineProviders,
   maxConversations = 10,
-): Promise<{ processed: number; error: string | null }> {
-  return exclusive(db, () => retryUnlocked(db, providers, maxConversations));
+  now: number = Date.now(),
+): Promise<{ processed: number; error: string | null; waiting?: number }> {
+  return exclusive(db, () => retryUnlocked(db, providers, maxConversations, now));
 }
 
 async function retryUnlocked(
   db: Database,
   providers: PipelineProviders,
   maxConversations = 10,
-): Promise<{ processed: number; error: string | null }> {
-  const convs = db
+  now: number = Date.now(),
+): Promise<{ processed: number; error: string | null; waiting?: number }> {
+  const all = db
     .query(
-      "SELECT conversation_id, MIN(queued_at) AS first FROM pending_extraction GROUP BY conversation_id ORDER BY first LIMIT ?",
+      `SELECT p.conversation_id AS conversation_id, MIN(p.queued_at) AS first, MAX(p.queued_at) AS last,
+              (SELECT e.source FROM canonical_events e WHERE e.conversation_id = p.conversation_id LIMIT 1) AS source
+         FROM pending_extraction p GROUP BY p.conversation_id ORDER BY first`,
     )
-    .all(maxConversations) as { conversation_id: string }[];
-  if (convs.length === 0) return { processed: 0, error: null };
+    .all() as { conversation_id: string; last: string; source: string | null }[];
+  // A coding-assistant session that is still active waits for quiet (AGENT_SOURCES).
+  const quiet = agentQuietMs();
+  let waiting = 0;
+  const convs = all
+    .filter((c) => {
+      if (quiet > 0 && AGENT_SOURCES.has(c.source ?? "") && now - Date.parse(c.last) < quiet) {
+        waiting++;
+        return false;
+      }
+      return true;
+    })
+    .slice(0, maxConversations);
+  if (convs.length === 0) return { processed: 0, error: null, ...(waiting ? { waiting } : {}) };
   let processed = 0;
   for (const { conversation_id } of convs) {
     const ids = new Set(
@@ -176,7 +215,7 @@ async function retryUnlocked(
       return { processed, error };
     }
   }
-  return { processed, error: null };
+  return { processed, error: null, ...(waiting ? { waiting } : {}) };
 }
 
 /**
@@ -196,13 +235,16 @@ export async function drainDeferredExtraction(
   let processed = 0;
   let error: string | null = null;
   while (now() < deadline) {
-    const r = await retryDeferredExtraction(db, providers, batch);
+    const r = await retryDeferredExtraction(db, providers, batch, now());
     processed += r.processed;
     if (r.error) {
       error = r.error;
       break;
     }
     if (deferredStatus(db).count === 0) break;
+    // Only coding-assistant sessions that are still active are left: nothing more to do until they
+    // go quiet. (Without this the loop would spin until the time budget ran out.)
+    if (r.waiting && r.processed === 0) break;
   }
   return { processed, error, remaining: deferredStatus(db).count };
 }

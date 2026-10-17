@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { CompletionProvider } from "./types";
+import type { CompleteOptions, CompletionProvider } from "./types";
 
 /**
  * Model IDs are read from env with fallbacks so a stale hardcoded ID doesn't silently break
@@ -51,12 +51,23 @@ export class AnthropicProvider implements CompletionProvider {
     private readonly client: Anthropic = new Anthropic(),
   ) {}
 
-  async complete(system: string, user: string, maxTokens: number): Promise<string> {
+  async complete(system: string, user: string, maxTokens: number, options?: CompleteOptions): Promise<string> {
+    // A cached prefix covers everything before the breakpoint -- the system prompt AND the stable
+    // start of the transcript -- so a growing conversation re-reads it at ~10% of the price
+    // instead of re-paying for it on every turn.
+    const n = options?.cachePrefixChars ?? 0;
+    const content =
+      n > 0 && n < user.length
+        ? [
+            { type: "text" as const, text: user.slice(0, n), cache_control: { type: "ephemeral" as const } },
+            { type: "text" as const, text: user.slice(n) },
+          ]
+        : user;
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: maxTokens,
       system,
-      messages: [{ role: "user", content: user }],
+      messages: [{ role: "user", content }],
     });
     recordUsage(this.model, response.usage);
     const textBlock = response.content.find((b) => b.type === "text");

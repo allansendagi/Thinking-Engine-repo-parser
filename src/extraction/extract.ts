@@ -1,6 +1,6 @@
 import type { CanonicalEvent, CognitiveEvent } from "../types";
 import type { CompletionProvider } from "../providers/types";
-import { EXTRACTION_SYSTEM_PROMPT, MAX_PROMPT_MESSAGE_CHARS, buildTranscriptPrompt } from "./prompt";
+import { EXTRACTION_SYSTEM_PROMPT, MAX_PROMPT_MESSAGE_CHARS, buildTranscriptPrompt, buildTranscriptPromptParts } from "./prompt";
 import { extractionResultSchema, type ExtractedEvent } from "./schema";
 import { completeJson } from "../providers/json";
 
@@ -189,12 +189,14 @@ async function extractOnce(
 ): Promise<ExtractionOutcome> {
   const eventsById = new Map(contextEvents.map((e) => [e.id, e]));
 
+  const parts = buildTranscriptPromptParts(contextEvents, newEventIds, dismissed);
   const parsed = await completeJson(
     provider,
     EXTRACTION_SYSTEM_PROMPT,
-    buildTranscriptPrompt(contextEvents, newEventIds, dismissed),
+    parts.prefix + parts.rest,
     8192,
     extractionResultSchema,
+    parts.cachePrefixChars > 0 ? { cachePrefixChars: parts.cachePrefixChars } : undefined,
   );
 
   const events: CognitiveEvent[] = [];

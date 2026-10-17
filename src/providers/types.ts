@@ -4,8 +4,16 @@
  * aspirational. It also means the whole pipeline is testable without a live API key: swap in a
  * FakeProvider (see providers/fake.ts) that returns canned JSON.
  */
+export interface CompleteOptions {
+  /**
+   * The first N characters of `user` are an unchanging prefix (the same bytes on the next call):
+   * ask the provider to cache it. Providers that can't, ignore it.
+   */
+  cachePrefixChars?: number;
+}
+
 export interface CompletionProvider {
-  complete(system: string, user: string, maxTokens: number): Promise<string>;
+  complete(system: string, user: string, maxTokens: number, options?: CompleteOptions): Promise<string>;
 }
 
 /**

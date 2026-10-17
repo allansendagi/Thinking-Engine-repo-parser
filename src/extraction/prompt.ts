@@ -109,6 +109,52 @@ Respond with JSON matching this shape exactly, and nothing else -- no commentary
  *  the prompt. Grounding still matches quotes against the message's full text. */
 export const MAX_PROMPT_MESSAGE_CHARS = 8_000;
 
+/**
+ * Below this many characters of already-processed transcript a cache breakpoint costs more than
+ * it saves: a cache WRITE bills at 1.25x, a read at 0.1x, and the model only caches prefixes of
+ * ~4K+ tokens (the ~2.4K-token system prompt counts toward that). ~12K chars is ~3K tokens.
+ */
+export const MIN_CACHEABLE_PREFIX_CHARS = 12_000;
+
+/**
+ * The same prompt as `buildTranscriptPrompt`, laid out so a GROWING conversation reuses its prefix.
+ * Live capture re-sends the whole transcript every turn, and the old layout began with "exactly N
+ * messages, valid ids: ..." -- different every call -- so nothing before it could ever be reused
+ * (measured: ~21K input tokens per call, ~17 output). Now the unchanging part (the person's
+ * dismissals + the already-processed messages, which never change once processed) comes first, and
+ * everything that changes (the new messages and the message count / valid ids) comes last.
+ * `cachePrefixChars` > 0 only when there is enough stable prefix for caching to pay.
+ */
+export function buildTranscriptPromptParts(
+  events: CanonicalEvent[],
+  newEventIds?: Set<string>,
+  dismissed: string[] = [],
+): { prefix: string; rest: string; cachePrefixChars: number } {
+  const validIds = events.map((e) => e.id).join(", ");
+  const line = (e: CanonicalEvent) => {
+    const marker = !newEventIds || newEventIds.has(e.id) ? "[NEW]" : "[ALREADY PROCESSED]";
+    const text =
+      e.text.length > MAX_PROMPT_MESSAGE_CHARS ? `${e.text.slice(0, MAX_PROMPT_MESSAGE_CHARS)} […message truncated]` : e.text;
+    return `${marker} [${e.id}] (${e.role}, ${e.createdAt}): ${text}`;
+  };
+  const personal =
+    dismissed.length > 0
+      ? `This person has deleted these as not worth keeping. Mark similar things persistence "low" unless the person clearly cares about them now:\n${dismissed.map((d) => `- ${d}`).join("\n")}\n\n`
+      : "";
+  // The leading run of already-processed messages never changes once processed.
+  let firstNew = 0;
+  if (newEventIds) while (firstNew < events.length && !newEventIds.has(events[firstNew]!.id)) firstNew++;
+  const leading = events.slice(0, firstNew).map(line);
+  const rest = events.slice(firstNew).map(line);
+  const prefix = `${personal}Conversation transcript (complete -- the message count and the only valid ids follow it):\n\n${leading.length ? `${leading.join("\n\n")}\n\n` : ""}`;
+  const tail = `${rest.join("\n\n")}\n\nThis transcript contains exactly ${events.length} message(s), no more. The only valid ids are: ${validIds}.`;
+  return {
+    prefix,
+    rest: tail,
+    cachePrefixChars: leading.length > 0 && prefix.length >= MIN_CACHEABLE_PREFIX_CHARS ? prefix.length : 0,
+  };
+}
+
 export function buildTranscriptPrompt(events: CanonicalEvent[], newEventIds?: Set<string>, dismissed: string[] = []): string {
   const validIds = events.map((e) => e.id).join(", ");
   const lines = events.map((e) => {
