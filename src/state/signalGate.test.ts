@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { quickGate, strongMatchScore } from "./signalGate";
+import { isLookupQuestion, quickGate, strongMatchScore } from "./signalGate";
 import { SIGNAL_GATE_STRONG_MATCH_SCORE } from "../types";
 import type { CognitiveEvent, CognitiveEventType, PersistenceLevel } from "../types";
 
@@ -67,5 +67,38 @@ describe("strongMatchScore", () => {
     expect(strongMatchScore(0.4)).toBe(0.4);
     expect(strongMatchScore(-1)).toBe(SIGNAL_GATE_STRONG_MATCH_SCORE);
     expect(strongMatchScore(Number.NaN)).toBe(SIGNAL_GATE_STRONG_MATCH_SCORE);
+  });
+});
+
+describe("gate v3: lookup questions", () => {
+  const q = (statement: string, persistence: "high" | "medium" | "low" = "high") =>
+    ({ id: "c", type: "question", statement, confidence: 0.9, persistence, sourceEventId: "s", evidenceQuote: "x", additionalSourceEventIds: [] }) as never;
+
+  test("plain information requests are discarded even when the model rated them high", () => {
+    for (const s of ["What does Raycast do?", "Where is Codex?", "What does deny by default mean in the context of the NOMOS Protocol?", "Can you give me the exact clips with timestamps?"]) {
+      const g = quickGate(q(s), "lenient");
+      expect(g.decision).toBe("discard");
+    }
+  });
+
+  test("the discard is permanent: its reason is not the replayable marker", () => {
+    const g = quickGate(q("Where is Codex?"), "lenient");
+    expect(g.decision === "discard" && g.reason.includes("persist only if it extends an existing idea")).toBe(false);
+  });
+
+  test("real questions survive: first-person, strategic, or long", () => {
+    for (const s of [
+      "What should we do about the verification layer?",
+      "What is the minimum viable authority for my workshop?",
+      "Should I separate Computable Authority and Make AI Work as distinct founder positions?",
+      "How to distinguish between two statements made weeks apart that represent the same evolving idea?",
+      "Who performs the independent verification?".padEnd(130, " and why does it matter for the whole architecture"),
+    ])
+      expect(quickGate(q(s), "lenient").decision).toBe("persist");
+  });
+
+  test("only questions are affected, and mode off still persists everything", () => {
+    expect(isLookupQuestion({ type: "claim", statement: "What does Raycast do?" })).toBe(false);
+    expect(quickGate(q("Where is Codex?"), "off").decision).toBe("persist");
   });
 });
