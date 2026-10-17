@@ -227,6 +227,17 @@ final class APIClient {
         return try await request("/v1/ideas/\(Self.pathSegment(id))", method: "PATCH", body: body)
     }
 
+    /// "Keep": the person confirms an idea is worth having (`DELETE` is "not an idea").
+    func keepIdea(id: String) async throws {
+        let body = try JSONEncoder().encode(["verdict": "keep"])
+        let _: IdeaDetail = try await request("/v1/ideas/\(Self.pathSegment(id))", method: "PATCH", body: body)
+    }
+
+    /// What Thread has learned about which ideas this person keeps.
+    func getTaste() async throws -> TasteReport {
+        try await request("/v1/taste")
+    }
+
     func deleteIdea(id: String) async throws {
         struct Empty: Decodable {}
         let _: Empty = try await request("/v1/ideas/\(Self.pathSegment(id))", method: "DELETE")

@@ -76,7 +76,8 @@ struct MenuBarListView: View {
             }
             return rows.isEmpty ? [] : [IdeaRowGroup(id: "r", label: "Results", rows: rows)]
         }
-        let ideas = appState.thinkingState?.currentIdeas ?? []
+        // Ideas Thread isn't sure are yours wait in the Maybe tray below, not in the list.
+        let ideas = (appState.thinkingState?.currentIdeas ?? []).filter { !appState.maybeIdeaIds.contains($0.id) }
         switch tab {
         case .loops:
             return openLoopGroups(openLoops, flatLabel: "Open loops",
@@ -119,6 +120,11 @@ struct MenuBarListView: View {
     }
 
     private var flatIDs: [String] { groups.flatMap { $0.rows.map(\.id) } }
+
+    /// Ideas Thread isn't sure are yours to keep -- shown collapsed, below the list.
+    private var maybeRows: [IdeaRow] {
+        (appState.thinkingState?.currentIdeas ?? []).filter { appState.maybeIdeaIds.contains($0.id) }.map(ideaRow)
+    }
 
     /// "All → Activity" — the chronological feed of captured conversations. Only on the All tab.
     private var showingActivity: Bool { !searching && tab == .all && appState.allMode == .activity }
@@ -228,12 +234,17 @@ struct MenuBarListView: View {
                                             Button(appState.isPinned(r.ideaId) ? "Unpin" : "Pin to top") {
                                                 appState.togglePin(r.ideaId)
                                             }
+                                            Divider()
+                                            IdeaVerdictItems(ideaId: r.ideaId)
                                         }
                                     }
                             }
                         } header: {
                             IdeaRowSectionHeader(label: g.label)
                         }
+                    }
+                    if tab != .loops, !searching {
+                        MaybeTray(rows: maybeRows, selectedId: selection) { selection = $0.id; open($0.id) }
                     }
                 }
                 .padding(.bottom, 8)

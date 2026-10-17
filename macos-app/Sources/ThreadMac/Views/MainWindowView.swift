@@ -151,7 +151,9 @@ private struct IdeaListColumn: View {
             }
             return rows.isEmpty ? [] : [IdeaRowGroup(id: "r", label: "Results", rows: rows)]
         }
-        let rows = (appState.thinkingState?.currentIdeas ?? []).map { i -> IdeaRow in
+        let maybeIDs = appState.maybeIdeaIds
+        let visible: [IdeaSummary] = (appState.thinkingState?.currentIdeas ?? []).filter { !maybeIDs.contains($0.id) }
+        let rows = visible.map { i -> IdeaRow in
             let when = lastTouched[i.id] ?? ""
             let title = cleanIdeaTitle(i.title, fallback: i.currentFormulation)
             return IdeaRow(id: i.id, title: title,
@@ -161,6 +163,21 @@ private struct IdeaListColumn: View {
                            status: rowStatus(state: i.state, hasOpenLoop: loopIdeaIDs.contains(i.id)))
         }
         return dateBucketedGroups(rows)
+    }
+
+    /// Ideas Thread isn't sure are yours to keep -- shown collapsed, below the list.
+    private var maybeRows: [IdeaRow] {
+        let maybeIDs = appState.maybeIdeaIds
+        let maybe: [IdeaSummary] = (appState.thinkingState?.currentIdeas ?? []).filter { maybeIDs.contains($0.id) }
+        return maybe.map { i -> IdeaRow in
+            let when = lastTouched[i.id] ?? ""
+            let title = cleanIdeaTitle(i.title, fallback: i.currentFormulation)
+            return IdeaRow(id: i.id, title: title,
+                           snippet: rowSnippet(title: title, formulation: i.currentFormulation),
+                           meta: metaLine(i.sourceLabel, when),
+                           isLoop: false, ideaId: i.id, when: when,
+                           status: rowStatus(state: i.state, hasOpenLoop: loopIdeaIDs.contains(i.id)))
+        }
     }
 
     var body: some View {
@@ -188,7 +205,7 @@ private struct IdeaListColumn: View {
                         subtitle: searching ? nil : "Talk to ChatGPT, Claude, Gemini or Cursor and your first idea shows up here."
                     )
                 } else {
-                    GroupedRowScroller(groups: groups)
+                    GroupedRowScroller(groups: groups, maybeRows: searching ? [] : maybeRows)
                 }
             }
         }
@@ -228,6 +245,8 @@ private struct LoopListColumn: View {
 private struct GroupedRowScroller: View {
     @EnvironmentObject var appState: AppState
     let groups: [IdeaRowGroup]
+    /// Ideas Thread isn't sure are yours to keep -- a collapsed tray under the list. Empty: no tray.
+    var maybeRows: [IdeaRow] = []
 
     private var selection: String? { appState.selectedIdeaId }
 
@@ -249,6 +268,8 @@ private struct GroupedRowScroller: View {
                                         Button(appState.isPinned(r.ideaId) ? "Unpin" : "Pin to top") {
                                             appState.togglePin(r.ideaId)
                                         }
+                                        Divider()
+                                        IdeaVerdictItems(ideaId: r.ideaId)
                                     }
                                 }
                         }
@@ -256,6 +277,7 @@ private struct GroupedRowScroller: View {
                         IdeaRowSectionHeader(label: g.label)
                     }
                 }
+                MaybeTray(rows: maybeRows, selectedId: selection) { open($0) }
             }
             .padding(.bottom, 10)
         }
