@@ -5,6 +5,7 @@ import type { CognitiveEventType, IdeaNode } from "../types";
 import { chooseMeaningModel, consolidate, meaningWeightFor, nativeIsSufficient, type ConsolidatedIdea, type MiningThought } from "./consolidate";
 import { loadCorrections, type LearnedCorrections } from "./corrections";
 import { hasV1Backup, materializeV2, restoreV1, servesV2 } from "./serve";
+import { consolidateOffThread } from "./offThread";
 
 /**
  * v2 mining in SHADOW: recompute ideas from every stored thought with the v2 consolidation pass
@@ -74,26 +75,25 @@ export interface ShadowRun {
   ms: number;
 }
 
-export function runShadowMining(db: Database): { run: ShadowRun; ideas: ConsolidatedIdea[] } {
-  const started = performance.now();
-  const input = loadMiningInput(db);
-  const ideas = consolidate(input.thoughts, {
+function miningOptions(input: MiningInput) {
+  return {
     vectors: input.vectors,
     previousIdeaOf: input.previousIdeaOf,
     constraints: input.learned.constraints,
     meaningWeight: meaningWeightFor(input.vectorModel),
     themeThreshold: THEME_THRESHOLD,
-  });
-  // The person's own title and state win over anything derived.
+  };
+}
+
+/** Store a pass's result in the shadow view and the run log; the person's own title and state win. */
+function finishMining(db: Database, input: MiningInput, ideas: ConsolidatedIdea[], ms: number): { run: ShadowRun; ideas: ConsolidatedIdea[] } {
   for (const i of ideas) {
     const title = input.learned.titles.get(i.node.id);
     if (title) i.node.title = title;
     const state = input.learned.states.get(i.node.id);
     if (state) i.node.state = state;
   }
-  const ms = Math.round(performance.now() - started);
   const now = new Date().toISOString();
-
   db.transaction(() => {
     db.exec("DELETE FROM idea_view_v2");
     const put = db.prepare("INSERT OR REPLACE INTO idea_view_v2 (idea_id, is_spark, thought_ids, json, computed_at) VALUES (?, ?, ?, ?, ?)");
@@ -102,7 +102,6 @@ export function runShadowMining(db: Database): { run: ShadowRun; ideas: Consolid
       "INSERT INTO mining_runs (miner, vector_model, thoughts, vectors, ideas, sparks, ms, ran_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ).run("v2", input.vectorModel, input.thoughts.length, input.vectors?.size ?? 0, ideas.filter((i) => !i.isSpark).length, ideas.filter((i) => i.isSpark).length, ms, now);
   })();
-
   return {
     run: {
       thoughts: input.thoughts.length,
@@ -114,6 +113,22 @@ export function runShadowMining(db: Database): { run: ShadowRun; ideas: Consolid
     },
     ideas,
   };
+}
+
+/** One pass, inline (CLI, tests). */
+export function runShadowMining(db: Database): { run: ShadowRun; ideas: ConsolidatedIdea[] } {
+  const started = performance.now();
+  const input = loadMiningInput(db);
+  const ideas = consolidate(input.thoughts, miningOptions(input));
+  return finishMining(db, input, ideas, Math.round(performance.now() - started));
+}
+
+/** One pass with the computation on the worker thread; reads and writes stay here. */
+export async function runShadowMiningOffThread(db: Database): Promise<{ run: ShadowRun; ideas: ConsolidatedIdea[] }> {
+  const started = performance.now();
+  const input = loadMiningInput(db);
+  const ideas = await consolidateOffThread(input.thoughts, miningOptions(input));
+  return finishMining(db, input, ideas, Math.round(performance.now() - started));
 }
 
 /** The shadow view as stored -- for comparison tooling and, later, serving. */
@@ -145,50 +160,61 @@ export async function voyageFallback(db: Database, provider?: VoyageEmbeddingPro
 
 // ------------------------------------------------------------------------------ scheduling
 
-const pending = new Map<string, ReturnType<typeof setTimeout>>();
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
+const running = new Set<string>();
+/** A pass was asked for while one was running: run once more after it (true = with Voyage). */
+const again = new Map<string, boolean>();
 
-/**
- * Debounced shadow run after captures: at most one per user per `delayMs`, off the request path.
- * Disabled with THREAD_SHADOW_MINER=off. Failures are logged, never surfaced -- shadow mode must
- * not be able to affect serving.
- */
-export function scheduleShadowMining(userId: string, open: (userId: string) => Database, delayMs = 120_000): void {
-  if (process.env.THREAD_SHADOW_MINER === "off") return;
-  // An account served by v2 is regrouped NOW (~0.1s, vectors it already has), so the person never
-  // sees v1's per-message guesses in between; the delayed run below adds new thoughts' vectors.
-  if (servesV2(userId)) {
-    let db: Database | null = null;
-    try {
-      db = open(userId);
-      syncServing(userId, db, runShadowMining(db).ideas);
-    } catch (e) {
-      console.error(`[Thread] v2 serving refresh failed for ${userId}:`, e);
-    } finally {
-      db?.close();
-    }
+async function minePass(userId: string, open: (userId: string) => Database, withVoyage: boolean): Promise<void> {
+  if (running.has(userId)) {
+    // The running pass read the thoughts before this request's; one more pass after it, never two at once.
+    again.set(userId, (again.get(userId) ?? false) || withVoyage);
+    return;
   }
-  if (pending.has(userId)) return;
-  const timer = setTimeout(async () => {
-    pending.delete(userId);
-    let db: Database | null = null;
-    try {
-      db = open(userId);
+  running.add(userId);
+  let db: Database | null = null;
+  try {
+    db = open(userId);
+    if (withVoyage) {
       try {
         await voyageFallback(db);
       } catch (e) {
         console.error(`[Thread] voyage fallback failed for ${userId}:`, e); // mine on words instead
       }
-      const { run, ideas } = runShadowMining(db);
-      console.log(`[Thread] shadow v2 mining ${userId}: ${run.ideas} ideas, ${run.sparks} sparks from ${run.thoughts} thoughts (${run.vectors} vectors) in ${run.ms}ms`);
-      syncServing(userId, db, ideas);
-    } catch (e) {
-      console.error(`[Thread] shadow v2 mining failed for ${userId}:`, e);
-    } finally {
-      db?.close();
     }
+    const { run, ideas } = await runShadowMiningOffThread(db);
+    console.log(`[Thread] shadow v2 mining ${userId}: ${run.ideas} ideas, ${run.sparks} sparks from ${run.thoughts} thoughts (${run.vectors} vectors) in ${run.ms}ms`);
+    syncServing(userId, db, ideas);
+  } catch (e) {
+    console.error(`[Thread] shadow v2 mining failed for ${userId}:`, e);
+  } finally {
+    db?.close();
+    running.delete(userId);
+    if (again.has(userId)) {
+      const v = again.get(userId)!;
+      again.delete(userId);
+      void minePass(userId, open, v);
+    }
+  }
+}
+
+/**
+ * After captures and corrections: an account served by v2 is regrouped right away (vectors it
+ * already has), so the person never sees v1's per-message guesses for long; a debounced pass
+ * (at most one per user per `delayMs`) adds new thoughts' Voyage vectors and regroups again. The
+ * computation runs off the request thread. Disabled with THREAD_SHADOW_MINER=off. Failures are
+ * logged, never surfaced.
+ */
+export function scheduleShadowMining(userId: string, open: (userId: string) => Database, delayMs = 120_000): void {
+  if (process.env.THREAD_SHADOW_MINER === "off") return;
+  if (servesV2(userId)) void minePass(userId, open, false);
+  if (timers.has(userId)) return;
+  const timer = setTimeout(() => {
+    timers.delete(userId);
+    void minePass(userId, open, true);
   }, delayMs);
   (timer as { unref?: () => void }).unref?.();
-  pending.set(userId, timer);
+  timers.set(userId, timer);
 }
 
 /** Serve v2 for switched-over accounts; put v1 back for accounts switched off again. */
