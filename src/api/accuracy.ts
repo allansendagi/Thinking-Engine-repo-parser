@@ -42,10 +42,12 @@ export interface Accuracy {
 }
 
 const WEEKS = 8;
-let cache: { at: number; data: Accuracy } | null = null;
+let cache: { at: number; registry: string; data: Accuracy } | null = null;
 
 export function accuracySummary(now: Date = new Date()): Accuracy {
-  if (cache && now.getTime() - cache.at < 10 * 60_000) return cache.data;
+  // Keyed by the registry it was read from, so a cached answer never outlives a switch of data.
+  const registry = process.env.THREAD_REGISTRY_PATH ?? "";
+  if (cache && cache.registry === registry && now.getTime() - cache.at < 10 * 60_000) return cache.data;
   const reg = openMetrics();
   let users: string[];
   let operators: Set<string>;
@@ -128,6 +130,6 @@ export function accuracySummary(now: Date = new Date()): Accuracy {
     accountsRead: read,
     comparableFrom: "2026-10-19",
   };
-  cache = { at: now.getTime(), data };
+  cache = { at: now.getTime(), registry, data };
   return data;
 }

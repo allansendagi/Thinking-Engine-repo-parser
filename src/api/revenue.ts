@@ -23,12 +23,48 @@ function openRevenue(): Database {
        currency TEXT,
        interval TEXT,                 -- month | year, when the payment is for a subscription period
        subscription_id TEXT,
+       transaction_id TEXT,
        at TEXT NOT NULL
      );
      CREATE INDEX IF NOT EXISTS billing_events_at ON billing_events(at);
      CREATE INDEX IF NOT EXISTS billing_events_user ON billing_events(user_id);`,
   );
+  const cols = db.query("PRAGMA table_info(billing_events)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "transaction_id")) db.exec("ALTER TABLE billing_events ADD COLUMN transaction_id TEXT;");
+  db.exec("CREATE TABLE IF NOT EXISTS growth_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  // The Paddle account is shared with other products (its webhook gets every event in the
+  // account). Rows logged before events were filtered to Thread are dropped once and the import
+  // re-run with the filter.
+  if (!db.query("SELECT 1 FROM growth_meta WHERE key = 'billing_thread_only'").get()) {
+    db.transaction(() => {
+      db.exec("DELETE FROM billing_events WHERE user_id IS NULL OR user_id NOT IN (SELECT id FROM users)");
+      db.exec("DELETE FROM growth_meta WHERE key = 'billing_backfilled'");
+      db.prepare("INSERT INTO growth_meta (key, value) VALUES ('billing_thread_only', ?)").run(new Date().toISOString());
+    })();
+  }
   return db;
+}
+
+/** Thread's own Paddle prices -- the account is shared with other products. */
+function threadPriceIds(): Set<string> {
+  return new Set([process.env.PADDLE_PRICE_ID, process.env.PADDLE_PRICE_ID_YEARLY].filter((x): x is string => !!x));
+}
+
+/**
+ * Does this event belong to Thread? The Paddle account also sells other products, and a webhook
+ * destination receives every event in the account. Thread's if: it resolves to a Thread account
+ * (thread_user_id in custom data, or a known Thread customer), or it's for a Thread price, or it
+ * refunds a payment already logged as Thread's.
+ */
+function isThreadEvent(db: Database, event: BillingEventIn, userId: string | null): boolean {
+  if (userId) return true;
+  const d = event.data ?? {};
+  const prices = threadPriceIds();
+  const items = (d.items as { price?: { id?: string }; price_id?: string }[] | undefined) ?? [];
+  if (items.some((i) => prices.has(i.price?.id ?? i.price_id ?? ""))) return true;
+  const txn = str(d.transaction_id as string);
+  if (txn && db.query("SELECT 1 FROM billing_events WHERE transaction_id = ?").get(txn)) return true;
+  return false;
 }
 
 export interface BillingEventIn {
@@ -42,12 +78,12 @@ const str = (v: unknown) => (typeof v === "string" && v ? v : null);
 
 /** Turn one Paddle event into a log row (or null for event types that don't matter here). */
 export function billingRow(event: BillingEventIn, userId: string | null): {
-  event_id: string; kind: string; user_id: string | null; amount_minor: number | null; currency: string | null; interval: string | null; subscription_id: string | null; at: string;
+  event_id: string; kind: string; user_id: string | null; amount_minor: number | null; currency: string | null; interval: string | null; subscription_id: string | null; transaction_id: string | null; at: string;
 } | null {
   const d = event.data ?? {};
   const at = str(event.occurred_at) ?? str(d.updated_at as string) ?? new Date().toISOString();
   const id = str(event.event_id) ?? `${event.event_type}:${str(d.id as string) ?? at}`;
-  const base = { event_id: id, user_id: userId, amount_minor: null as number | null, currency: null as string | null, interval: null as string | null, subscription_id: null as string | null, at };
+  const base = { event_id: id, user_id: userId, amount_minor: null as number | null, currency: null as string | null, interval: null as string | null, subscription_id: null as string | null, transaction_id: null as string | null, at };
   switch (event.event_type) {
     case "transaction.completed": {
       const totals = ((d.details as Record<string, unknown> | undefined)?.totals ?? {}) as Record<string, unknown>;
@@ -61,6 +97,7 @@ export function billingRow(event: BillingEventIn, userId: string | null): {
         currency: str(d.currency_code),
         interval: items[0]?.price?.billing_cycle?.interval ?? (period ? "month" : null),
         subscription_id: str(d.subscription_id),
+        transaction_id: str(d.id),
       };
     }
     case "adjustment.created":
@@ -68,7 +105,7 @@ export function billingRow(event: BillingEventIn, userId: string | null): {
       if (d.action !== "refund" || (d.status !== "approved" && event.event_type === "adjustment.updated")) return null;
       const totals = (d.totals ?? {}) as Record<string, unknown>;
       const amount = Number(totals.total ?? NaN);
-      return { ...base, kind: "refund", amount_minor: Number.isFinite(amount) ? -Math.abs(amount) : null, currency: str(d.currency_code), subscription_id: str(d.subscription_id) };
+      return { ...base, kind: "refund", amount_minor: Number.isFinite(amount) ? -Math.abs(amount) : null, currency: str(d.currency_code), subscription_id: str(d.subscription_id), transaction_id: str(d.transaction_id) };
     }
     case "subscription.activated":
     case "subscription.created":
@@ -93,10 +130,13 @@ export function recordBillingEvent(event: BillingEventIn, userId: string | null)
     if (!row) return;
     const db = openRevenue();
     try {
+      if (!isThreadEvent(db, event, userId)) return; // another product in the shared account
+      // A refund's user is the user of the payment it refunds.
+      const user = row.user_id ?? (row.transaction_id ? ((db.query("SELECT user_id FROM billing_events WHERE transaction_id = ? AND kind = 'payment'").get(row.transaction_id) as { user_id: string | null } | null)?.user_id ?? null) : null);
       db.prepare(
-        `INSERT OR IGNORE INTO billing_events (event_id, kind, user_id, amount_minor, currency, interval, subscription_id, at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(row.event_id, row.kind, row.user_id, row.amount_minor, row.currency, row.interval, row.subscription_id, row.at);
+        `INSERT OR IGNORE INTO billing_events (event_id, kind, user_id, amount_minor, currency, interval, subscription_id, transaction_id, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(row.event_id, row.kind, user, row.amount_minor, row.currency, row.interval, row.subscription_id, row.kind === "payment" ? row.transaction_id : row.transaction_id, row.at);
     } finally {
       db.close();
     }
@@ -207,7 +247,7 @@ export function revenueSummary(windowDays = 30, now: Date = new Date()): Revenue
   const db = openRevenue();
   try {
     const excluded = excludedUserIds(db);
-    const ok = (u: string | null) => !u || !excluded.has(u);
+    const ok = (u: string | null) => !!u && !excluded.has(u);
     const since = new Date(now.getTime() - windowDays * 86_400_000).toISOString();
     const events = (db.query("SELECT kind, user_id, amount_minor, currency, interval, at FROM billing_events ORDER BY at").all() as {
       kind: string; user_id: string | null; amount_minor: number | null; currency: string | null; interval: string | null; at: string;

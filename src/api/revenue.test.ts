@@ -68,6 +68,26 @@ describe("billing log", () => {
   });
 });
 
+describe("shared Paddle account", () => {
+  test("another product's payments are ignored; a refund of a Thread payment is linked to its account", () => {
+    process.env.PADDLE_PRICE_ID = "pri_thread";
+    const before = revenueSummary(30, new Date("2026-10-19T12:00:00Z")).revenueMinor;
+    // NOMOS sale in the same account: no Thread user, not a Thread price.
+    recordBillingEvent({ event_id: "nomos_1", event_type: "transaction.completed", occurred_at: "2026-10-15T00:00:00Z",
+      data: { id: "txn_nomos", currency_code: "USD", details: { totals: { grand_total: "99900" } }, items: [{ price: { id: "pri_nomos" } }] } }, null);
+    // A Thread sale identified only by its price, then refunded.
+    user("user_p3", "2026-10-10T00:00:00Z", "pro", "active");
+    recordBillingEvent({ event_id: "thr_1", event_type: "transaction.completed", occurred_at: "2026-10-16T00:00:00Z",
+      data: { id: "txn_thr", currency_code: "USD", details: { totals: { grand_total: "1500" } }, items: [{ price: { id: "pri_thread" } }] } }, "user_p3");
+    recordBillingEvent({ event_id: "adj_1", event_type: "adjustment.created", occurred_at: "2026-10-17T00:00:00Z",
+      data: { action: "refund", transaction_id: "txn_thr", currency_code: "USD", totals: { total: "1500" } } }, null);
+    const r = revenueSummary(30, new Date("2026-10-19T12:00:00Z"));
+    expect(r.revenueMinor - before).toBe(1500); // the 999.00 NOMOS sale isn't Thread's
+    expect(r.refundsMinor).toBe(1500);
+    delete process.env.PADDLE_PRICE_ID;
+  });
+});
+
 describe("idea accuracy", () => {
   test("counts verdicts on served ideas by week; reviews kept apart; judges counted", () => {
     user("user_aaaaaaaaaaaaaaaaaaaaaaaa", "2026-10-01T00:00:00Z");
