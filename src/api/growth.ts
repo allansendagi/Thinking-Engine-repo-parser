@@ -204,6 +204,8 @@ export interface Growth {
   /** Accounts created in the window and how far each got (each step is a subset of "opened"). */
   funnel: {
     downloadClicks: number;
+    /** Distinct people behind those clicks (one per anonymous daily key). */
+    downloadPeople: number;
     opened: number;
     firstCapture: number;
     firstIdea: number;
@@ -235,6 +237,7 @@ export function weekOf(iso: string): string {
 
 export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
   backfillMilestones();
+  backfillDownloadSources();
   const db = openGrowth();
   try {
     const since = new Date(now.getTime() - windowDays * 86_400_000).toISOString();
@@ -243,6 +246,14 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
     const ms = db.query("SELECT user_id, kind, at FROM milestones").all() as { user_id: string; kind: Milestone; at: string }[];
     const reached = (kind: Milestone) => new Set(ms.filter((m) => m.kind === kind && ids.has(m.user_id)).map((m) => m.user_id));
     const clicks = (db.query("SELECT COUNT(*) AS n FROM download_events WHERE bot = 0 AND created_at >= ?").get(since) as { n: number }).n;
+    const people = (
+      db
+        .query(
+          `SELECT COUNT(*) AS n FROM (SELECT COALESCE(visitor || substr(created_at, 1, 10), 'row' || id) AS k
+             FROM download_events WHERE bot = 0 AND created_at >= ? GROUP BY k)`,
+        )
+        .get(since) as { n: number }
+    ).n;
 
     const active = db.query("SELECT user_id, day FROM active_days").all() as { user_id: string; day: string }[];
     const daysOf = new Map<string, string[]>();
@@ -292,6 +303,7 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
       windowDays,
       funnel: {
         downloadClicks: clicks,
+        downloadPeople: people,
         opened: users.length,
         firstCapture: reached("first_capture").size,
         firstIdea: reached("first_idea").size,
@@ -349,4 +361,52 @@ export function sendGaDownload(clientId: string | null | undefined, params: Reco
     method: "POST",
     body: JSON.stringify({ client_id: clientId, events: [{ name: "download_served", params: { ...params, engagement_time_msec: 1 } }] }),
   }).catch(() => {});
+}
+
+/** Label for clicks recorded before sources were: their visitor's first touch was never stored. */
+export const NOT_RECORDED = "Not recorded (before 19 Oct)";
+
+/**
+ * Once: give download clicks recorded before sources existed the best source the data allows.
+ * Each kept the page that linked to /download/mac: when that's an external site (a direct link
+ * shared on X, a blog...), that site gets the credit; when it's Thread's own site or nothing, the
+ * visitor's real origin was never recorded and the row says exactly that -- never a guess.
+ */
+export function backfillDownloadSources(): number {
+  const db = openGrowth();
+  try {
+    if (db.query("SELECT 1 FROM growth_meta WHERE key = 'download_sources_backfilled'").get()) return 0;
+    const rows = db.query("SELECT id, referrer FROM download_events WHERE source IS NULL").all() as { id: number; referrer: string | null }[];
+    const put = db.prepare("UPDATE download_events SET source = ? WHERE id = ?");
+    db.transaction(() => {
+      for (const r of rows) {
+        const b = sourceBucket(null, r.referrer);
+        put.run(b === "Direct" ? NOT_RECORDED : b, r.id);
+      }
+      db.prepare("INSERT OR REPLACE INTO growth_meta (key, value) VALUES ('download_sources_backfilled', ?)").run(new Date().toISOString());
+    })();
+    return rows.length;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * An anonymous key for "the same person today": a hash of a secret salt (kept only on this
+ * server), the day, the visitor's IP and browser. It changes every day and can't be turned back
+ * into an IP, so it counts people without identifying anyone; the IP itself is never stored.
+ */
+export async function visitorKey(ip: string | null, userAgent: string | null, now: Date = new Date()): Promise<string | null> {
+  if (!ip) return null;
+  const db = openGrowth();
+  let salt: string;
+  try {
+    const row = db.query("SELECT value FROM growth_meta WHERE key = 'visitor_salt'").get() as { value: string } | null;
+    salt = row?.value ?? crypto.randomUUID() + crypto.randomUUID();
+    if (!row) db.prepare("INSERT OR IGNORE INTO growth_meta (key, value) VALUES ('visitor_salt', ?)").run(salt);
+  } finally {
+    db.close();
+  }
+  const data = new TextEncoder().encode(`${salt}|${now.toISOString().slice(0, 10)}|${ip}|${userAgent ?? ""}`);
+  return Buffer.from(await crypto.subtle.digest("SHA-256", data)).toString("hex").slice(0, 24);
 }
