@@ -47,6 +47,9 @@ final class APIClient {
         if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
             req.setValue("ThreadMac/\(v)", forHTTPHeaderField: "x-thread-app")
         }
+        // One Mac = one install, across sign-outs (InstallIdentity), and which macOS it runs.
+        req.setValue(InstallIdentity.id(), forHTTPHeaderField: "x-thread-install")
+        req.setValue(InstallIdentity.osVersion, forHTTPHeaderField: "x-thread-os")
         if let credentials {
             req.setValue("Bearer \(credentials.userId):\(credentials.token)", forHTTPHeaderField: "authorization")
         }

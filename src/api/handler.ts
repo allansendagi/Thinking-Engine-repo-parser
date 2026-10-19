@@ -37,7 +37,7 @@ import { dataDir, openUserDb, purgeUser } from "../db/tenancy";
 import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
 import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary, scheduleRetentionSweep, setRetentionDays } from "../db/retention";
 import { storageMode } from "../db/durability";
-import { appVersionFrom, downloadSummary, forgetActivity, isAdmin, isBotUserAgent, noteActive, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
+import { appVersionFrom, downloadSummary, forgetActivity, installIdFrom, isAdmin, isBotUserAgent, noteActive, noteInstall, osVersionFrom, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
 import { forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, visitorKey } from "./growth";
 import { gaReport } from "./ga";
 import { addToWaitlist, waitlistSummary } from "./waitlist";
@@ -258,7 +258,10 @@ export function createRequestHandler(
       }
       const user = await createUser(undefined, deviceNameFrom(uBody, req));
       try {
-        recordAccountCreated(appVersionFrom(req.headers.get("x-thread-app"), req.headers.get("user-agent")));
+        const installId = installIdFrom(req.headers.get("x-thread-install"));
+        const appVersion = appVersionFrom(req.headers.get("x-thread-app"), req.headers.get("user-agent"));
+        recordAccountCreated(appVersion, new Date(), installId, user.userId);
+        noteInstall(installId, appVersion, osVersionFrom(req.headers.get("x-thread-os")));
       } catch {
         /* metrics must never fail account creation */
       }
@@ -450,6 +453,11 @@ export function createRequestHandler(
     const { userId, tokenHash } = auth;
     touchToken(tokenHash); // throttled last-seen bump for the session list
     noteActive(userId, appVersionFrom(req.headers.get("x-thread-app"), req.headers.get("user-agent")));
+    noteInstall(
+      installIdFrom(req.headers.get("x-thread-install")),
+      appVersionFrom(req.headers.get("x-thread-app"), req.headers.get("user-agent")),
+      osVersionFrom(req.headers.get("x-thread-os")),
+    );
 
     // Admin-only product metrics (THREAD_ADMIN_EMAILS). Downloads for now.
     if (req.method === "GET" && pathname === "/v1/events/downloads") {
