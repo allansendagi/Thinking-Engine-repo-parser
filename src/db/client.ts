@@ -22,6 +22,8 @@ const ADD_COLUMNS: [table: string, column: string][] = [
   ["discarded_events", "role TEXT"],
   ["discarded_events", "adopted_source_event_id TEXT"],
   ["discarded_events", "adopted_quote TEXT"],
+  ["idea_verdicts", "origin TEXT"],
+  ["idea_corrections", "origin TEXT"],
 ];
 
 /**

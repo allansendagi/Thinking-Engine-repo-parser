@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { basename } from "node:path";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { dismissedExamples } from "../mining/corrections";
+import { scheduleShadowMining } from "../mining/shadow";
 import { applyRetention } from "../db/retention";
 import type { CanonicalEvent } from "../types";
 import {
@@ -115,11 +116,15 @@ async function extractOrDeferLocked(
     return { result: null, deferred: extractIds.size, error: backlog.error };
   }
 
-  // A coding-assistant session: wait for it to go quiet (see AGENT_SOURCES). It is already marked
-  // waiting above; the retry loop picks it up once nothing new has arrived for the quiet period.
-  if (agentQuietMs() > 0 && extractIds.size > 0) {
-    const bySource = new Map(contextEvents.map((e) => [e.id, e.source as string]));
-    if ([...extractIds].every((id) => AGENT_SOURCES.has(bySource.get(id) ?? ""))) {
+  // A coding-assistant session that is still ACTIVE (its newest message is within the quiet
+  // period) waits to go quiet (see AGENT_SOURCES). It is already marked waiting above; the retry
+  // loop picks it up once quiet. A session already quiet -- e.g. history read days later -- runs now.
+  const quiet = agentQuietMs();
+  if (quiet > 0 && extractIds.size > 0) {
+    const byId = new Map(contextEvents.map((e) => [e.id, e]));
+    const extracting = [...extractIds].map((id) => byId.get(id)).filter((e): e is CanonicalEvent => e !== undefined);
+    const newest = Math.max(...extracting.map((e) => Date.parse(e.createdAt)).filter(Number.isFinite));
+    if (extracting.every((e) => AGENT_SOURCES.has(e.source as string)) && Date.now() - newest < quiet) {
       return { result: null, deferred: extractIds.size, error: null };
     }
   }
@@ -165,12 +170,13 @@ async function retryUnlocked(
 ): Promise<{ processed: number; error: string | null; waiting?: number }> {
   const all = db
     .query(
-      `SELECT p.conversation_id AS conversation_id, MIN(p.queued_at) AS first, MAX(p.queued_at) AS last,
+      `SELECT p.conversation_id AS conversation_id, MIN(p.queued_at) AS first,
+              (SELECT MAX(e.created_at) FROM canonical_events e WHERE e.conversation_id = p.conversation_id) AS last,
               (SELECT e.source FROM canonical_events e WHERE e.conversation_id = p.conversation_id LIMIT 1) AS source
          FROM pending_extraction p GROUP BY p.conversation_id ORDER BY first`,
     )
     .all() as { conversation_id: string; last: string; source: string | null }[];
-  // A coding-assistant session that is still active waits for quiet (AGENT_SOURCES).
+  // A coding-assistant session whose newest message is recent is still active: it waits (AGENT_SOURCES).
   const quiet = agentQuietMs();
   let waiting = 0;
   const convs = all
@@ -319,7 +325,10 @@ export function scheduleDeferredRetry(
       db = open(userId);
       if (deferredStatus(db).count === 0 || backlogPaused(db)) return;
       const r = await drainDeferredExtraction(db, providers);
-      if (r.processed > 0) console.log(`[Thread] resumed extraction for ${userId}: ${r.processed} messages, ${r.remaining} left`);
+      if (r.processed > 0) {
+        console.log(`[Thread] resumed extraction for ${userId}: ${r.processed} messages, ${r.remaining} left`);
+        scheduleShadowMining(userId, open); // new thoughts: regroup, as after a live capture
+      }
       if (r.error) console.error(`[Thread] extraction still waiting for ${userId}: ${r.error}`);
     } catch (e) {
       console.error(`[Thread] deferred retry failed for ${userId}:`, e);

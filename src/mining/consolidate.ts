@@ -60,6 +60,10 @@ export interface ConsolidateOptions {
   /** How much meaning counts against words (0..1). Set per vector model by how well it
    *  separates ideas on the bench -- see meaningWeightFor. */
   meaningWeight?: number;
+  /** Ideas whose thoughts are, on average, at least this similar share a THEME (shown as related
+   *  ideas). People judge "same idea" on two levels -- one idea, or the same broader subject --
+   *  so one threshold can't serve both. Absent -> no themes. */
+  themeThreshold?: number;
 }
 
 export interface ConsolidatedIdea {
@@ -67,6 +71,10 @@ export interface ConsolidatedIdea {
   /** All thought ids in the idea, oldest first. */
   thoughtIds: string[];
   isSpark: boolean;
+  /** The thought that founded the idea (its first statement of what the idea is). */
+  founderId: string;
+  /** Index of the theme this idea belongs to (ideas sharing it are related); absent without themes. */
+  theme?: number;
 }
 
 const ANCHOR_TYPES: ReadonlySet<CognitiveEventType> = new Set(["new_idea", "claim", "refinement", "contradiction", "decision"]);
@@ -220,7 +228,12 @@ function groupAnchors(anchors: string[], sim: Similarity, threshold: number, con
     const r = uf.find(a);
     seed.set(r, [...(seed.get(r) ?? []), a]);
   }
-  const groups: (string[] | null)[] = [...seed.values()];
+  return agglomerate([...seed.values()], sim, threshold, cannot);
+}
+
+/** Average-linkage merging of seed groups until no pair's average similarity clears `threshold`. */
+function agglomerate(seeds: string[][], sim: Similarity, threshold: number, cannot: Set<string>): string[][] {
+  const groups: (string[] | null)[] = seeds.map((g) => [...g]);
   const n = groups.length;
   // Pairwise similarity SUMS between groups, updated in place on each merge (Lance-Williams for
   // average linkage): the average is sum / (|g| * |h|). O(n^2) memory and per-merge work instead
@@ -351,21 +364,91 @@ export function consolidate(thoughts: MiningThought[], options: ConsolidateOptio
     }
   }
 
-  return groups.map((g) => g.sort((a, b) => time(a).localeCompare(time(b)) || a.localeCompare(b))).map((ids) => buildIdea(ids, byId, sim, options.previousIdeaOf));
+  const sorted = groups.map((g) => g.sort((a, b) => time(a).localeCompare(time(b)) || a.localeCompare(b)));
+  const keptIds = assignKeptIds(sorted, byId, options.previousIdeaOf);
+  const ideas = sorted.map((ids, i) => buildIdea(ids, byId, sim, keptIds[i]!));
+  if (options.themeThreshold !== undefined) assignThemes(ideas, sim, options.themeThreshold);
+  return ideas;
+}
+
+/** Most related ideas listed per idea: the rest of a big theme is noise, not help. */
+const MAX_RELATED = 6;
+
+/**
+ * Second level: group whole ideas into themes (average linkage over their thoughts), then list
+ * each idea's theme-mates as related, closest first. Ideas themselves are untouched -- a theme
+ * never merges two ideas, it only says they're about the same subject.
+ */
+function assignThemes(ideas: ConsolidatedIdea[], sim: Similarity, threshold: number): void {
+  const indexOf = new Map<string, number>();
+  ideas.forEach((idea, i) => indexOf.set(idea.thoughtIds[0]!, i));
+  // No vetoes: a split says two thoughts are different IDEAS, not that they're unrelated.
+  const themes = agglomerate(ideas.map((i) => i.thoughtIds), sim, threshold, new Set());
+  const avg = (a: ConsolidatedIdea, b: ConsolidatedIdea) => {
+    let s = 0;
+    for (const x of a.thoughtIds) for (const y of b.thoughtIds) s += sim.between(x, y);
+    return s / (a.thoughtIds.length * b.thoughtIds.length);
+  };
+  themes.forEach((members, t) => {
+    // A theme is a union of whole ideas: find them by their first thought.
+    const mates = members.map((id) => indexOf.get(id)).filter((i): i is number => i !== undefined).map((i) => ideas[i]!);
+    for (const idea of mates) {
+      idea.theme = t;
+      idea.node.relatedIdeaIds = mates
+        .filter((m) => m !== idea)
+        .map((m) => ({ id: m.node.id, s: avg(idea, m) }))
+        .sort((a, b) => b.s - a.s || a.id.localeCompare(b.id))
+        .slice(0, MAX_RELATED)
+        .map((m) => m.id);
+    }
+  });
+}
+
+/** The founding thought of a group: the idea's first statement, else its first position. */
+function founderOf(ts: MiningThought[]): MiningThought {
+  return ts.find((t) => t.type === "new_idea") ?? ts.filter(isPositional)[0] ?? ts[0]!;
+}
+
+/**
+ * Keep the id the person already knows each idea by (pins, renames, links, kept ideas): each
+ * group claims the previous id most of its thoughts had. When regrouping splits one old idea in
+ * two, both halves claim it -- the half with more of its thoughts keeps it, the other takes its
+ * next-best claim or a fresh id. Ids are unique by construction.
+ */
+function assignKeptIds(groups: string[][], byId: Map<string, MiningThought>, previousIdeaOf?: Map<string, string>): string[] {
+  const claims: { group: number; id: string; votes: number }[] = [];
+  groups.forEach((g, group) => {
+    const votes = new Map<string, number>();
+    for (const t of g) {
+      const prev = previousIdeaOf?.get(t);
+      if (prev) votes.set(prev, (votes.get(prev) ?? 0) + 1);
+    }
+    for (const [id, n] of votes) claims.push({ group, id, votes: n });
+  });
+  claims.sort((a, b) => b.votes - a.votes || a.id.localeCompare(b.id) || a.group - b.group);
+  const out: (string | undefined)[] = new Array(groups.length);
+  const taken = new Set<string>();
+  for (const c of claims) {
+    if (out[c.group] !== undefined || taken.has(c.id)) continue;
+    out[c.group] = c.id;
+    taken.add(c.id);
+  }
+  return groups.map((g, i) => {
+    if (out[i]) return out[i]!;
+    let id = `idea_${founderOf(g.map((t) => byId.get(t)!)).id}`;
+    while (taken.has(id)) id += "_";
+    taken.add(id);
+    return id;
+  });
 }
 
 /** One group of thoughts -> an idea, with its history kept (nothing is overwritten). */
-function buildIdea(
-  ids: string[],
-  byId: Map<string, MiningThought>,
-  sim: Similarity,
-  previousIdeaOf?: Map<string, string>,
-): ConsolidatedIdea {
+function buildIdea(ids: string[], byId: Map<string, MiningThought>, sim: Similarity, ideaId: string): ConsolidatedIdea {
   const ts = ids.map((id) => byId.get(id)!);
   const first = ts[0]!;
   const positional = ts.filter(isPositional);
   const current = positional.at(-1) ?? ts.at(-1)!;
-  const founder = ts.find((t) => t.type === "new_idea") ?? positional[0] ?? first;
+  const founder = founderOf(ts);
 
   // Questions stay open until an answer that's about THEM arrives.
   const loops: IdeaNode["openLoops"] = [];
@@ -399,14 +482,6 @@ function buildIdea(
   if (loops.some((l) => !l.resolved && l.statement.startsWith("Unresolved contradiction:"))) state = "contested";
   // A rejection inside an idea rejects an OPTION, never the idea itself (only the person can).
 
-  // Keep the id the person already knows this idea by (pins, renames, links), else the v1 scheme.
-  const votes = new Map<string, number>();
-  for (const id of ids) {
-    const prev = previousIdeaOf?.get(id);
-    if (prev) votes.set(prev, (votes.get(prev) ?? 0) + 1);
-  }
-  const keptId = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-
   const distinctConversations = new Set(ts.map((t) => t.conversationId)).size;
   const isSpark =
     ts.length === 1 &&
@@ -416,7 +491,7 @@ function buildIdea(
     distinctConversations === 1;
 
   const node: IdeaNode = {
-    id: keptId ?? `idea_${founder.id}`,
+    id: ideaId,
     title: founder.title ?? titleFrom(founder.statement),
     state,
     currentFormulation: current.statement,
@@ -427,7 +502,7 @@ function buildIdea(
     createdAt: first.createdAt,
     updatedAt: ts.at(-1)!.createdAt,
   };
-  return { node, thoughtIds: ids, isSpark };
+  return { node, thoughtIds: ids, isSpark, founderId: founder.id };
 }
 
 function titleFrom(statement: string): string {

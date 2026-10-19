@@ -57,8 +57,9 @@ import { deferredStatus, scheduleDeferredRetry } from "../state/deferred";
 import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
+import { headlineThoughtIds, servesV2 } from "../mining/serve";
 import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
-import { ideaThoughtIds, recordCorrection, recordKeep } from "../mining/corrections";
+import { ideaThoughtIds, recordCorrection, recordKeep, recordThoughtReviews } from "../mining/corrections";
 import { tasteReport } from "../taste/taste";
 import { redactDeep, redactSecrets } from "../capture/redact";
 import { parsePastedConversation } from "../import/pasteParser";
@@ -748,6 +749,27 @@ export function createRequestHandler(
         return json(tasteReport(db));
       }
 
+      // Verdicts on single thoughts (a review of what was captured): they teach taste and the
+      // grouping like Keep / Not an idea clicks, without counting toward the acceptance rate.
+      if (req.method === "POST" && pathname === "/v1/taste/reviews") {
+        let body: { reviews?: unknown };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        const reviews = Array.isArray(body.reviews)
+          ? body.reviews.filter(
+              (r): r is { thoughtId: string; verdict: "keep" | "not_idea" } =>
+                typeof r?.thoughtId === "string" && (r.verdict === "keep" || r.verdict === "not_idea"),
+            )
+          : [];
+        if (reviews.length === 0 || reviews.length > 500) return error(400, 'reviews must be 1-500 of {thoughtId, verdict: "keep" | "not_idea"}');
+        const recorded = recordThoughtReviews(db, reviews);
+        scheduleShadowMining(userId, openUserDb);
+        return json({ recorded, taste: tasteReport(db) });
+      }
+
       if (req.method === "GET" && pathname === "/v1/ideas") {
         const q = url.searchParams.get("q") ?? "";
         return json(searchIdeas(db, q));
@@ -845,11 +867,15 @@ export function createRequestHandler(
 
       if (req.method === "DELETE" && ideaMatch && !ideaMatch[2]) {
         const ideaId = decodePathId(ideaMatch[1] as string);
-        // Remember what was deleted by its thoughts, so a v2 pass can't rebuild it.
-        const thoughtIds = ideaThoughtIds(db, ideaId);
+        // Remember what was deleted by its thoughts, so a v2 pass can't rebuild it. On v2 the
+        // verdict covers the thoughts the person actually saw (title + headline); the rest of a
+        // large group is regrouped right away and shown on its own.
+        const v2 = servesV2(userId);
+        const thoughtIds = v2 ? headlineThoughtIds(db, ideaId) : ideaThoughtIds(db, ideaId);
         const statement = getIdea(db, ideaId)?.currentFormulation;
         const deleted = deleteIdea(db, ideaId);
         if (deleted) recordCorrection(db, { kind: "not_idea", ideaId, thoughtIds, value: statement });
+        if (deleted && v2) scheduleShadowMining(userId, openUserDb);
         return deleted ? json({ deleted: true }) : error(404, "Idea not found");
       }
 
@@ -869,7 +895,7 @@ export function createRequestHandler(
         if (body.verdict !== undefined) {
           if (body.verdict !== "keep") return error(400, 'verdict must be "keep" (use DELETE for "not an idea")');
           if (!getIdea(db, ideaId)) return error(404, "Idea not found");
-          recordKeep(db, ideaId, ideaThoughtIds(db, ideaId));
+          recordKeep(db, ideaId, servesV2(userId) ? headlineThoughtIds(db, ideaId) : ideaThoughtIds(db, ideaId));
         }
         if (body.state !== undefined) {
           if (!VALID_IDEA_STATES.includes(body.state as IdeaState)) {

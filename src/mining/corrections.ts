@@ -43,6 +43,39 @@ export function recordKeep(db: Database, ideaId: string, thoughtIds: string[]): 
   );
 }
 
+const REVIEW = "review";
+
+/**
+ * Verdicts on single thoughts ("is this worth keeping?"), e.g. from a review of what was
+ * captured. Recorded like in-app clicks -- a keep as a verdict, a no as a not_idea correction --
+ * so they teach taste and v2 (a "no" thought is never mined into an idea), but marked as a
+ * review. Idempotent per thought: the latest verdict on a thought replaces an earlier review one.
+ * Returns how many were recorded; unknown thought ids are skipped.
+ */
+export function recordThoughtReviews(db: Database, reviews: { thoughtId: string; verdict: "keep" | "not_idea" }[]): number {
+  let n = 0;
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    for (const { thoughtId, verdict } of reviews) {
+      const t = db.query("SELECT statement FROM cognitive_events WHERE id = ?").get(thoughtId) as { statement: string } | null;
+      if (!t) continue;
+      const ids = JSON.stringify([thoughtId]);
+      db.prepare("DELETE FROM idea_verdicts WHERE origin = ? AND thought_ids = ?").run(REVIEW, ids);
+      db.prepare("DELETE FROM idea_corrections WHERE origin = ? AND kind = 'not_idea' AND thought_ids = ?").run(REVIEW, ids);
+      const ideaId = (db.query("SELECT idea_id FROM evolution_steps WHERE cognitive_event_id = ?").get(thoughtId) as { idea_id: string } | null)?.idea_id ?? "";
+      if (verdict === "keep") {
+        db.prepare("INSERT INTO idea_verdicts (verdict, idea_id, thought_ids, created_at, origin) VALUES ('keep', ?, ?, ?, ?)").run(ideaId, ids, now, REVIEW);
+      } else {
+        db.prepare("INSERT INTO idea_corrections (kind, idea_id, thought_ids, value, created_at, origin) VALUES ('not_idea', ?, ?, ?, ?, ?)").run(
+          ideaId, ids, t.statement, now, REVIEW,
+        );
+      }
+      n++;
+    }
+  })();
+  return n;
+}
+
 export interface TasteLabels {
   /** Thoughts from ideas the person kept. */
   positives: Set<string>;
@@ -50,13 +83,19 @@ export interface TasteLabels {
   negatives: Set<string>;
   /** Idea ids the person explicitly kept. */
   keptIdeaIds: Set<string>;
-  /** Verdicts in the order given, newest last -- for the acceptance rate. */
+  /** Thoughts of ideas the person kept in the app -- an idea holding one is still the kept idea
+   *  after a regrouping changed its id. (Reviewed thoughts only teach; they don't confirm.) */
+  keptThoughtIds: Set<string>;
+  /** Verdicts on SERVED ideas in the order given, newest last -- for the acceptance rate. */
   history: { verdict: "keep" | "not_idea"; at: string }[];
+  /** Verdicts given one thought at a time (a review, not ideas Thread showed): they teach taste
+   *  but aren't a judgment of what Thread served, so they stay out of the acceptance rate. */
+  reviewed: { keeps: number; notIdeas: number };
 }
 
 /** Everything the person has said about what is, and isn't, an idea. */
 export function loadTasteLabels(db: Database): TasteLabels {
-  const out: TasteLabels = { positives: new Set(), negatives: new Set(), keptIdeaIds: new Set(), history: [] };
+  const out: TasteLabels = { positives: new Set(), negatives: new Set(), keptIdeaIds: new Set(), keptThoughtIds: new Set(), history: [], reviewed: { keeps: 0, notIdeas: 0 } };
   const parse = (j: string): string[] => {
     try {
       return JSON.parse(j) as string[];
@@ -64,22 +103,31 @@ export function loadTasteLabels(db: Database): TasteLabels {
       return [];
     }
   };
-  for (const r of db.query("SELECT idea_id, thought_ids, created_at FROM idea_verdicts WHERE verdict = 'keep' ORDER BY id").all() as {
-    idea_id: string; thought_ids: string; created_at: string;
+  for (const r of db.query("SELECT idea_id, thought_ids, created_at, origin FROM idea_verdicts WHERE verdict = 'keep' ORDER BY id").all() as {
+    idea_id: string; thought_ids: string; created_at: string; origin: string | null;
   }[]) {
-    out.keptIdeaIds.add(r.idea_id);
     for (const t of parse(r.thought_ids)) out.positives.add(t);
+    if (r.origin === REVIEW) {
+      out.reviewed.keeps++;
+      continue;
+    }
+    out.keptIdeaIds.add(r.idea_id);
+    for (const t of parse(r.thought_ids)) out.keptThoughtIds.add(t);
     out.history.push({ verdict: "keep", at: r.created_at });
   }
-  for (const r of db.query("SELECT thought_ids, created_at FROM idea_corrections WHERE kind = 'not_idea' ORDER BY id").all() as {
-    thought_ids: string; created_at: string;
+  for (const r of db.query("SELECT thought_ids, created_at, origin FROM idea_corrections WHERE kind = 'not_idea' ORDER BY id").all() as {
+    thought_ids: string; created_at: string; origin: string | null;
   }[]) {
     for (const t of parse(r.thought_ids)) out.negatives.add(t);
-    out.history.push({ verdict: "not_idea", at: r.created_at });
+    if (r.origin === REVIEW) out.reviewed.notIdeas++;
+    else out.history.push({ verdict: "not_idea", at: r.created_at });
   }
   out.history.sort((a, b) => a.at.localeCompare(b.at));
   // A thought judged both ways (kept once, then deleted) takes the later word: the deletion.
-  for (const t of out.negatives) out.positives.delete(t);
+  for (const t of out.negatives) {
+    out.positives.delete(t);
+    out.keptThoughtIds.delete(t);
+  }
   return out;
 }
 

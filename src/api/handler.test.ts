@@ -1204,3 +1204,40 @@ describe("deep health check", () => {
     expect(body.models.reasoning).toContain("404: model: claude-old not found");
   });
 });
+
+describe("v2 serving + thought reviews over HTTP", () => {
+  test("POST /v1/taste/reviews validates, records known thoughts, and v2 serves new thoughts at once", async () => {
+    const handler = createRequestHandler({
+      extraction: new FakeProvider([
+        extractionResponse([
+          { type: "new_idea", statement: "Authority needs explicit boundaries.", confidence: 0.9, source_event_id: "m1", evidence_quote: "explicit boundaries" },
+        ]),
+      ]),
+      reasoning: new FakeProvider([]),
+    });
+    const { userId, token } = await createTestUser(handler);
+    const headers = { authorization: `Bearer ${userId}:${token}`, "content-type": "application/json" };
+    process.env.THREAD_V2_SERVING_USERS = userId;
+    try {
+      const ingest = await handler(new Request("http://x/v1/conversations", {
+        method: "POST", headers,
+        body: JSON.stringify({ conversationId: "c1", source: "fixture", messages: [{ id: "m1", role: "user", text: "Authority needs explicit boundaries.", createdAt: "2026-08-17T00:00:00.000Z" }] }),
+      }));
+      expect(ingest.status).toBe(200);
+      const state = (await (await handler(new Request("http://x/v1/thinking-state", { headers }))).json()) as { currentIdeas: { id: string; title: string }[] };
+      expect(state.currentIdeas.map((i) => i.title)).toEqual(["Authority needs explicit boundaries"]);
+
+      const post = (body: unknown) => handler(new Request("http://x/v1/taste/reviews", { method: "POST", headers, body: JSON.stringify(body) }));
+      expect((await post({})).status).toBe(400);
+      expect((await post({ reviews: [{ thoughtId: "x", verdict: "maybe" }] })).status).toBe(400);
+      expect((await post({ reviews: Array.from({ length: 501 }, (_, i) => ({ thoughtId: `t${i}`, verdict: "keep" })) })).status).toBe(400);
+      const ok = await post({ reviews: [{ thoughtId: "cog_m1_0", verdict: "keep" }, { thoughtId: "unknown", verdict: "not_idea" }] });
+      expect(ok.status).toBe(200);
+      const body = (await ok.json()) as { recorded: number; taste: { keeps: number; acceptanceRate: number | null } };
+      expect(body.recorded).toBe(1);
+      expect([body.taste.keeps, body.taste.acceptanceRate]).toEqual([1, null]);
+    } finally {
+      delete process.env.THREAD_V2_SERVING_USERS;
+    }
+  });
+});

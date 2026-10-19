@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { dropV1Backup } from "../mining/serve";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 
 /**
@@ -236,6 +237,7 @@ export function deleteConversation(db: Database, conversationId: string): Conver
 
     // The v2 view is a cache recomputed from thoughts; clear it so no deleted thought lingers there.
     db.exec("DELETE FROM idea_view_v2;");
+    dropV1Backup(db); // the saved v1 graph would otherwise keep a copy of what was just deleted
 
     for (const ideaId of affected) {
       const remaining = (db.query("SELECT COUNT(*) AS n FROM evolution_steps WHERE idea_id = ?").get(ideaId) as { n: number }).n;
