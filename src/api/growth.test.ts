@@ -89,6 +89,29 @@ describe("growth funnel and cohorts", () => {
   });
 });
 
+describe("installs", () => {
+  test("one Mac is one install, however many accounts it creates; older builds count per account", async () => {
+    const { recordAccountCreated, noteInstall, installIdFrom, osVersionFrom, usageSummary } = await import("./metrics");
+    const mac = "0f8c7a52-1d2e-4b7a-9c3d-2a1b0c9d8e7f";
+    expect(installIdFrom(mac.toUpperCase())).toBe(mac);
+    expect(installIdFrom("not-a-uuid")).toBeNull();
+    expect([osVersionFrom("26.0.1"), osVersionFrom("x")]).toEqual(["26.0.1", null]);
+    const t = new Date("2026-10-19T09:00:00Z");
+    addUser("user_i1", "2026-10-19T09:00:00Z");
+    addUser("user_i2", "2026-10-19T10:00:00Z");
+    addUser("user_i3", "2026-10-19T11:00:00Z");
+    recordAccountCreated("0.4.5", t, mac, "user_i1");
+    noteInstall(mac, "0.4.5", "26.0.1", t);
+    recordAccountCreated("0.4.5", t, mac, "user_i2"); // signed out and back in on the same Mac
+    recordAccountCreated("0.4.2", t, null, "user_i3"); // an older build: no install id
+    const g = growthSummary(1, new Date("2026-10-19T12:00:00Z"));
+    expect(g.funnel.opened).toBe(2);
+    const u = usageSummary(new Date("2026-10-19T12:00:00Z"));
+    expect(u.installs.byOs).toEqual([{ os: "macOS 26.0", installs: 1 }]);
+    expect(u.installs.byApp).toEqual([{ version: "0.4.5", installs: 1 }]);
+  });
+});
+
 describe("old clicks get the best source the data allows", () => {
   test("an external linking page is credited; the site's own page or none is 'not recorded', never a guess", async () => {
     const { backfillDownloadSources, NOT_RECORDED } = await import("./growth");

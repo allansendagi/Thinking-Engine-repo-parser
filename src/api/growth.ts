@@ -304,7 +304,7 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
       funnel: {
         downloadClicks: clicks,
         downloadPeople: people,
-        opened: users.length,
+        opened: openedInWindow(db, since),
         firstCapture: reached("first_capture").size,
         firstIdea: reached("first_idea").size,
         firstKeep: reached("first_keep").size,
@@ -316,7 +316,7 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
       sources,
       campaigns,
       medianHoursToFirstIdea: hours.length ? Math.round(hours[Math.floor(hours.length / 2)]! * 10) / 10 : null,
-      note: "“Opened” counts accounts created at first launch: signing out and back in anonymously creates a new one, so it can run slightly high.",
+      note: "“Opened” counts each Mac once (from app 0.4.5, which sends an install id). Accounts from older builds count one each, so it can still run slightly high until those update.",
     };
   } finally {
     db.close();
@@ -409,4 +409,21 @@ export async function visitorKey(ip: string | null, userAgent: string | null, no
   }
   const data = new TextEncoder().encode(`${salt}|${now.toISOString().slice(0, 10)}|${ip}|${userAgent ?? ""}`);
   return Buffer.from(await crypto.subtle.digest("SHA-256", data)).toString("hex").slice(0, 24);
+}
+
+/**
+ * New installs opened in the window: each Mac once -- an account re-created on a Mac that was
+ * already counted (sign out, sign back in) isn't a new install. Accounts from builds without an
+ * install id count one each.
+ */
+function openedInWindow(db: Database, since: string): number {
+  return (
+    db
+      .query(
+        `SELECT COUNT(DISTINCT COALESCE(u.install_id, u.id)) AS n FROM users u
+          LEFT JOIN installs i ON i.install_id = u.install_id
+          WHERE u.created_at >= ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)`,
+      )
+      .get(since, since) as { n: number }
+  ).n;
 }

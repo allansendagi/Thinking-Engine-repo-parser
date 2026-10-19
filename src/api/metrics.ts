@@ -50,9 +50,65 @@ export function openMetrics() {
       version TEXT,
       PRIMARY KEY (user_id, day)
     );
-    CREATE INDEX IF NOT EXISTS active_days_day ON active_days(day);`,
+    CREATE INDEX IF NOT EXISTS active_days_day ON active_days(day);
+    CREATE TABLE IF NOT EXISTS installs (
+      install_id TEXT PRIMARY KEY,
+      first_seen TEXT NOT NULL,
+      last_seen TEXT NOT NULL,
+      app_version TEXT,
+      os_version TEXT
+    );
+    CREATE INDEX IF NOT EXISTS installs_first ON installs(first_seen);
+    CREATE INDEX IF NOT EXISTS installs_last ON installs(last_seen);`,
   );
+  // Which install an account was created on, so signing out and back in on the same Mac isn't a
+  // second install. Null for accounts from builds that predate the install id.
+  for (const [table, col] of [["account_created", "install_id"], ["users", "install_id"]] as const) {
+    const have = db.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (have.length && !have.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT;`);
+  }
   return db;
+}
+
+/**
+ * The Mac app's install id (`x-thread-install`): a random UUID made on first launch and kept in
+ * the app's preferences, so it survives sign-out (and reinstalling). Not derived from the
+ * hardware or anything personal. null when absent or malformed.
+ */
+export function installIdFrom(header: unknown): string | null {
+  return typeof header === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(header.trim())
+    ? header.trim().toLowerCase()
+    : null;
+}
+
+/** macOS version from `x-thread-os` ("26.0.1"), or null. */
+export function osVersionFrom(header: unknown): string | null {
+  return typeof header === "string" && /^\d{1,3}(\.\d{1,3}){0,2}$/.test(header.trim()) ? header.trim() : null;
+}
+
+const seenInstalls = new Map<string, string>();
+
+/** This install was used now, with this app and macOS version. Once per install per day; never throws. */
+export function noteInstall(installId: string | null, appVersion: string | null, osVersion: string | null, now: Date = new Date()): void {
+  if (!installId) return;
+  try {
+    const memo = `${now.toISOString().slice(0, 10)}|${appVersion ?? ""}|${osVersion ?? ""}`;
+    if (seenInstalls.get(installId) === memo) return;
+    const db = openMetrics();
+    try {
+      db.prepare(
+        `INSERT INTO installs (install_id, first_seen, last_seen, app_version, os_version) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(install_id) DO UPDATE SET last_seen = excluded.last_seen,
+           app_version = COALESCE(excluded.app_version, installs.app_version),
+           os_version = COALESCE(excluded.os_version, installs.os_version)`,
+      ).run(installId, now.toISOString(), now.toISOString(), clip(appVersion, 24), clip(osVersion, 16));
+    } finally {
+      db.close();
+    }
+    seenInstalls.set(installId, memo);
+  } catch {
+    /* metrics must never be able to fail a request */
+  }
 }
 
 /** Substrings that mark a client as automated: crawlers, link-preview fetchers, scripts, headless. */
@@ -133,10 +189,11 @@ export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
 }
 
 /** One anonymous account created at first launch (see the header: not strictly "installs"). */
-export function recordAccountCreated(version: string | null, now: Date = new Date()): void {
+export function recordAccountCreated(version: string | null, now: Date = new Date(), installId: string | null = null, userId: string | null = null): void {
   const db = openMetrics();
   try {
-    db.prepare("INSERT INTO account_created (version, created_at) VALUES (?, ?)").run(clip(version, 24), now.toISOString());
+    db.prepare("INSERT INTO account_created (version, created_at, install_id) VALUES (?, ?, ?)").run(clip(version, 24), now.toISOString(), installId);
+    if (userId && installId) db.prepare("UPDATE users SET install_id = ? WHERE id = ?").run(installId, userId);
   } finally {
     db.close();
   }
@@ -263,6 +320,16 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
 }
 
 export interface UsageSummary {
+  /** Installs (Mac app 0.4.5+ sends an install id): each Mac counted once, however many accounts it makes. */
+  installs: {
+    total: number;
+    newToday: number;
+    new7: number;
+    new30: number;
+    active7: number;
+    byOs: { os: string; installs: number }[];
+    byApp: { version: string; installs: number }[];
+  };
   accountsCreated: { total: number; today: number; last7: number; last30: number; byDay: { day: string; count: number }[]; byVersion: { version: string; count: number }[] };
   active: { today: number; last7: number; last30: number; byVersion: { version: string; users: number }[] };
 }
@@ -276,7 +343,19 @@ export function usageSummary(now: Date = new Date()): UsageSummary {
     const n = (sql: string, ...a: unknown[]) => (db.query(sql).get(...(a as never[])) as { n: number }).n;
     const created = (since: string) => n("SELECT COUNT(*) AS n FROM account_created WHERE created_at >= ?", since);
     const active = (from: string) => n("SELECT COUNT(DISTINCT user_id) AS n FROM active_days WHERE day >= ?", from);
+    const major = (os: string | null) => (os ? `macOS ${os.split(".").slice(0, 2).join(".")}` : "unknown");
+    const activeInstalls = db.query("SELECT app_version, os_version FROM installs WHERE last_seen >= ?").all(ago(7)) as { app_version: string | null; os_version: string | null }[];
+    const tally = <T extends string>(xs: T[]) => [...xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0) + 1), new Map<T, number>())].sort((a, b) => b[1] - a[1]).slice(0, 12);
     return {
+      installs: {
+        total: n("SELECT COUNT(*) AS n FROM installs"),
+        newToday: n("SELECT COUNT(*) AS n FROM installs WHERE first_seen >= ?", day(0)),
+        new7: n("SELECT COUNT(*) AS n FROM installs WHERE first_seen >= ?", ago(7)),
+        new30: n("SELECT COUNT(*) AS n FROM installs WHERE first_seen >= ?", ago(30)),
+        active7: activeInstalls.length,
+        byOs: tally(activeInstalls.map((i) => major(i.os_version))).map(([os, installs]) => ({ os, installs })),
+        byApp: tally(activeInstalls.map((i) => i.app_version ?? "unknown")).map(([version, installs]) => ({ version, installs })),
+      },
       accountsCreated: {
         total: n("SELECT COUNT(*) AS n FROM account_created"),
         today: created(day(0)),
