@@ -270,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         _ = add("Open Thread", #selector(presentPanel), "", [])
         _ = add("Open in Window", #selector(openMainWindowFromMenu), "w", [.command, .shift])
-        _ = add("Speak a Thought", #selector(speakFromMenu), "", [])
+        speakMenuItem = add("Speak a Thought", #selector(speakFromMenu), "", [])
         _ = add("Settings…", #selector(openSettingsFromMenu), ",", [.command])
         checkForUpdatesMenuItem = add("Check for Updates…", #selector(checkForUpdatesFromMenu), "", [])
         menu.addItem(.separator())
@@ -280,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return menu
     }()
 
+    private weak var speakMenuItem: NSMenuItem?
     private weak var signOutMenuItem: NSMenuItem?
     private weak var checkForUpdatesMenuItem: NSMenuItem?
 
@@ -319,6 +320,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// pending (so "Start fresh" is reachable from the menu too).
     func menuNeedsUpdate(_ menu: NSMenu) {
         signOutMenuItem?.isEnabled = appState.isPaired || appState.needsReconnect
+        // Voice capture is off when its shortcut is Off: no way in from the menu either.
+        speakMenuItem?.isHidden = !VoiceShortcut.current.isEnabled
         checkForUpdatesMenuItem?.isHidden = !updater.isConfigured
         checkForUpdatesMenuItem?.isEnabled = updater.canCheckForUpdates
     }

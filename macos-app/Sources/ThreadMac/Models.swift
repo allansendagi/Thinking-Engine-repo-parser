@@ -224,7 +224,16 @@ struct ConversationSummary: Codable, Identifiable {
     /// Opening of the conversation and how many messages still wait for the AI. Optional so an
     /// older server (before these fields) still decodes.
     var preview: String? = nil
+    /// The newest thing the person said in it, so a long session's row shows where it is now.
+    /// Optional so an older server (before this field) still decodes; rows then fall back to `preview`.
+    var latest: String? = nil
     var pendingMessages: Int? = nil
+
+    /// What the Activity row shows: where the conversation is now, else how it began.
+    var rowText: String? {
+        if let l = latest, !l.isEmpty { return l }
+        return preview
+    }
 
     var id: String { conversationId }
     var sourceLabel: String { displaySourceLabel(source) ?? source.capitalized }

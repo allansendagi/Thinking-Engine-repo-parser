@@ -5,7 +5,6 @@ import SwiftUI
 /// finish. It floats above whatever you're doing without taking focus from it, like the recall panel.
 struct VoiceHUDView: View {
     @ObservedObject var session: VoiceSession
-    let shortcut: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -27,7 +26,7 @@ struct VoiceHUDView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if case .listening = session.phase {
-                Text("Press \(shortcut) again, or release it, to capture")
+                Text("Press \(VoiceShortcut.current.symbol) again, or release it, to capture")
                     .font(.system(size: 11)).foregroundStyle(Theme.ink(0.4))
             }
             if case .failed(let message) = session.phase {
@@ -111,7 +110,7 @@ final class VoiceHUDController {
     private func hide() { panel?.orderOut(nil) }
 
     private func makePanel() -> NSPanel {
-        let host = NSHostingView(rootView: VoiceHUDView(session: session, shortcut: VoiceShortcut.current.symbol))
+        let host = NSHostingView(rootView: VoiceHUDView(session: session))
         host.frame = NSRect(x: 0, y: 0, width: 380, height: 120)
         let p = NSPanel(contentRect: host.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.isFloatingPanel = true

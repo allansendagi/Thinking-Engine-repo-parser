@@ -155,3 +155,27 @@ final class VoiceCaptureTests: XCTestCase {
         XCTAssertNil(VoiceShortcut.off.keyCode)
     }
 }
+
+final class ActivityRowTextTests: XCTestCase {
+    private func decode(_ extra: String) throws -> ConversationSummary {
+        let json = """
+        {"conversationId":"c","source":"claude_code","sourceUrl":null,"messageCount":9,
+         "firstAt":"2026-10-01T00:00:00Z","lastAt":"2026-10-19T00:00:00Z","ideas":[],
+         "preview":"how it began"\(extra)}
+        """
+        return try JSONDecoder().decode(ConversationSummary.self, from: Data(json.utf8))
+    }
+
+    /// A long session's row should say where it is now; an older server (no `latest`) still works.
+    func testRowShowsWhereTheConversationIsNow() throws {
+        XCTAssertEqual(try decode(#","latest":"where it is now""#).rowText, "where it is now")
+        XCTAssertEqual(try decode("").rowText, "how it began", "older server: fall back to the opening")
+        XCTAssertEqual(try decode(#","latest":"""#).rowText, "how it began", "an empty latest never blanks the row")
+    }
+
+    func testVoiceOffTurnsVoiceOffEverywhere() {
+        XCTAssertFalse(VoiceShortcut.off.isEnabled)
+        XCTAssertTrue(VoiceShortcut.controlOptionV.isEnabled)
+        XCTAssertTrue(VoiceShortcut.controlOptionD.isEnabled)
+    }
+}

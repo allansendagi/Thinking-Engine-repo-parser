@@ -43,6 +43,8 @@ enum VoiceShortcut: String, CaseIterable, Identifiable {
         }
     }
     var carbonModifiers: UInt32 { UInt32(controlKey | optionKey) }
+    /// Off turns voice capture off everywhere: the shortcut and the menu-bar entry.
+    var isEnabled: Bool { self != .off }
 }
 
 // MARK: - Pure rules (unit-tested)

@@ -349,6 +349,9 @@ export interface ConversationSummary {
   ideas: { id: string; title: string }[];
   /** The opening of the conversation (first thing the user said), one line -- so a row says what it was about. */
   preview: string;
+  /** The most recent thing the user said, one line -- so a long-running conversation's row shows
+   *  where it is now, not just how it began. Same as `preview` when there is only one message. */
+  latest: string;
   /** Messages saved but not yet turned into ideas (AI unavailable or still working through them). */
   pendingMessages: number;
 }
@@ -386,13 +389,16 @@ export function listConversations(db: Database): ConversationSummary[] {
     .all() as { cid: string; idea_id: string; title: string }[];
 
   const previews = new Map<string, string>();
+  const latests = new Map<string, string>();
   for (const r of db
     .query(
       `SELECT conversation_id AS cid, text FROM canonical_events
        WHERE role = 'user' AND text_removed_at IS NULL AND text <> '' ORDER BY idx ASC`,
     )
     .all() as { cid: string; text: string }[]) {
-    if (!previews.has(r.cid)) previews.set(r.cid, r.text.replace(/\s+/g, " ").trim().slice(0, 140));
+    const line = r.text.replace(/\s+/g, " ").trim().slice(0, 140);
+    if (!previews.has(r.cid)) previews.set(r.cid, line);
+    latests.set(r.cid, line); // ascending order, so the last write is the newest
   }
   const pending = new Map(
     (db.query("SELECT conversation_id AS cid, COUNT(*) AS n FROM pending_extraction GROUP BY conversation_id").all() as {
@@ -417,6 +423,7 @@ export function listConversations(db: Database): ConversationSummary[] {
     lastAt: c.last_at,
     ideas: ideasByConv.get(c.cid) ?? [],
     preview: previews.get(c.cid) ?? "Raw text removed by your retention setting",
+    latest: latests.get(c.cid) ?? previews.get(c.cid) ?? "Raw text removed by your retention setting",
     pendingMessages: pending.get(c.cid) ?? 0,
   }));
 }
