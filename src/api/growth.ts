@@ -120,7 +120,7 @@ export function backfillMilestones(force = false): number {
 // ------------------------------------------------------------------------------ GitHub counts
 
 const REPO = process.env.THREAD_RELEASES_REPO ?? "allansendagi/Thinking-Engine-repo-parser";
-let ghCache: { at: number; data: GithubDownloads } | null = null;
+let ghCache: { at: number; fetcher: typeof fetch; data: GithubDownloads } | null = null;
 
 export interface GithubDownloads {
   /** Thread.dmg across every release: what the website's Download button serves. */
@@ -138,7 +138,8 @@ export interface GithubDownloads {
 
 /** GitHub's counts, cached ~15 minutes and snapshotted daily. Never throws. */
 export async function githubDownloads(fetcher: typeof fetch = fetch, now: Date = new Date()): Promise<GithubDownloads> {
-  if (ghCache && now.getTime() - ghCache.at < 15 * 60_000) return ghCache.data;
+  // Cached per source: a result fetched one way is never served for a request made another way.
+  if (ghCache && ghCache.fetcher === fetcher && now.getTime() - ghCache.at < 15 * 60_000) return ghCache.data;
   const empty = (error: string | null): GithubDownloads => ({ website: 0, updates: 0, updateChecks: 0, byRelease: [], byDay: snapshotDays(), fetchedAt: null, error });
   try {
     const headers: Record<string, string> = { accept: "application/vnd.github+json", "user-agent": "thread-admin" };
@@ -175,7 +176,7 @@ export async function githubDownloads(fetcher: typeof fetch = fetch, now: Date =
       fetchedAt: now.toISOString(),
       error: null,
     };
-    ghCache = { at: now.getTime(), data };
+    ghCache = { at: now.getTime(), fetcher, data };
     return data;
   } catch (e) {
     return empty(e instanceof Error ? e.message : String(e));
