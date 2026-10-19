@@ -70,7 +70,7 @@ matches the audience (people already comfortable with GitHub Releases and dev to
 Builds a release binary, assembles a real `.app` bundle (`Info.plist` with `LSUIElement` set so
 it doesn't show a Dock icon or appear in Cmd+Tab -- it's menu-bar only), ad-hoc signs it, and zips
 it to `dist/ThreadMac-<version>-macos.zip`. Verified for real: the assembled bundle passes
-`plutil -lint`, `codesign -dv` shows a valid ad-hoc signature, and `open dist/ThreadMac.app`
+`plutil -lint`, `codesign -dv` shows a valid ad-hoc signature, and `open dist/Thread.app`
 (the actual way a user launches it, not just running the raw binary) launches it successfully.
 
 **Known limitation of this path, not a bug**: the Gatekeeper warning reappears on every new

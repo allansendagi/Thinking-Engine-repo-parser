@@ -33,8 +33,8 @@ jobs:
       # since CI has no Developer ID) and check it's structurally a launchable bundle.
       - run: ./package.sh
       - run: |
-          lipo -archs dist/ThreadMac.app/Contents/MacOS/ThreadMac
-          test -d dist/ThreadMac.app/Contents/Frameworks/Sparkle.framework
-          otool -l dist/ThreadMac.app/Contents/MacOS/ThreadMac | grep -A2 LC_RPATH | grep -q '@executable_path/../Frameworks'
-          codesign --verify --deep --strict dist/ThreadMac.app
-          plutil -lint dist/ThreadMac.app/Contents/Info.plist
+          lipo -archs dist/Thread.app/Contents/MacOS/Thread
+          test -d dist/Thread.app/Contents/Frameworks/Sparkle.framework
+          otool -l dist/Thread.app/Contents/MacOS/Thread | grep -A2 LC_RPATH | grep -q '@executable_path/../Frameworks'
+          codesign --verify --deep --strict dist/Thread.app
+          plutil -lint dist/Thread.app/Contents/Info.plist
