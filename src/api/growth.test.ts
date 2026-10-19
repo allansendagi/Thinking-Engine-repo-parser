@@ -59,13 +59,13 @@ describe("growth funnel and cohorts", () => {
     noteMilestone("user_gb", "first_capture", new Date("2026-10-03T09:00:00Z"));
     noteActive("user_ga", "0.4.3", new Date("2026-10-10T08:00:00Z")); // day 8-9: back in week 2
     noteActive("user_gb", "0.4.3", new Date("2026-10-04T08:00:00Z")); // only week 1
-    recordDownload({ source: "Google", uaFamily: "Safari" }, new Date("2026-10-18T00:00:00Z"));
-    recordDownload({ source: "Google", uaFamily: "Safari", utmCampaign: "launch", utmSource: "x" }, new Date("2026-10-18T00:00:00Z"));
+    recordDownload({ source: "Google", uaFamily: "Safari", visitor: "v1" }, new Date("2026-10-18T00:00:00Z"));
+    recordDownload({ source: "Google", uaFamily: "Safari", utmCampaign: "launch", utmSource: "x", visitor: "v1" }, new Date("2026-10-18T00:00:00Z")); // same person, clicked twice
     recordDownload({ source: "Direct", uaFamily: "Googlebot/2.1" }, new Date("2026-10-18T00:00:00Z")); // a bot: never counted
 
     const g = growthSummary(30, now);
     expect(g.funnel).toEqual({
-      downloadClicks: 2, opened: 3, firstCapture: 2, firstIdea: 1, firstKeep: 0, extensionConnected: 0,
+      downloadClicks: 2, downloadPeople: 1, opened: 3, firstCapture: 2, firstIdea: 1, firstKeep: 0, extensionConnected: 0,
       week2: { eligible: 2, returned: 1 }, pro: 1,
     });
     expect(g.sources).toEqual([{ source: "Google", clicks: 2 }]);
@@ -86,6 +86,39 @@ describe("growth funnel and cohorts", () => {
     } finally {
       db.close();
     }
+  });
+});
+
+describe("old clicks get the best source the data allows", () => {
+  test("an external linking page is credited; the site's own page or none is 'not recorded', never a guess", async () => {
+    const { backfillDownloadSources, NOT_RECORDED } = await import("./growth");
+    const db = openRegistry();
+    try {
+      db.exec("DELETE FROM growth_meta WHERE key = 'download_sources_backfilled'");
+    } finally {
+      db.close();
+    }
+    recordDownload({ referrer: "https://x.com/someone/status/1", uaFamily: "Safari" }, new Date("2026-10-10T00:00:00Z"));
+    recordDownload({ referrer: "https://www.threadnow.app/", uaFamily: "Safari" }, new Date("2026-10-10T00:00:00Z"));
+    recordDownload({ uaFamily: "Safari" }, new Date("2026-10-10T00:00:00Z"));
+    expect(backfillDownloadSources()).toBe(3);
+    const reg = openRegistry();
+    try {
+      const rows = reg.query("SELECT source FROM download_events WHERE created_at = '2026-10-10T00:00:00.000Z' ORDER BY id").all() as { source: string }[];
+      expect(rows.map((r) => r.source)).toEqual(["X", NOT_RECORDED, NOT_RECORDED]);
+    } finally {
+      reg.close();
+    }
+    expect(backfillDownloadSources()).toBe(0); // once
+  });
+
+  test("the anonymous visitor key is stable within a day, changes the next, and needs an IP", async () => {
+    const { visitorKey } = await import("./growth");
+    const a = await visitorKey("203.0.113.9", "Safari", new Date("2026-10-19T08:00:00Z"));
+    expect(await visitorKey("203.0.113.9", "Safari", new Date("2026-10-19T20:00:00Z"))).toBe(a);
+    expect(await visitorKey("203.0.113.9", "Safari", new Date("2026-10-20T08:00:00Z"))).not.toBe(a);
+    expect(a).not.toContain("203.0.113.9");
+    expect(await visitorKey(null, "Safari")).toBeNull();
   });
 });
 

@@ -30,7 +30,9 @@ export function openMetrics() {
   const cols = db.query("PRAGMA table_info(download_events)").all() as { name: string }[];
   if (!cols.some((c) => c.name === "bot")) db.exec("ALTER TABLE download_events ADD COLUMN bot INTEGER NOT NULL DEFAULT 0;");
   // Where the click came from (first touch on the website): a readable bucket plus the campaign.
-  for (const col of ["source", "utm_source", "utm_medium", "utm_campaign"]) {
+  // `visitor`: an anonymous, daily-rotating fingerprint (see growth.ts visitorKey) -- counts
+  // people, not clicks. Never an IP address.
+  for (const col of ["source", "utm_source", "utm_medium", "utm_campaign", "visitor"]) {
     if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE download_events ADD COLUMN ${col} TEXT;`);
   }
   // Classify rows recorded before the flag existed (idempotent; only touches unflagged rows).
@@ -101,6 +103,7 @@ export interface DownloadHit {
   utmSource?: unknown;
   utmMedium?: unknown;
   utmCampaign?: unknown;
+  visitor?: unknown;
 }
 
 export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
@@ -108,8 +111,8 @@ export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
   const db = openMetrics();
   try {
     db.prepare(
-      `INSERT INTO download_events (platform, version, referrer, country, ua_family, created_at, bot, source, utm_source, utm_medium, utm_campaign)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO download_events (platform, version, referrer, country, ua_family, created_at, bot, source, utm_source, utm_medium, utm_campaign, visitor)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       PLATFORMS.has(platform) ? platform : "other",
       clip(hit.version, 24),
@@ -122,6 +125,7 @@ export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
       clip(hit.utmSource, 60),
       clip(hit.utmMedium, 60),
       clip(hit.utmCampaign, 100),
+      clip(hit.visitor, 32),
     );
   } finally {
     db.close();
@@ -175,6 +179,8 @@ export function forgetActivity(userId: string): void {
 }
 
 export interface DownloadSummary {
+  /** Distinct people (daily-rotating anonymous key), from when it was recorded; null before. */
+  people: { today: number; last7: number; last30: number };
   /** Automated hits (crawlers, link previews, scripts) in the window -- excluded from every number below. */
   bots: number;
   total: number;
@@ -230,7 +236,15 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
     );
 
     const bots = count("SELECT COUNT(*) AS n FROM download_events WHERE bot = 1 AND created_at >= ?", since);
+    // A person is one fingerprint per day; rows from before fingerprints existed count once each.
+    const people = (from: string) =>
+      count(
+        `SELECT COUNT(*) AS n FROM (SELECT COALESCE(visitor || substr(created_at, 1, 10), 'row' || id) AS k
+           FROM download_events WHERE bot = 0 AND created_at >= ? GROUP BY k)`,
+        from,
+      );
     return {
+      people: { today: people(startOfToday), last7: people(ago(7)), last30: people(ago(30)) },
       bots,
       total,
       today,

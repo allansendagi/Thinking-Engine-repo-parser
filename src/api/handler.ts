@@ -38,7 +38,7 @@ import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
 import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary, scheduleRetentionSweep, setRetentionDays } from "../db/retention";
 import { storageMode } from "../db/durability";
 import { appVersionFrom, downloadSummary, forgetActivity, isAdmin, isBotUserAgent, noteActive, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
-import { forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket } from "./growth";
+import { forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, visitorKey } from "./growth";
 import { gaReport } from "./ga";
 import { addToWaitlist, waitlistSummary } from "./waitlist";
 import {
@@ -370,7 +370,11 @@ export function createRequestHandler(
         // `firstReferrer` / utm_* are the visitor's FIRST touch on the website (the site keeps
         // them for the session); `referrer` is just the site page the button was on.
         const source = sourceBucket(str(body.utmSource), str(body.firstReferrer) ?? str(body.referrer));
+        // The visitor's IP comes from the website's server (this request is the site's, not
+        // theirs); it's only hashed into the daily key, never stored.
+        const visitor = await visitorKey(str(body.ip), str(body.uaFamily) ?? req.headers.get("user-agent"));
         recordDownload({
+          visitor,
           source,
           utmSource: body.utmSource,
           utmMedium: body.utmMedium,
