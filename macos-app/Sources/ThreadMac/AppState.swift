@@ -320,6 +320,9 @@ final class AppState: ObservableObject {
 
     @Published var searchQuery: String = ""
     @Published var searchResults: [SearchResult] = []
+    /// What the current results rest on ("Your thinking · 8 conversations · ChatGPT"), once the
+    /// server has answered the query; nil while only local results are showing.
+    @Published var searchContext: String?
     @Published var thinkingState: ThinkingStateResponse?
     /// What Thread has learned about which ideas this person keeps (see Taste.swift). Nil until the
     /// first sync, or against an older backend -- everything is then just a suggestion.
@@ -1040,7 +1043,7 @@ final class AppState: ObservableObject {
     /// capture. Set this (e.g. "https://chromewebstore.google.com/detail/<slug>/<id>") and first
     /// run gains "Connect Browser", opening the listing and holding the pairing window open so the
     /// installed extension connects by itself. While nil the browser is never mentioned as setup.
-    static let chromeWebStoreURL: String? = nil
+    static let chromeWebStoreURL: String? = "https://chromewebstore.google.com/detail/omhbnmalnejnccfphfldeamlncacjhfi"
     static var browserExtensionURL: URL? {
         URL(string: chromeWebStoreURL ?? "\(marketingBaseURL)/get-started")
     }
@@ -1469,6 +1472,7 @@ final class AppState: ObservableObject {
         let q = searchQuery.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else {
             searchResults = []
+            searchContext = nil
             return
         }
         // Instant, offline, never fails: scan the local snapshot first. The panel shows results
@@ -1484,13 +1488,18 @@ final class AppState: ObservableObject {
                                 currentFormulation: i.currentFormulation, score: 0)
         }
         searchResults = keyword + semantic
+        searchContext = nil
 
-        // Then reconcile with the server when it's reachable (better ranking, ideas not yet in
-        // the snapshot). If it's down or the query moved on, the local results stand.
+        // Then ask the server once typing pauses: it ranks by meaning across everything and
+        // answers with where the person stands on each idea. If it's down or the query moved on,
+        // the local results stand.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        guard q == searchQuery.trimmingCharacters(in: .whitespaces) else { return }
         do {
-            let remote = try await client.searchIdeas(query: q)
+            let answer = try await client.ask(q)
             if q == searchQuery.trimmingCharacters(in: .whitespaces) {
-                searchResults = mergeSearchResults(remote: remote, local: keyword + semantic)
+                searchResults = mergeSearchResults(remote: answer.results, local: keyword + semantic)
+                searchContext = answer.context
             }
         } catch {
             // keep the local results; offline is surfaced by refresh(), not here

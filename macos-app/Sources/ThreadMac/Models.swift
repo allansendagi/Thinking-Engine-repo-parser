@@ -97,6 +97,49 @@ struct ThinkingStateResponse: Codable {
     let openLoops: [OpenLoopEntry]
     let contradictions: [RecentChange]
     let relatedIdeas: [RelatedIdea]
+    /// "You never answered this": old open questions on a subject the person is back on.
+    /// Optional so older payloads (and snapshots saved by older builds) still decode.
+    var revisit: [Revisit]?
+
+    struct Revisit: Codable, Identifiable, Equatable {
+        let ideaId: String
+        let ideaTitle: String
+        let loopId: String
+        let statement: String
+        let raisedAt: String
+        let backOnTopicAt: String
+        /// The related idea that brought the person back, when it wasn't this one.
+        let via: String?
+        var id: String { loopId }
+    }
+}
+
+/// GET /v1/ask -- "what do I think about X?", answered from the person's own thinking. Only the
+/// fields the app shows; the rest of each stance is on the idea's own page.
+struct AskAnswer: Codable, Equatable {
+    struct Stance: Codable, Equatable {
+        let ideaId: String
+        let title: String
+        let state: String
+        let relevance: Double
+        let stance: String
+    }
+    let method: String
+    let ideas: [Stance]
+    let conversations: Int
+    let tools: [String]
+
+    var results: [SearchResult] {
+        ideas.map { SearchResult(id: $0.ideaId, title: $0.title, state: $0.state, currentFormulation: $0.stance, score: $0.relevance) }
+    }
+
+    /// "Your thinking · 8 conversations · ChatGPT, Gemini" -- what the answer rests on.
+    var context: String? {
+        guard !ideas.isEmpty, conversations > 0 else { return nil }
+        let where_ = tools.compactMap { displaySourceLabel($0) }
+        let convs = conversations == 1 ? "1 conversation" : "\(conversations) conversations"
+        return (["Your thinking", convs] + (where_.isEmpty ? [] : [where_.joined(separator: ", ")])).joined(separator: " · ")
+    }
 }
 
 struct OpenLoop: Codable, Identifiable {

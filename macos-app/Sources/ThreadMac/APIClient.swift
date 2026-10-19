@@ -140,6 +140,12 @@ final class APIClient {
         return try await request(path)
     }
 
+    /// "What do I think about X?" -- ranked by meaning on the server, answered in the person's words.
+    func ask(_ query: String) async throws -> AskAnswer {
+        let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        return try await request("/v1/ask?q=\(q)")
+    }
+
     func searchIdeas(query: String) async throws -> [SearchResult] {
         let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         return try await request("/v1/ideas?q=\(q)")
