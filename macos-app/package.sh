@@ -197,6 +197,11 @@ else
   echo "App Intents metadata: skipped (no Xcode toolchain) -- thread:// scheme still works."
 fi
 
+# --- Widget extension ---------------------------------------------------------------------------
+# Built with swiftc (no Xcode project) and embedded before signing, so the app's seal covers it. It is
+# signed with the same identity (ad-hoc when there isn't one).
+./build-widget.sh "${APP_DIR}" "${VERSION}" "${THREAD_SIGN_IDENTITY:-}"
+
 # --- Sign -------------------------------------------------------------------------------------
 # Set THREAD_SIGN_IDENTITY to a "Developer ID Application: NAME (TEAMID)" identity for a real,
 # hardened-runtime signature. With nothing set it falls back to ad-hoc (Gatekeeper shows

@@ -23,6 +23,9 @@ final class PackagingTests: XCTestCase {
             "com.apple.security.network.client",
             "com.apple.security.network.server",
             "com.apple.security.device.audio-input",
+            "com.apple.security.application-groups",
         ])
+        let groups = try XCTUnwrap(plist["com.apple.security.application-groups"] as? [String])
+        XCTAssertEqual(groups, ["RPU3YJFJK7.com.thread.mac"], "must match WidgetStore.group and the widget's entitlement")
     }
 }

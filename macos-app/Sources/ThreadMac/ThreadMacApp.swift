@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) var localHistory: LocalHistoryWatch?
     private var connectivity: ConnectivityWatcher?
     private var spotlightSync: AnyCancellable?
+    private var widgetSync: AnyCancellable?
     let updater = Updater()
     private let setupNotifier = SetupNotifier()
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
@@ -115,6 +116,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     guard let appState else { return }
                     if !appState.isPaired { SpotlightIndex.removeAll(); return }
                     if let ideas = state?.currentIdeas { SpotlightIndex.sync(ideas) }
+                }
+            }
+
+        // Keep the widget's snapshot of recent ideas current (same debounce: a sync burst is one write).
+        widgetSync = appState.$thinkingState
+            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+            .sink { [weak appState] state in
+                MainActor.assumeIsolated {
+                    guard let appState else { return }
+                    WidgetFeed.sync(state: appState.isPaired ? state : nil, excluding: appState.maybeIdeaIds)
                 }
             }
 
