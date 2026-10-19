@@ -117,7 +117,7 @@ function wordSimilarityOf(A: string[], B: string[], weight: (w: string) => numbe
 /** Word-family key for document frequency: the shared-beginning rule of sameWord, approximated. */
 const family = (w: string) => (w.length > 5 ? w.slice(0, 5) : w);
 
-function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
+export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
   let dot = 0, na = 0, nb = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i]! * b[i]!;
@@ -146,42 +146,72 @@ function centered(vectors: Map<string, ArrayLike<number>>): Map<string, Float64A
   return out;
 }
 
+/** Above this many thoughts the pair cache (n^2 floats) would cost too much memory; pairs are
+ *  then recomputed when asked again (correct, just slower). 3000 thoughts = 72 MB. */
+const MAX_CACHED_THOUGHTS = 3000;
+
 class Similarity {
-  private readonly vec: Map<string, Float64Array>;
-  private readonly cache = new Map<string, number>();
-  private readonly words = new Map<string, string[]>();
+  private readonly index = new Map<string, number>();
+  private readonly ts: MiningThought[] = [];
+  private readonly wordsOf: string[][] = [];
+  private readonly vecOf: (Float64Array | null)[] = [];
+  private readonly normOf: number[] = [];
+  /** Pair similarities by index (i * n + j, i < j); NaN = not computed yet. */
+  private readonly cache: Float64Array | null;
   constructor(
-    private readonly byId: Map<string, MiningThought>,
+    byId: Map<string, MiningThought>,
     vectors?: Map<string, ArrayLike<number>>,
     private readonly meaningWeight = 0.65,
   ) {
-    this.vec = vectors && vectors.size > 1 && meaningWeight > 0 ? centered(vectors) : new Map();
-    for (const [id, t] of byId) this.words.set(id, [...new Set(tokenize(t.statement))]);
+    const vec = vectors && vectors.size > 1 && meaningWeight > 0 ? centered(vectors) : new Map<string, Float64Array>();
+    for (const [id, t] of byId) {
+      this.index.set(id, this.ts.length);
+      this.ts.push(t);
+      this.wordsOf.push([...new Set(tokenize(t.statement))]);
+      const v = vec.get(id) ?? null;
+      this.vecOf.push(v);
+      let n = 0;
+      if (v) for (let i = 0; i < v.length; i++) n += v[i]! * v[i]!;
+      this.normOf.push(n);
+    }
     // Rare words carry the topic; words this person uses everywhere ("first", "team", "users")
     // don't. IDF over the person's own thoughts, so it adapts to their vocabulary.
     const df = new Map<string, number>();
-    for (const ws of this.words.values()) for (const f of new Set(ws.map(family))) df.set(f, (df.get(f) ?? 0) + 1);
-    const n = Math.max(1, this.words.size);
+    for (const ws of this.wordsOf) for (const f of new Set(ws.map(family))) df.set(f, (df.get(f) ?? 0) + 1);
+    const n = Math.max(1, this.wordsOf.length);
     this.idf = (w) => Math.log(1 + n / (df.get(family(w)) ?? 1));
+    const size = this.ts.length;
+    this.cache = size <= MAX_CACHED_THOUGHTS ? new Float64Array(size * size).fill(Number.NaN) : null;
   }
   private readonly idf: (w: string) => number;
 
   /** Meaning (when both thoughts have vectors) blended with words, plus conversational context. */
   between(a: string, b: string): number {
-    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
-    const hit = this.cache.get(key);
-    if (hit !== undefined) return hit;
-    const ta = this.byId.get(a)!;
-    const tb = this.byId.get(b)!;
-    const words = wordSimilarityOf(this.words.get(a)!, this.words.get(b)!, this.idf);
-    const va = this.vec.get(a);
-    const vb = this.vec.get(b);
-    // Centred cosine: ~0.25+ is a real match, <= 0 unrelated. Map to 0..1 around that.
-    const meaning = va && vb ? Math.max(0, Math.min(1, cosine(va, vb) / 0.45)) : null;
+    const i = this.index.get(a)!;
+    const j = this.index.get(b)!;
+    return i < j ? this.at(i, j) : this.at(j, i);
+  }
+
+  /** Similarity of thoughts i < j (by index). Computed once, in one fixed order, so it is symmetric. */
+  private at(i: number, j: number): number {
+    const n = this.ts.length;
+    const hit = this.cache?.[i * n + j];
+    if (hit !== undefined && !Number.isNaN(hit)) return hit;
+    const words = wordSimilarityOf(this.wordsOf[i]!, this.wordsOf[j]!, this.idf);
+    const va = this.vecOf[i], vb = this.vecOf[j];
+    let meaning: number | null = null;
+    if (va && vb) {
+      let dot = 0;
+      for (let k = 0; k < va.length; k++) dot += va[k]! * vb[k]!;
+      const na = this.normOf[i]!, nb = this.normOf[j]!;
+      const cos = na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
+      // Centred cosine: ~0.25+ is a real match, <= 0 unrelated. Map to 0..1 around that.
+      meaning = Math.max(0, Math.min(1, cos / 0.45));
+    }
     const base = meaning === null ? words : this.meaningWeight * meaning + (1 - this.meaningWeight) * words;
-    const s = Math.min(1, base + this.context(ta, tb));
-    this.cache.set(key, s);
-    return s;
+    const s = Math.min(1, base + this.context(this.ts[i]!, this.ts[j]!));
+    if (this.cache) this.cache[i * n + j] = s;
+    return this.cache ? this.cache[i * n + j]! : s;
   }
 
   /** Same conversation, close together -> probably the same line of thought. Never between two
@@ -253,29 +283,62 @@ function agglomerate(seeds: string[][], sim: Similarity, threshold: number, cann
     }
   }
 
+  // Each live row's best partner to its right (highest average; ties -> the later partner), so a
+  // merge rescans only the rows it affected instead of every pair: O(n^2) overall, not O(n^3).
+  // Picks exactly the pair the full scan would (the last maximal pair in row-major order).
+  const bestAvg = new Float64Array(n).fill(-Infinity);
+  const bestJ = new Int32Array(n).fill(-1);
+  const rescan = (i: number) => {
+    bestAvg[i] = -Infinity;
+    bestJ[i] = -1;
+    const gi = groups[i];
+    if (!gi) return;
+    for (let j = i + 1; j < n; j++) {
+      const gj = groups[j];
+      if (!gj || veto[i]![j]) continue;
+      const avg = sum[i]![j]! / (gi.length * gj.length);
+      if (avg >= bestAvg[i]!) {
+        bestAvg[i] = avg;
+        bestJ[i] = j;
+      }
+    }
+  };
+  for (let i = 0; i < n; i++) rescan(i);
+
   for (;;) {
-    let bi = -1, bj = -1, best = threshold;
+    let bi = -1, best = threshold;
     for (let i = 0; i < n; i++) {
-      const gi = groups[i];
-      if (!gi) continue;
-      for (let j = i + 1; j < n; j++) {
-        const gj = groups[j];
-        if (!gj || veto[i]![j]) continue;
-        const avg = sum[i]![j]! / (gi.length * gj.length);
-        if (avg >= best) {
-          best = avg;
-          bi = i;
-          bj = j;
-        }
+      if (bestJ[i]! >= 0 && bestAvg[i]! >= best) {
+        best = bestAvg[i]!;
+        bi = i;
       }
     }
     if (bi < 0) break;
+    const bj = bestJ[bi]!;
     groups[bi] = [...groups[bi]!, ...groups[bj]!];
     groups[bj] = null;
     for (let k = 0; k < n; k++) {
       if (k === bi || !groups[k]) continue;
       sum[bi]![k] = sum[k]![bi] = sum[bi]![k]! + sum[bj]![k]!;
       veto[bi]![k] = veto[k]![bi] = veto[bi]![k]! | veto[bj]![k]!;
+    }
+    rescan(bi);
+    bestJ[bj] = -1;
+    bestAvg[bj] = -Infinity;
+    const gbi = groups[bi]!;
+    for (let k = 0; k < bj; k++) {
+      if (k === bi || !groups[k]) continue;
+      if (bestJ[k] === bi || bestJ[k] === bj) {
+        rescan(k); // its best partner changed size or vanished
+      } else if (k < bi && !veto[k]![bi]) {
+        const avg = sum[k]![bi]! / (groups[k]!.length * gbi.length);
+        if (avg > bestAvg[k]! || (avg === bestAvg[k]! && bi > bestJ[k]!)) {
+          bestAvg[k] = avg;
+          bestJ[k] = bi;
+        }
+      } else if (k < bi && veto[k]![bi] && bestJ[k] === bi) {
+        rescan(k);
+      }
     }
   }
   return groups.filter((g): g is string[] => g !== null);
