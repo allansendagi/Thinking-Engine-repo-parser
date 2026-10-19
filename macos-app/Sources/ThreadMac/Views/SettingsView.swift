@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
-    @State private var urlDraft = ""
     @State private var copied = false
     @State private var showAdvanced = false
     @State private var confirmStrandedUnpair = false
@@ -31,7 +30,6 @@ struct SettingsView: View {
         .frame(width: 340)
         .frame(maxHeight: maxPanelHeight)
         .tint(Theme.accent)   // buttons follow the app accent, not the OS accent colour
-        .onAppear { urlDraft = appState.apiBaseUrl }
         .onReceive(heartbeat) { _ in tick &+= 1 }   // keep the browser-connection line current
     }
 
@@ -186,14 +184,11 @@ struct SettingsView: View {
             Divider()
 
             DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+                // The server address and internal account id are deliberately not shown: they're
+                // nothing a person needs, and an edited address silently breaks the app. A
+                // developer can still point a build elsewhere with
+                // `defaults write com.thread.mac thread.apiBaseUrl <url>`.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("API base URL").font(.caption).foregroundColor(.secondary)
-                    TextField("https://…", text: $urlDraft)
-                        .textFieldStyle(.roundedBorder)
-                    if let userId = appState.userId {
-                        Text("Account: \(userId)").font(.caption2).foregroundColor(.secondary)
-                            .textSelection(.enabled)
-                    }
                     Button("Unpair this Mac", role: .destructive) {
                         if appState.signOutWouldStrandIdeas { confirmStrandedUnpair = true }
                         else { appState.unpair(); dismiss() }
@@ -222,14 +217,7 @@ struct SettingsView: View {
                 .controlSize(.small)
                 .keyboardShortcut("q", modifiers: .command)
             Spacer()
-            Button("Done") {
-                // Only write if the field was actually populated and changed. It starts empty
-                // and only fills in via .onAppear below -- without the isEmpty guard, opening
-                // Settings and hitting Done without touching Advanced would blank the API URL.
-                let trimmed = urlDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty && trimmed != appState.apiBaseUrl { appState.setApiBaseUrl(trimmed) }
-                dismiss()
-            }
+            Button("Done") { dismiss() }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
         }

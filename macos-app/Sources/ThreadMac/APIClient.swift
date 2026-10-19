@@ -36,7 +36,7 @@ final class APIClient {
         // *relative* URL here, which URLSession then rejects with the opaque "unsupported URL".
         // Catch it with a clear message instead.
         guard let url = URL(string: baseURL + path), let scheme = url.scheme, scheme.hasPrefix("http"), url.host != nil else {
-            throw APIError.http(status: 0, message: "Invalid API base URL: \(baseURL) — set it to something like https://api.thread.app in Settings ▸ Advanced.")
+            throw APIError.http(status: 0, message: "Thread can't reach its server address. Reinstall Thread from threadnow.app to reset it.")
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
