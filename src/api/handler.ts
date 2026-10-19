@@ -40,6 +40,8 @@ import { storageMode } from "../db/durability";
 import { appVersionFrom, downloadSummary, forgetActivity, installIdFrom, isAdmin, isBotUserAgent, noteActive, noteInstall, osVersionFrom, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
 import { forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, visitorKey } from "./growth";
 import { gaReport } from "./ga";
+import { backfillBillingFromPaddle, revenueSummary } from "./revenue";
+import { accuracySummary } from "./accuracy";
 import { addToWaitlist, waitlistSummary } from "./waitlist";
 import {
   deleteIdea,
@@ -467,8 +469,17 @@ export function createRequestHandler(
         365,
         Math.max(1, Number(url.searchParams.get("days") ?? 30) || 30),
       );
+      await backfillBillingFromPaddle();
       const [github, ga] = await Promise.all([githubDownloads(), gaReport(days)]);
-      return json({ ...downloadSummary(days), usage: usageSummary(), growth: growthSummary(days), github, ga });
+      return json({
+        ...downloadSummary(days),
+        usage: usageSummary(),
+        growth: growthSummary(days),
+        github,
+        ga,
+        revenue: revenueSummary(days),
+        accuracy: accuracySummary(),
+      });
     }
 
     // Admin-only: the actual waitlist -- who to onboard, not just a count. `bun src/cli.ts

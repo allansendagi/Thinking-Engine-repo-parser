@@ -1,4 +1,5 @@
 import { noteMilestone } from "./growth";
+import { recordBillingEvent } from "./revenue";
 import { createHmac, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import {
   findAccountByPaddleCustomer,
@@ -143,7 +144,9 @@ export function verifyPaddleSignature(payload: string, sigHeader: string, secret
 }
 
 interface PaddleEvent {
+  event_id?: string;
   event_type: string;
+  occurred_at?: string;
   data: Record<string, unknown>;
 }
 
@@ -174,6 +177,9 @@ export function applyPaddleEvent(event: PaddleEvent): void {
     if (customerId) return findAccountByPaddleCustomer(customerId)?.userId ?? null;
     return null;
   };
+
+  // Every event goes into the append-only billing log first (MRR, revenue, churn over time).
+  recordBillingEvent(event, resolveUserId());
 
   switch (event.event_type) {
     case "subscription.activated":

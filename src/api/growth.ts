@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { openMetrics } from "./metrics";
+import { excludedUserIds } from "./revenue";
 import { dbPathForUser } from "../db/tenancy";
 
 /**
@@ -241,6 +242,12 @@ export interface PeriodTotals {
 }
 
 /** Headline numbers for [from, to). Days are UTC ISO strings; `to` exclusive. */
+/** `AND <col> NOT IN (...)` for operator/test accounts (ids validated, so safe to inline). */
+function notExcluded(db: Database, col: string): string {
+  const ids = [...excludedUserIds(db)].filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
+  return ids.length ? ` AND ${col} NOT IN (${ids.map((i) => `'${i}'`).join(",")})` : "";
+}
+
 function periodTotals(db: Database, from: string, to: string): PeriodTotals {
   const n = (sql: string, ...a: string[]) => (db.query(sql).get(...a) as { n: number }).n;
   return {
@@ -253,10 +260,10 @@ function periodTotals(db: Database, from: string, to: string): PeriodTotals {
     opened: n(
       `SELECT COUNT(DISTINCT COALESCE(u.install_id, u.id)) AS n FROM users u
          LEFT JOIN installs i ON i.install_id = u.install_id
-        WHERE u.created_at >= ? AND u.created_at < ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)`,
+        WHERE u.created_at >= ? AND u.created_at < ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)${notExcluded(db, "u.id")}`,
       from, to, from,
     ),
-    active: n("SELECT COUNT(DISTINCT user_id) AS n FROM active_days WHERE day >= ? AND day < ?", from.slice(0, 10), to.slice(0, 10)),
+    active: n(`SELECT COUNT(DISTINCT user_id) AS n FROM active_days WHERE day >= ? AND day < ?${notExcluded(db, "user_id")}`, from.slice(0, 10), to.slice(0, 10)),
     firstIdeas: n("SELECT COUNT(*) AS n FROM milestones WHERE kind = 'first_idea' AND at >= ? AND at < ?", from, to),
     pro: n("SELECT COUNT(*) AS n FROM milestones WHERE kind = 'pro' AND at >= ? AND at < ?", from, to),
   };
@@ -278,7 +285,7 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
   const db = openGrowth();
   try {
     const since = new Date(now.getTime() - windowDays * 86_400_000).toISOString();
-    const users = db.query("SELECT id, created_at, plan FROM users WHERE created_at >= ?").all(since) as { id: string; created_at: string; plan: string | null }[];
+    const users = db.query(`SELECT id, created_at, plan FROM users WHERE created_at >= ?${notExcluded(db, "id")}`).all(since) as { id: string; created_at: string; plan: string | null }[];
     const ids = new Set(users.map((u) => u.id));
     const ms = db.query("SELECT user_id, kind, at FROM milestones").all() as { user_id: string; kind: Milestone; at: string }[];
     const reached = (kind: Milestone) => new Set(ms.filter((m) => m.kind === kind && ids.has(m.user_id)).map((m) => m.user_id));
@@ -302,7 +309,7 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
     const returned = eligible.filter((u) => (daysOf.get(u.id) ?? []).some((d) => { const o = offset(u.created_at, d); return o >= 7 && o < 14; }));
 
     // Cohorts: every account (not only the window), by install week, last COHORT_WEEKS weeks.
-    const all = db.query("SELECT id, created_at FROM users").all() as { id: string; created_at: string }[];
+    const all = db.query(`SELECT id, created_at FROM users WHERE 1=1${notExcluded(db, "id")}`).all() as { id: string; created_at: string }[];
     const captured = new Set(ms.filter((m) => m.kind === "first_capture").map((m) => m.user_id));
     const thisWeek = weekOf(now.toISOString());
     const weeks = Array.from({ length: COHORT_WEEKS }, (_, i) => {
@@ -468,7 +475,7 @@ function openedInWindow(db: Database, since: string): number {
       .query(
         `SELECT COUNT(DISTINCT COALESCE(u.install_id, u.id)) AS n FROM users u
           LEFT JOIN installs i ON i.install_id = u.install_id
-          WHERE u.created_at >= ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)`,
+          WHERE u.created_at >= ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)${notExcluded(db, "u.id")}`,
       )
       .get(since, since) as { n: number }
   ).n;
