@@ -1695,8 +1695,10 @@ final class AppState: ObservableObject {
     }
 
     func toggleLoop(_ loopId: String, resolved: Bool) async {
-        let ideaId = selectedIdeaId
-            ?? thinkingState?.openLoops.first { $0.loopId == loopId }?.ideaId
+        // The loop's own idea first: from a list row, whatever idea happens to be selected
+        // isn't necessarily the one this question belongs to.
+        let ideaId = thinkingState?.openLoops.first { $0.loopId == loopId }?.ideaId
+            ?? selectedIdeaId
             ?? ""
         enqueueEdit(.resolveLoop(ideaId, loopId: loopId, resolved: resolved))
     }

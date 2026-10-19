@@ -16,6 +16,24 @@ struct IdeaVerdictItems: View {
     }
 }
 
+/// Right-click on a question row (Open loops, "Still unanswered"): settle it, or go to its idea.
+/// A question is part of an idea, so Keep / Not an idea belong to the idea, not here.
+struct LoopRowItems: View {
+    let row: IdeaRow
+    let openIdea: () -> Void
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        Button { Task { await appState.toggleLoop(loopId, resolved: true) } } label: {
+            Label("Mark as answered", systemImage: "checkmark.circle")
+        }
+        Button { openIdea() } label: { Label("Open idea", systemImage: "arrow.up.right") }
+    }
+
+    /// Question rows are keyed "loop:<loopId>".
+    private var loopId: String { row.id.hasPrefix("loop:") ? String(row.id.dropFirst("loop:".count)) : row.id }
+}
+
 /// Ideas Thread isn't sure are yours to keep. Collapsed by default, nothing is deleted, and one
 /// click on Keep moves an idea back into the list.
 struct MaybeTray: View {

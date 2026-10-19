@@ -84,8 +84,6 @@ struct MenuBarListView: View {
                                   sourceLabelFor: { ideaSourceLabel[$0] },
                                   whenFor: { lastTouched[$0] })
         case .recent, .all:
-            let loopIdeaIDs = Set(openLoops.map(\.ideaId))
-
             // Captures made on this Mac the backend hasn't confirmed yet — shown first, with the
             // on-device draft, so a capture appears the instant it's made.
             let pendingGroup: [IdeaRowGroup] = appState.pendingCaptures.isEmpty ? [] : [
@@ -115,7 +113,6 @@ struct MenuBarListView: View {
             // "You never answered this": questions from a while ago, on a subject you're back on
             // now. Leads Recent; those loops aren't repeated in the date buckets below.
             let revisit = tab == .recent ? (appState.thinkingState?.revisit ?? []) : []
-            let revisitIDs = Set(revisit.map(\.loopId))
             let revisitGroup: [IdeaRowGroup] = revisit.isEmpty ? [] : [
                 IdeaRowGroup(id: "revisit", label: "Still unanswered", rows: revisit.map { r in
                     IdeaRow(id: "loop:" + r.loopId, title: deNarrate(r.statement.trimmingCharacters(in: .whitespaces)),
@@ -124,9 +121,11 @@ struct MenuBarListView: View {
                 })
             ]
 
-            let items: [IdeaRow] = tab == .recent
-                ? ideas.filter { !loopIdeaIDs.contains($0.id) }.map(ideaRow) + openLoops.filter { !revisitIDs.contains($0.loopId) }.map(loopRow)
-                : ideas.filter { !pinnedIDs.contains($0.id) }.map(ideaRow)
+            // Recent is your ideas, one row each -- an idea with an open question carries the
+            // open-loop mark instead of being replaced by its questions (that turned Recent into
+            // a list of questions). The questions themselves live in Open loops and, when you're
+            // back on the subject, in "Still unanswered" above.
+            let items: [IdeaRow] = ideas.filter { !pinnedIDs.contains($0.id) }.map(ideaRow)
             return pendingGroup + revisitGroup + pinnedGroup + dateBucketedGroups(items)
         }
     }
@@ -242,7 +241,9 @@ struct MenuBarListView: View {
                                     .contentShape(Rectangle())
                                     .onTapGesture { selection = r.id; open(r.id) }
                                     .contextMenu {
-                                        if !r.isLoop {
+                                        if r.isLoop {
+                                            LoopRowItems(row: r) { open(r.id) }
+                                        } else {
                                             Button(appState.isPinned(r.ideaId) ? "Unpin" : "Pin to top") {
                                                 appState.togglePin(r.ideaId)
                                             }
