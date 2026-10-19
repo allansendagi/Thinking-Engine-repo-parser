@@ -3,9 +3,12 @@
 <!--
   Hardened-runtime entitlements for a Developer ID (non-App-Store, non-sandboxed) build.
   Thread needs three things: to reach the hosted backend (network client), to bind the loopback
-  pairing port on 127.0.0.1 (network server), and -- only for the voice-capture shortcut -- the
-  microphone (audio input), which macOS still asks the person to allow the first time it is used. The global hotkey is Carbon
-  RegisterEventHotKey, not an event tap, so no Accessibility / Input Monitoring entitlement.
+  pairing port on 127.0.0.1 (network server), and, only for the voice-capture shortcut, the
+  microphone (audio input), which macOS still asks the person to allow the first time it is used.
+  The global hotkey is Carbon RegisterEventHotKey, not an event tap, so no Accessibility or
+  Input Monitoring entitlement.
+  Keep this comment free of double hyphens: they are invalid inside an XML comment, and Apple's
+  signing and launch checks reject the file even though plutil is lenient about it.
 -->
 <plist version="1.0">
 <dict>
