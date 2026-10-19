@@ -2,8 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Hardened-runtime entitlements for a Developer ID (non-App-Store, non-sandboxed) build.
-  Thread needs exactly two things: to reach the hosted backend (network client) and to bind
-  the loopback pairing port on 127.0.0.1 (network server). The global hotkey is Carbon
+  Thread needs three things: to reach the hosted backend (network client), to bind the loopback
+  pairing port on 127.0.0.1 (network server), and -- only for the voice-capture shortcut -- the
+  microphone (audio input), which macOS still asks the person to allow the first time it is used. The global hotkey is Carbon
   RegisterEventHotKey, not an event tap, so no Accessibility / Input Monitoring entitlement.
 -->
 <plist version="1.0">
@@ -11,6 +12,8 @@
     <key>com.apple.security.network.client</key>
     <true/>
     <key>com.apple.security.network.server</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
     <true/>
 </dict>
 </plist>

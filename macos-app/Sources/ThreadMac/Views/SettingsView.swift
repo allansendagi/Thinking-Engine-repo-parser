@@ -306,6 +306,7 @@ private struct GeneralSection: View {
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
     @State private var loginNeedsApproval = LaunchAtLogin.needsApproval
     @State private var shortcut = RecallShortcut.current
+    @State private var voiceShortcut = VoiceShortcut.current
     @State private var autoUpdate = AppDelegate.shared?.updater.automaticallyChecks ?? false
     @State private var spotlight = SpotlightIndex.isEnabled
 
@@ -351,6 +352,20 @@ private struct GeneralSection: View {
                 Text(note).font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            HStack(spacing: 10) {
+                Text("Voice").font(.caption).foregroundColor(.secondary).frame(width: 70, alignment: .leading)
+                Picker("", selection: $voiceShortcut) {
+                    ForEach(VoiceShortcut.allCases) { Text($0.symbol).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).frame(width: 150)
+                .accessibilityLabel("Voice capture shortcut")
+                .onChange(of: voiceShortcut) { _, new in VoiceShortcut.current = new }
+                Spacer(minLength: 0)
+            }
+            Text("Speak a thought from any app. Your voice is turned into text on this Mac and never sent anywhere; the text is captured like anything else you add.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             if let updater, updater.isConfigured {
                 HStack(spacing: 12) {

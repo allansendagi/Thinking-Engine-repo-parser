@@ -19,6 +19,8 @@ final class GlobalHotKey {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
     private let onTrigger: () -> Void
+    /// Called when the key comes back up (hold-to-talk); nil for shortcuts that only need the press.
+    private let onRelease: (() -> Void)?
     private let id: UInt32
 
     private static var registry: [UInt32: GlobalHotKey] = [:]
@@ -27,8 +29,9 @@ final class GlobalHotKey {
 
     /// keyCode: a virtual key code (see Carbon's Events.h, e.g. kVK_ANSI_T = 0x11).
     /// modifiers: a combination of cmdKey, shiftKey, optionKey, controlKey (Carbon constants).
-    init?(keyCode: UInt32, modifiers: UInt32, onTrigger: @escaping () -> Void) {
+    init?(keyCode: UInt32, modifiers: UInt32, onRelease: (() -> Void)? = nil, onTrigger: @escaping () -> Void) {
         self.onTrigger = onTrigger
+        self.onRelease = onRelease
         self.id = GlobalHotKey.nextId
         GlobalHotKey.nextId += 1
 
@@ -47,7 +50,10 @@ final class GlobalHotKey {
         guard !handlerInstalled else { return }
         handlerInstalled = true
 
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        var eventTypes = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+        ]
         InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, _ -> OSStatus in
@@ -62,12 +68,13 @@ final class GlobalHotKey {
                     &hotKeyID
                 )
                 if status == noErr, let hotKey = GlobalHotKey.registry[hotKeyID.id] {
-                    DispatchQueue.main.async { hotKey.onTrigger() }
+                    let released = GetEventKind(event) == UInt32(kEventHotKeyReleased)
+                    DispatchQueue.main.async { released ? hotKey.onRelease?() : hotKey.onTrigger() }
                 }
                 return noErr
             },
-            1,
-            &eventType,
+            eventTypes.count,
+            &eventTypes,
             nil,
             nil
         )
