@@ -74,7 +74,7 @@ struct MenuBarListView: View {
                                snippet: rowSnippet(title: title, formulation: r.currentFormulation),
                                meta: "", isLoop: false, ideaId: r.id, when: "")
             }
-            return rows.isEmpty ? [] : [IdeaRowGroup(id: "r", label: "Results", rows: rows)]
+            return rows.isEmpty ? [] : [IdeaRowGroup(id: "r", label: appState.searchContext ?? "Results", rows: rows)]
         }
         // Ideas Thread isn't sure are yours wait in the Maybe tray below, not in the list.
         let ideas = (appState.thinkingState?.currentIdeas ?? []).filter { !appState.maybeIdeaIds.contains($0.id) }
@@ -112,10 +112,22 @@ struct MenuBarListView: View {
                 }
             }
 
+            // "You never answered this": questions from a while ago, on a subject you're back on
+            // now. Leads Recent; those loops aren't repeated in the date buckets below.
+            let revisit = tab == .recent ? (appState.thinkingState?.revisit ?? []) : []
+            let revisitIDs = Set(revisit.map(\.loopId))
+            let revisitGroup: [IdeaRowGroup] = revisit.isEmpty ? [] : [
+                IdeaRowGroup(id: "revisit", label: "Still unanswered", rows: revisit.map { r in
+                    IdeaRow(id: "loop:" + r.loopId, title: deNarrate(r.statement.trimmingCharacters(in: .whitespaces)),
+                            snippet: nil, meta: metaLine(r.via.map { "Back on it via \(cleanIdeaTitle($0, fallback: $0))" } ?? cleanIdeaTitle(r.ideaTitle, fallback: r.ideaTitle), r.raisedAt),
+                            isLoop: true, ideaId: r.ideaId, when: r.raisedAt)
+                })
+            ]
+
             let items: [IdeaRow] = tab == .recent
-                ? ideas.filter { !loopIdeaIDs.contains($0.id) }.map(ideaRow) + openLoops.map(loopRow)
+                ? ideas.filter { !loopIdeaIDs.contains($0.id) }.map(ideaRow) + openLoops.filter { !revisitIDs.contains($0.loopId) }.map(loopRow)
                 : ideas.filter { !pinnedIDs.contains($0.id) }.map(ideaRow)
-            return pendingGroup + pinnedGroup + dateBucketedGroups(items)
+            return pendingGroup + revisitGroup + pinnedGroup + dateBucketedGroups(items)
         }
     }
 
