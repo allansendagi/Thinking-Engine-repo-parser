@@ -189,6 +189,15 @@ func dateBucketedGroups(_ rows: [IdeaRow]) -> [IdeaRowGroup] {
     }
 }
 
+/// Pinned ideas first, as their own "Pinned" group, then everything else by date. The single place
+/// that decides where a pin shows, so the panel's Recent and All lists and the main window agree.
+func pinnedThenDated(_ rows: [IdeaRow], isPinned: (String) -> Bool) -> [IdeaRowGroup] {
+    let pinned = rows.filter { isPinned($0.ideaId) }.sorted { $0.when > $1.when }
+    let rest = rows.filter { !isPinned($0.ideaId) }
+    let lead = pinned.isEmpty ? [] : [IdeaRowGroup(id: "pinned", label: "Pinned", rows: pinned)]
+    return lead + dateBucketedGroups(rest)
+}
+
 /// The one row. Density and whether the snippet line shows are user preferences
 /// (Settings ▸ Appearance), read live from AppState so both surfaces stay in sync.
 struct IdeaRowView: View {

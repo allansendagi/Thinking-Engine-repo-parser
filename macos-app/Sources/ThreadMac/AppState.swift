@@ -671,8 +671,21 @@ final class AppState: ObservableObject {
     /// Open the extension's install page and hold the pairing window open so a just-installed
     /// extension pairs with no further clicks.
     func connectBrowser() {
-        if let url = Self.browserExtensionURL { NSWorkspace.shared.open(url) }
+        if let url = Self.browserExtensionURL { Self.openInExtensionBrowser(url) }
         openPairingWindow(seconds: 300)
+    }
+
+    /// The extension page only works in a Chromium browser. Opening it in the default browser sent
+    /// anyone whose default is Safari to a "switch to Chrome" dead end, so pick the browser it runs in.
+    static func openInExtensionBrowser(_ url: URL) {
+        let workspace = NSWorkspace.shared
+        let defaultID = workspace.urlForApplication(toOpen: url).flatMap { Bundle(url: $0)?.bundleIdentifier }
+        guard let id = extensionBrowserToOpen(defaultBrowser: defaultID, installed: { workspace.urlForApplication(withBundleIdentifier: $0) != nil }),
+              let appURL = workspace.urlForApplication(withBundleIdentifier: id) else {
+            workspace.open(url)   // none installed: the page says what's needed
+            return
+        }
+        workspace.open([url], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration())
     }
 
     // MARK: - Historical backfill ("Recover my thinking")
@@ -1295,8 +1308,13 @@ final class AppState: ObservableObject {
                 // This Mac had an account; the credential is simply gone. Reconnect, don't start over.
                 enterReconnect(knownEmail: CredentialStore.lastKnownEmail)
             } else {
-                // Genuine first run -- auto-create so capture works with zero setup.
+                // Genuine first run -- auto-create so capture works with zero setup. Thread is a
+                // menu-bar app with no window, so open the panel once: otherwise a new person
+                // sees nothing happen and can't tell it installed. (Only here, on a Mac with no
+                // account, no snapshot and no earlier sign-out -- never on an update or a relaunch.)
                 await pairNewAccount()
+                try? await Task.sleep(for: .milliseconds(500))   // let the menu-bar icon lay out
+                NotificationCenter.default.post(name: .threadPresentPanel, object: nil)
             }
         }
     }

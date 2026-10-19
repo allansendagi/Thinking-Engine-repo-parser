@@ -590,3 +590,14 @@ struct AccountDeletionReceipt: Decodable {
     let subscriptionStillActive: Bool
     let backups: String
 }
+
+
+/// Browsers the Thread extension runs in, best first.
+let extensionBrowserBundleIDs = ["com.google.Chrome", "com.brave.Browser", "company.thebrowser.Browser"]
+
+/// Which browser to open the extension page in: the default if it's one of them, else the first
+/// that's installed. Nil when none is, so the caller falls back to the default browser.
+func extensionBrowserToOpen(defaultBrowser: String?, installed: (String) -> Bool) -> String? {
+    if let d = defaultBrowser, extensionBrowserBundleIDs.contains(d) { return d }
+    return extensionBrowserBundleIDs.first(where: installed)
+}
