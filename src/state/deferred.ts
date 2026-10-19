@@ -49,6 +49,11 @@ async function exclusive<T>(db: Database, fn: () => Promise<T>): Promise<T> {
  * them -- neither the background drain nor the "clear the backlog first" step of a live capture.
  * Live captures themselves still extract. Unset the variable and the queue resumes, oldest first,
  * exactly as before. For a large history import you don't want to pay for yet.
+ *
+ * The pause holds back OLD work only: a waiting conversation whose newest message is within
+ * THREAD_PAUSE_RECENT_HOURS (default 72, 0 = hold everything) is still processed. Coding-assistant
+ * sessions depend on this -- they wait for a quiet period and are then picked up by the background
+ * drain, so a drain that stops completely strands every session on a paused account.
  */
 export function backlogPaused(db: Database): boolean {
   const raw = process.env.THREAD_PAUSE_BACKLOG_USERS?.trim();
@@ -57,6 +62,12 @@ export function backlogPaused(db: Database): boolean {
   if (ids.includes("*")) return true;
   const owner = basename(db.filename).replace(/\.db$/, "");
   return ids.includes(owner);
+}
+
+/** How recent a conversation must be to keep extracting while the backlog is paused. */
+export function pauseRecentWindowMs(): number {
+  const h = Number(process.env.THREAD_PAUSE_RECENT_HOURS ?? 72);
+  return Number.isFinite(h) && h > 0 ? h * 3_600_000 : 0;
 }
 
 /**
@@ -100,7 +111,8 @@ async function extractOrDeferLocked(
 
   // 2. Older captures still waiting go first, so ideas build in the order the thinking happened.
   //    (Before this capture is marked waiting -- otherwise the backlog pass would process it too.)
-  const backlog = deferredStatus(db).count > 0 && !backlogPaused(db) ? await retryUnlocked(db, providers) : null;
+  const backlog =
+    deferredStatus(db).count > 0 ? await retryUnlocked(db, providers, 10, Date.now(), backlogPaused(db)) : null;
 
   const now = new Date().toISOString();
   const mark = db.prepare(
@@ -158,8 +170,20 @@ export function retryDeferredExtraction(
   providers: PipelineProviders,
   maxConversations = 10,
   now: number = Date.now(),
-): Promise<{ processed: number; error: string | null; waiting?: number }> {
-  return exclusive(db, () => retryUnlocked(db, providers, maxConversations, now));
+  recentOnly = false,
+): Promise<RetryOutcome> {
+  return exclusive(db, () => retryUnlocked(db, providers, maxConversations, now, recentOnly));
+}
+
+export interface RetryOutcome {
+  processed: number;
+  error: string | null;
+  /** Coding-assistant sessions still active, waiting to go quiet. */
+  waiting?: number;
+  /** Old conversations left alone because the backlog is paused. */
+  held?: number;
+  /** Nothing was eligible to process this pass. */
+  idle?: true;
 }
 
 async function retryUnlocked(
@@ -167,7 +191,8 @@ async function retryUnlocked(
   providers: PipelineProviders,
   maxConversations = 10,
   now: number = Date.now(),
-): Promise<{ processed: number; error: string | null; waiting?: number }> {
+  recentOnly = false,
+): Promise<RetryOutcome> {
   const all = db
     .query(
       `SELECT p.conversation_id AS conversation_id, MIN(p.queued_at) AS first,
@@ -178,9 +203,16 @@ async function retryUnlocked(
     .all() as { conversation_id: string; last: string; source: string | null }[];
   // A coding-assistant session whose newest message is recent is still active: it waits (AGENT_SOURCES).
   const quiet = agentQuietMs();
+  const recent = pauseRecentWindowMs();
   let waiting = 0;
+  let held = 0;
   const convs = all
     .filter((c) => {
+      // Paused account: only conversations that are still recent go on extracting.
+      if (recentOnly && !(recent > 0 && now - Date.parse(c.last) < recent)) {
+        held++;
+        return false;
+      }
       if (quiet > 0 && AGENT_SOURCES.has(c.source ?? "") && now - Date.parse(c.last) < quiet) {
         waiting++;
         return false;
@@ -188,7 +220,8 @@ async function retryUnlocked(
       return true;
     })
     .slice(0, maxConversations);
-  if (convs.length === 0) return { processed: 0, error: null, ...(waiting ? { waiting } : {}) };
+  const extra = { ...(waiting ? { waiting } : {}), ...(held ? { held } : {}) };
+  if (convs.length === 0) return { processed: 0, error: null, ...extra, idle: true };
   let processed = 0;
   for (const { conversation_id } of convs) {
     const ids = new Set(
@@ -221,7 +254,7 @@ async function retryUnlocked(
       return { processed, error };
     }
   }
-  return { processed, error: null, ...(waiting ? { waiting } : {}) };
+  return { processed, error: null, ...extra };
 }
 
 /**
@@ -240,14 +273,18 @@ export async function drainDeferredExtraction(
   const deadline = now() + budgetMs;
   let processed = 0;
   let error: string | null = null;
+  const recentOnly = backlogPaused(db); // a paused account still drains its recent work
   while (now() < deadline) {
-    const r = await retryDeferredExtraction(db, providers, batch, now());
+    const r = await retryDeferredExtraction(db, providers, batch, now(), recentOnly);
     processed += r.processed;
     if (r.error) {
       error = r.error;
       break;
     }
     if (deferredStatus(db).count === 0) break;
+    // Nothing eligible this pass (active sessions waiting, or only held-back old work): stop
+    // instead of spinning until the time budget runs out.
+    if (r.idle) break;
     // Only coding-assistant sessions that are still active are left: nothing more to do until they
     // go quiet. (Without this the loop would spin until the time budget ran out.)
     if (r.waiting && r.processed === 0) break;
@@ -323,7 +360,7 @@ export function scheduleDeferredRetry(
     let db: Database | null = null;
     try {
       db = open(userId);
-      if (deferredStatus(db).count === 0 || backlogPaused(db)) return;
+      if (deferredStatus(db).count === 0) return;
       const r = await drainDeferredExtraction(db, providers);
       if (r.processed > 0) {
         console.log(`[Thread] resumed extraction for ${userId}: ${r.processed} messages, ${r.remaining} left`);
