@@ -94,7 +94,9 @@ struct WelcomeView: View {
             VStack(alignment: .leading, spacing: 14) {
                 header(
                     "Thread is ready",
-                    "It captures your thinking in Cursor on its own. Connect your browser to add ChatGPT, Claude and Gemini."
+                    appState.cursorBackfillAvailable
+                        ? "It captures your thinking in Cursor on its own. Connect your browser to add ChatGPT, Claude and Gemini."
+                        : "Connect your browser and Thread captures your thinking in ChatGPT, Claude and Gemini as you go."
                 )
                 Button("Connect Browser") { appState.connectBrowser() }
                     .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
