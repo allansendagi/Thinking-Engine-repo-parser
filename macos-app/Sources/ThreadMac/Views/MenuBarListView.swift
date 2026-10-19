@@ -466,7 +466,7 @@ private struct ActivityRow: View {
                     Text("\(conv.messageCount) msg")
                         .font(.system(size: 10)).monospacedDigit().foregroundStyle(Theme.ink(0.3))
                 }
-                if let p = conv.preview, !p.isEmpty {
+                if let p = conv.rowText, !p.isEmpty {
                     Text(p).lineLimit(2)
                         .font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.8))
                 }
