@@ -99,6 +99,10 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
     <string>15.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Thread listens only while you capture a thought by voice. Your voice is turned into text on your Mac and is never sent anywhere.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Thread turns what you say into text on your Mac, so you can capture a thought by speaking. Your voice never leaves it.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>

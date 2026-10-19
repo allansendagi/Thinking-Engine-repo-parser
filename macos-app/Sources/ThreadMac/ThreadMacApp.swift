@@ -10,6 +10,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     let appState = AppState()
     private var hotKey: GlobalHotKey?
+    private var voiceHotKey: GlobalHotKey?
+    private var voiceEscapeKey: GlobalHotKey?
+    private var voiceSession: VoiceSession?
+    private var voiceHUD: VoiceHUDController?
+    private var voiceSubscription: AnyCancellable?
+    private var voicePressedAt: Date?
     private var quickRecallPanel: QuickRecallPanel?
     private var pairingServer: PairingServer?
     private var statusItem: NSStatusItem?
@@ -62,6 +68,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(registerRecallShortcut), name: .threadRecallShortcutChanged, object: nil
         )
+
+        // Speak a thought: a global shortcut, a small "Listening" panel, on-device transcription, and
+        // the same capture path as pasting. Nothing is asked of the microphone until it is first used.
+        let voice = VoiceSession(engine: AppleSpeechEngine()) { [appState] text in appState.capture(text) }
+        voiceSession = voice
+        voiceHUD = VoiceHUDController(session: voice)
+        registerVoiceShortcut()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(registerVoiceShortcut), name: .threadVoiceShortcutChanged, object: nil
+        )
+        // Escape cancels while (and only while) Thread is listening.
+        voiceSubscription = voice.$phase.receive(on: RunLoop.main).sink { [weak self] phase in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if phase == .listening {
+                    self.voiceEscapeKey = GlobalHotKey(keyCode: UInt32(kVK_Escape), modifiers: 0) { [weak self] in
+                        self?.voiceSession?.cancel()
+                    }
+                } else {
+                    self.voiceEscapeKey = nil
+                }
+            }
+        }
 
         // Come back online by itself after launch-before-Wi-Fi, sleep, or a dropped network.
         let watcher = ConnectivityWatcher(appState: appState)
@@ -196,6 +225,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appState.perform(action)
     }
 
+    @objc private func registerVoiceShortcut() {
+        voiceHotKey = nil
+        let shortcut = VoiceShortcut.current
+        guard let keyCode = shortcut.keyCode else { return }   // Off
+        voiceHotKey = GlobalHotKey(
+            keyCode: keyCode, modifiers: shortcut.carbonModifiers,
+            onRelease: { [weak self] in
+                guard let self, let at = self.voicePressedAt else { return }
+                self.voiceSession?.release(heldFor: Date().timeIntervalSince(at))
+            }
+        ) { [weak self] in
+            self?.voicePressedAt = Date()
+            self?.voiceSession?.press()
+        }
+        if voiceHotKey == nil {
+            print("[ThreadMac] Failed to register the voice shortcut (\(shortcut.symbol)) -- it may be in use by another app.")
+        }
+    }
+
     @objc private func registerRecallShortcut() {
         let shortcut = RecallShortcut.current
         hotKey = nil  // unregister the old combo first (deinit), or re-registering the same one fails
@@ -222,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         _ = add("Open Thread", #selector(presentPanel), "", [])
         _ = add("Open in Window", #selector(openMainWindowFromMenu), "w", [.command, .shift])
+        _ = add("Speak a Thought", #selector(speakFromMenu), "", [])
         _ = add("Settings…", #selector(openSettingsFromMenu), ",", [.command])
         checkForUpdatesMenuItem = add("Check for Updates…", #selector(checkForUpdatesFromMenu), "", [])
         menu.addItem(.separator())
@@ -237,6 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func checkForUpdatesFromMenu() { updater.checkForUpdates() }
 
     @objc private func presentPanel() { quickRecallPanel?.show() }
+    @objc private func speakFromMenu() { voiceSession?.press() }
     @objc private func openMainWindowFromMenu() {
         NSApp.activate(ignoringOtherApps: true)
         NotificationCenter.default.post(name: .threadOpenMainWindow, object: nil)
