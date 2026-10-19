@@ -13,14 +13,11 @@ struct VisualEffectBackground: NSViewRepresentable {
         v.material = material
         v.blendingMode = blending
         v.state = .active
-        // The design panel is a *light* frosted surface regardless of system appearance.
-        v.appearance = NSAppearance(named: .aqua)
         return v
     }
 
     func updateNSView(_ v: NSVisualEffectView, context: Context) {
         v.material = material
         v.blendingMode = blending
-        v.appearance = NSAppearance(named: .aqua)
     }
 }

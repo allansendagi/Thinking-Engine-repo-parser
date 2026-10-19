@@ -41,6 +41,7 @@ struct MaybeTray: View {
     let selectedId: String?
     let open: (IdeaRow) -> Void
     @State private var expanded = false
+    @EnvironmentObject private var appState: AppState
 
     var body: some View {
         if !rows.isEmpty {
@@ -49,6 +50,7 @@ struct MaybeTray: View {
                     IdeaRowView(row: r, selected: r.ideaId == selectedId)
                         .contentShape(Rectangle())
                         .onTapGesture { open(r) }
+                        .rowAccessibility(r, selected: r.ideaId == selectedId, showSnippet: appState.showSnippets) { open(r) }
                         .contextMenu { IdeaVerdictItems(ideaId: r.ideaId) }
                 }
             } label: {

@@ -44,6 +44,7 @@ struct TeachThreadView: View {
     @FocusState private var focused: Bool
     /// The first lesson opens with a short "how Thread learns"; never again after that.
     @AppStorage("thread.lesson.introSeen") private var introSeen = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var questions: [LessonQuestion] { appState.lessonQuestions }
     private var index: Int { appState.lessonIndex }
@@ -67,8 +68,8 @@ struct TeachThreadView: View {
                         ))
                 }
             }
-            .animation(.easeOut(duration: 0.2), value: index)
-            .animation(.easeOut(duration: 0.2), value: introSeen)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: index)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: introSeen)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .focusable()
@@ -93,6 +94,8 @@ struct TeachThreadView: View {
             }
             .buttonStyle(.plain).foregroundStyle(Theme.ink(0.45))
             .help("Done (Esc)")
+            .accessibilityLabel("Done")
+            .accessibilityHint("Closes Teach Thread")
             Text("Teach Thread").font(.system(size: 13, weight: .semibold)).kerning(-0.08)
             Spacer()
             if introSeen && !finished {
@@ -200,6 +203,7 @@ struct TeachThreadView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
+        .accessibilityElement(children: .combine)
         .background(RoundedRectangle(cornerRadius: Theme.cardCorner).fill(Theme.cardFill))
         .overlay(RoundedRectangle(cornerRadius: Theme.cardCorner).stroke(Theme.cardStroke, lineWidth: 0.5))
     }

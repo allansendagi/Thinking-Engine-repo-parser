@@ -97,6 +97,40 @@ struct IdeaRow: Identifiable {
     var status: RowStatus = .neutral
 }
 
+extension IdeaRow {
+    /// What VoiceOver reads for the row, as one sentence: the idea, what it says, where and when it
+    /// was last worked on, and what state it is in (the circle's meaning, which is otherwise only
+    /// visible).
+    func spokenDescription(showSnippet: Bool) -> String {
+        var parts = [title]
+        if showSnippet, let s = snippet, !s.isEmpty { parts.append(s) }
+        if !meta.isEmpty { parts.append(meta) }
+        if isLoop {
+            parts.append("Open question")
+        } else {
+            switch status {
+            case .openQuestion: parts.append("Has an open question")
+            case .contested: parts.append("Contested")
+            case .established: parts.append("Settled")
+            case .rejected: parts.append("Set aside")
+            case .neutral: break
+            }
+        }
+        return parts.joined(separator: ". ")
+    }
+}
+
+extension View {
+    /// Makes a tappable row a single VoiceOver button: one spoken sentence, selected state, and the
+    /// same action as a click. (Rows are tap gestures, which VoiceOver can't activate on its own.)
+    func rowAccessibility(_ row: IdeaRow, selected: Bool, showSnippet: Bool, action: @escaping () -> Void) -> some View {
+        accessibilityElement(children: .ignore)
+            .accessibilityLabel(row.spokenDescription(showSnippet: showSnippet))
+            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction(.default, action)
+    }
+}
+
 struct IdeaRowGroup: Identifiable {
     let id: String
     let label: String

@@ -384,6 +384,10 @@ private struct AppearanceSection: View {
                 ForEach(AccentChoice.allCases) { choice in
                     AccentSwatch(choice: choice, selected: appState.accent == choice)
                         .onTapGesture { appState.accent = choice }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(choice.label) accent")
+                        .accessibilityAddTraits(appState.accent == choice ? [.isButton, .isSelected] : .isButton)
+                        .accessibilityAction { appState.accent = choice }
                 }
                 Spacer(minLength: 0)
             }

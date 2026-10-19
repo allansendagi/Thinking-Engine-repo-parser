@@ -186,6 +186,7 @@ struct MenuBarListView: View {
             HStack(spacing: 6) {
                 Glyph(kind: .search, size: 12).foregroundStyle(Theme.ink(0.4))
                 TextField("Search", text: $appState.searchQuery)
+                    .accessibilityLabel("Search your ideas")
                     .textFieldStyle(.plain).font(.system(size: 12.5))
                     .foregroundStyle(Theme.ink(0.85))
                     .focused($searchFocused)
@@ -196,6 +197,7 @@ struct MenuBarListView: View {
                 if searching {
                     Button { appState.searchQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundStyle(Theme.ink(0.3))
+                        .accessibilityLabel("Clear search")
                 }
             }
             .frame(height: 26).padding(.horizontal, 8)
@@ -231,6 +233,7 @@ struct MenuBarListView: View {
                                     .id(r.id)
                                     .contentShape(Rectangle())
                                     .onTapGesture { selection = r.id; open(r.id) }
+                                    .rowAccessibility(r, selected: selection == r.id, showSnippet: appState.showSnippets) { selection = r.id; open(r.id) }
                                     .contextMenu {
                                         if r.isLoop {
                                             LoopRowItems(row: r) { open(r.id) }
@@ -298,13 +301,17 @@ private struct Segmented: View {
                     .frame(maxWidth: .infinity).frame(height: 21)
                     .background(
                         RoundedRectangle(cornerRadius: 5.5)
-                            .fill(Color.white)
+                            .fill(Theme.raised)
                             .shadow(color: .black.opacity(0.16), radius: 1.25, y: 0.5)
                             .overlay(RoundedRectangle(cornerRadius: 5.5).stroke(Theme.ink(0.1), lineWidth: 0.5))
                             .opacity(on ? 1 : 0)
                     )
                     .contentShape(Rectangle())
                     .onTapGesture { selection = t }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(t.rawValue)
+                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityAction { selection = t }
             }
         }
         .padding(1.5)
@@ -377,6 +384,10 @@ private struct AllModeToggle: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { withAnimation(.easeOut(duration: 0.12)) { selection = m } }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(m.rawValue)
+                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityAction { withAnimation(.easeOut(duration: 0.12)) { selection = m } }
             }
             Spacer(minLength: 0)
         }

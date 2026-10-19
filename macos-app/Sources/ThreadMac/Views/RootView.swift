@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showSettings = false
     @State private var showPaste = false
 
@@ -59,13 +60,12 @@ struct RootView: View {
         .overlay(
             RoundedRectangle(cornerRadius: Theme.corner)
                 .inset(by: 0.25)
-                .stroke(Color.white.opacity(0.7), lineWidth: 0.5)   // inset highlight
+                .stroke(Theme.edgeHighlight, lineWidth: 0.5)   // inset highlight
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.corner)
-                .stroke(Color.black.opacity(0.22), lineWidth: 0.5)   // edge hairline
+                .stroke(Theme.edgeHairline, lineWidth: 0.5)   // edge hairline
         )
-        .preferredColorScheme(.light)  // the design is a light frosted panel, deliberately
         .task { if !appState.needsReconnect { await appState.refresh() } }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
@@ -92,7 +92,7 @@ struct RootView: View {
     private var header: some View {
         HStack(spacing: 8) {
             if inDetail {
-                HeaderButton(size: 26) { appState.closeIdea() } label: {
+                HeaderButton(size: 26, accessibilityName: "Back to Recent") { appState.closeIdea() } label: {
                     Glyph(kind: .back, size: 15).foregroundStyle(Theme.ink(0.6))
                 }
                 .padding(.leading, -6)
@@ -100,7 +100,7 @@ struct RootView: View {
             HStack(spacing: 7) {
                 if !inDetail {
                     // The plain Thread glyph in dark ink -- no colour, matches the wordmark.
-                    Image(nsImage: BrandMark.inkImage)
+                    Image(nsImage: colorScheme == .dark ? BrandMark.inkImageOnDark : BrandMark.inkImage)
                         .resizable()
                         .interpolation(.high)
                         .frame(width: 17, height: 17)
@@ -115,20 +115,20 @@ struct RootView: View {
 
             if appState.isPaired && !appState.needsReconnect {
                 HStack(spacing: 1) {
-                    HeaderButton { Task { await appState.refresh() } } label: {
+                    HeaderButton(accessibilityName: "Refresh") { Task { await appState.refresh() } } label: {
                         Glyph(kind: .refresh, size: 15)
                     }.help("Refresh")
-                    HeaderButton {
+                    HeaderButton(accessibilityName: "Open in window") {
                         openWindow(id: "main")
                         NSApp.activate(ignoringOtherApps: true)
                         NotificationCenter.default.post(name: .threadDismissPanel, object: nil)
                     } label: {
                         Glyph(kind: .window, size: 15)
                     }.help("Open in Window")
-                    HeaderButton { showPaste = true } label: {
+                    HeaderButton(accessibilityName: "Add a conversation") { showPaste = true } label: {
                         Glyph(kind: .plus, size: 16)
                     }.help("Add a conversation")
-                    HeaderButton { showSettings = true } label: {
+                    HeaderButton(accessibilityName: "Settings") { showSettings = true } label: {
                         Image(systemName: "gearshape").font(.system(size: 12, weight: .regular))
                     }.help("Settings")
                 }
@@ -183,6 +183,8 @@ struct RootView: View {
 /// A 28pt square header icon button with a soft hover fill (the mock's toolbar buttons).
 struct HeaderButton<Label: View>: View {
     var size: CGFloat = 28
+    /// What VoiceOver says for an icon-only button.
+    var accessibilityName: String
     let action: () -> Void
     @ViewBuilder let label: Label
     @State private var hover = false
@@ -195,6 +197,7 @@ struct HeaderButton<Label: View>: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityName)
         .onHover { hover = $0 }
     }
 }

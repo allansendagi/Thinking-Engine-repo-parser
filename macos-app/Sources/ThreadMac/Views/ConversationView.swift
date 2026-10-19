@@ -33,6 +33,8 @@ struct ConversationView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.ink(0.5))
                     .help("Delete this conversation and everything Thread built from it")
+                    .accessibilityLabel("Delete conversation")
+                    .accessibilityHint("Deletes it and everything Thread built from it")
                 Button("Done") { appState.closeConversation() }
                     .keyboardShortcut(.cancelAction)
             }

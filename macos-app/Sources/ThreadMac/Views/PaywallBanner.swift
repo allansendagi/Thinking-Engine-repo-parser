@@ -19,6 +19,8 @@ struct PaywallBanner: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(Theme.ink(0.4))
                 .help("Dismiss until next launch")
+                .accessibilityLabel("Dismiss")
+                .accessibilityHint("Hides this until the next launch")
             }
             Text("Everything you've captured is still here. Upgrade to Pro for unlimited capture and AI continuation.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)

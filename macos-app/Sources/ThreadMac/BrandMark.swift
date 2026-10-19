@@ -12,6 +12,9 @@ enum BrandMark {
     /// template — so it never picks up the panel's accent `.tint` (which was turning it blue).
     static let inkImage: NSImage = render(color: NSColor.black.withAlphaComponent(0.85), template: false)
 
+    /// The same glyph in light ink, for the panel header in dark mode.
+    static let inkImageOnDark: NSImage = render(color: NSColor.white.withAlphaComponent(0.85), template: false)
+
     private static func render(color: NSColor, template: Bool) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in

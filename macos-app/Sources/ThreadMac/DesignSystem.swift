@@ -1,7 +1,27 @@
 import SwiftUI
 
-/// Exact palette from the "Premium macOS Panel v2" design (Claude Design cf5ae711).
-/// The panel is forced light for now — every value below is the literal from the mock.
+import AppKit
+
+extension Color {
+    /// A colour that resolves for the Mac's current appearance. The light value is always the
+    /// design's literal, so light mode looks exactly as designed; the dark value is its counterpart.
+    static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
+}
+
+private func rgb(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 1) -> NSColor {
+    NSColor(srgbRed: r / 255, green: g / 255, blue: b / 255, alpha: a)
+}
+/// Black at `a` in light mode, white at `a` in dark: how every "ink on a surface" value flips.
+private func flipInk(light a: Double, dark b: Double) -> Color {
+    .adaptive(light: NSColor.black.withAlphaComponent(a), dark: NSColor.white.withAlphaComponent(b))
+}
+
+/// Palette from the "Premium macOS Panel v2" design (Claude Design cf5ae711). Every value is the
+/// design's literal in light mode; dark mode follows the system appearance with its counterpart.
 enum Theme {
     /// #0A6FFF — the design's default accent (options: #8944AB, #3A8D3F, #C0453B). User-adjustable
     /// via Settings ▸ Appearance; AppState pushes the choice into `accentOverride` so every view
@@ -9,31 +29,40 @@ enum Theme {
     static var accentOverride: Color?
     static var accent: Color { accentOverride ?? AccentChoice.blue.color }
 
-    // rgba(0,0,0,a) — panel is light, so ink is pure black at an alpha.
-    static func ink(_ a: Double) -> Color { Color.black.opacity(a) }
+    // rgba(0,0,0,a) on light, rgba(255,255,255,a) on dark: text and icons on the panel.
+    static func ink(_ a: Double) -> Color { flipInk(light: a, dark: a) }
     // rgba(255,255,255,a) — for text/icons on a selected (accent-filled) row.
     static func onAccent(_ a: Double) -> Color { Color.white.opacity(a) }
 
     // Panel surface: rgba(246,246,248,.82) over the blurred material.
-    static let panelTint = Color(red: 246 / 255, green: 246 / 255, blue: 248 / 255)
+    static let panelTint = Color.adaptive(light: rgb(246, 246, 248), dark: rgb(30, 30, 32))
     /// Sticky section-header band ("Today" / "Yesterday"). The mock is rgba(246,246,248,.9) over a
-    /// heavy blur; rendered near-opaque here so the band reads as a crisp light strip, not a grey
-    /// smudge (which is what .ultraThinMaterial gave in light mode).
-    static let stickyTint = Color(red: 247 / 255, green: 247 / 255, blue: 249 / 255).opacity(0.96)
+    /// heavy blur; rendered near-opaque here so the band reads as a crisp strip, not a grey smudge.
+    static let stickyTint = Color.adaptive(light: rgb(247, 247, 249, 0.96), dark: rgb(38, 38, 41, 0.96))
 
-    static let hairline = Color.black.opacity(0.09)          // rgba(0,0,0,.09)
-    static let fieldFill = Color.black.opacity(0.055)         // rgba(0,0,0,.055)
-    static let hoverFill = Color.black.opacity(0.05)          // rgba(0,0,0,.05)
+    static let hairline = flipInk(light: 0.09, dark: 0.12)
+    static let fieldFill = flipInk(light: 0.055, dark: 0.09)
+    static let hoverFill = flipInk(light: 0.05, dark: 0.08)
     /// "Thread Idea Detail.dc.html": section-header row hover (quieter) vs. an actionable list
     /// item's hover (more visible) — the mock deliberately uses two different values, not one.
-    static let rowHoverFill = Color.black.opacity(0.02)       // rgba(0,0,0,.02)
-    static let itemHoverFill = Color.black.opacity(0.04)      // rgba(0,0,0,.04)
-    static let cardFill = Color.white.opacity(0.66)           // rgba(255,255,255,.66)
-    static let cardStroke = Color.black.opacity(0.09)
+    static let rowHoverFill = flipInk(light: 0.02, dark: 0.04)
+    static let itemHoverFill = flipInk(light: 0.04, dark: 0.07)
+    static let cardFill = Color.adaptive(light: NSColor.white.withAlphaComponent(0.66), dark: NSColor.white.withAlphaComponent(0.07))
+    /// The slightly lighter card the idea page uses (rgba(255,255,255,.62)).
+    static let cardFillSoft = Color.adaptive(light: NSColor.white.withAlphaComponent(0.62), dark: NSColor.white.withAlphaComponent(0.07))
+    static let cardStroke = flipInk(light: 0.09, dark: 0.13)
     static let cardCorner: CGFloat = 9
-    static let rail = Color.black.opacity(0.12)               // rgba(0,0,0,.12)
-    static let railDot = Color.black.opacity(0.28)            // rgba(0,0,0,.28)
-    static let rowSep = Color.black.opacity(0.07)             // rgba(0,0,0,.07)
+    static let rail = flipInk(light: 0.12, dark: 0.2)
+    static let railDot = flipInk(light: 0.28, dark: 0.4)
+    static let rowSep = flipInk(light: 0.07, dark: 0.1)
+
+    /// A raised control surface: the selected tab's pill, a field that sits above the panel.
+    static let raised = Color.adaptive(light: .white, dark: NSColor.white.withAlphaComponent(0.17))
+    /// The 0.5pt inner highlight and outer hairline around the panel.
+    static let edgeHighlight = Color.adaptive(light: NSColor.white.withAlphaComponent(0.7), dark: NSColor.white.withAlphaComponent(0.1))
+    static let edgeHairline = Color.adaptive(light: NSColor.black.withAlphaComponent(0.22), dark: NSColor.black.withAlphaComponent(0.6))
+    /// The ring around a timeline dot, matching the card it sits on.
+    static let dotHalo = Color.adaptive(light: NSColor.white.withAlphaComponent(0.75), dark: rgb(34, 34, 37, 0.9))
 
     // Panel geometry (420 × 748, 12pt radius).
     static let panelWidth: CGFloat = 420
@@ -43,9 +72,9 @@ enum Theme {
     static func stateColor(_ state: String) -> Color {
         switch state.lowercased() {
         case "developing": return accent
-        case "established": return Color(red: 58 / 255, green: 141 / 255, blue: 63 / 255) // #3A8D3F
-        case "rejected": return Color(red: 192 / 255, green: 69 / 255, blue: 59 / 255)    // #C0453B
-        case "contested": return Color(red: 199 / 255, green: 138 / 255, blue: 42 / 255)  // #C78A2A -- unresolved tension
+        case "established": return .adaptive(light: rgb(58, 141, 63), dark: rgb(96, 190, 102))    // #3A8D3F
+        case "rejected": return .adaptive(light: rgb(192, 69, 59), dark: rgb(240, 110, 99))       // #C0453B
+        case "contested": return .adaptive(light: rgb(199, 138, 42), dark: rgb(238, 176, 78))     // #C78A2A -- unresolved tension
         default: return ink(0.4)
         }
     }
