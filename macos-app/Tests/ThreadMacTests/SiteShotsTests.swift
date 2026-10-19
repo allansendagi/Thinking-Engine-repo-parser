@@ -12,6 +12,7 @@ final class SiteShotsTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["THREAD_RENDER_DIR"] != nil else { throw XCTSkip("set THREAD_RENDER_DIR to render") }
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("siteshots-\(UUID().uuidString)")
         CredentialStore.directoryOverride = dir
+        LocalStore.directoryOverride = dir
         CredentialStore.save(userId: "user_sample", token: "sample")
         CredentialStore.apiBaseUrl = "http://127.0.0.1:9"
     }
@@ -19,6 +20,7 @@ final class SiteShotsTests: XCTestCase {
     override func tearDown() {
         CredentialStore.apiBaseUrl = CredentialStore.defaultApiBaseUrl
         CredentialStore.directoryOverride = nil
+        LocalStore.directoryOverride = nil
         if let dir { try? FileManager.default.removeItem(at: dir) }
     }
 

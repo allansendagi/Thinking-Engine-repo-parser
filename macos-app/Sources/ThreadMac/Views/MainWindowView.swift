@@ -48,7 +48,6 @@ struct MainWindowView: View {
             ConversationView(transcript: t).environmentObject(appState)
         }
         .fullWindowChrome()          // green button fills the screen; window won't auto-restore
-        .preferredColorScheme(.light)
         .tint(Theme.accent)          // sidebar selection + buttons follow the app accent, not the OS one
         .task { await appState.refresh() }
         // The full window had no error surface, so a failed action (e.g. "Continue this idea"
@@ -66,6 +65,7 @@ struct MainWindowView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.ink(0.4))
+                    .accessibilityLabel("Dismiss error")
                 }
                 .foregroundStyle(Theme.stateColor("contested"))
                 .padding(.horizontal, 16).padding(.vertical, 9)
@@ -263,6 +263,7 @@ private struct GroupedRowScroller: View {
                             IdeaRowView(row: r, selected: r.ideaId == selection)
                                 .contentShape(Rectangle())
                                 .onTapGesture { open(r) }
+                                .rowAccessibility(r, selected: r.ideaId == selection, showSnippet: appState.showSnippets) { open(r) }
                                 .contextMenu {
                                     if !r.isLoop {
                                         Button(appState.isPinned(r.ideaId) ? "Unpin" : "Pin to top") {
@@ -306,10 +307,11 @@ private struct SearchField: View {
             if searching {
                 Button { appState.searchQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(Theme.ink(0.3))
+                    .accessibilityLabel("Clear search")
             }
         }
         .frame(height: 30).padding(.horizontal, 10)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 7))
+        .background(Theme.raised, in: RoundedRectangle(cornerRadius: 7))
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.ink(0.14), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.06), radius: 1, y: 0.5)
     }

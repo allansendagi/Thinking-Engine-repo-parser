@@ -158,6 +158,7 @@ struct IdeaDetailView: View {
             }
             .menuStyle(.button)
             .buttonStyle(.plain)
+            .accessibilityLabel("More actions")
             .menuIndicator(.hidden)
             .fixedSize()
         }
@@ -180,7 +181,7 @@ struct IdeaDetailView: View {
             if let map = appState.thinkingMaps[trace.idea.id], !map.isEmpty { weighingRow(map) }
             if !sources(trace).isEmpty { sourcesRow(trace) }
         }
-        .background(Color.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 10))
+        .background(Theme.cardFillSoft, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.ink(0.08), lineWidth: 0.5))
         .padding(.horizontal, 12).padding(.top, 20)
     }
@@ -460,6 +461,10 @@ struct IdeaDetailView: View {
     }
 }
 
+/// Section titles that start expanded. Always empty in the shipping app (collapsed by default is
+/// product direction); screenshots and tests set it to show a section open.
+@MainActor enum DisclosureDefaults { static var startOpen: Set<String> = [] }
+
 /// One row of the unified Structure/Evolution/Unresolved/Sources card: a fixed-height header
 /// (title, a per-state trailing view, a chevron that rotates 180° when open) plus its own
 /// `@State` for expanded/collapsed — each row's disclosure state is independent of the others,
@@ -471,15 +476,24 @@ private struct AccordionRow<Trailing: View, Content: View>: View {
     let showDivider: Bool
     @ViewBuilder let trailing: (Bool) -> Trailing
     @ViewBuilder let content: () -> Content
-    @State private var expanded = false
+    @State private var expanded: Bool
     @State private var hover = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @MainActor init(title: String, showDivider: Bool, @ViewBuilder trailing: @escaping (Bool) -> Trailing, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.showDivider = showDivider
+        self.trailing = trailing
+        self.content = content
+        _expanded = State(initialValue: DisclosureDefaults.startOpen.contains(title))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 // Apple's disclosure behaviour (System Settings, Finder): the header stays put, the
                 // row grows downward and the content fades in place -- a short ease, no bounce.
-                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 8) {
                     Text(title).font(.system(size: 12.5, weight: .semibold)).kerning(-0.075)
@@ -497,6 +511,8 @@ private struct AccordionRow<Trailing: View, Content: View>: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(expanded ? "Collapses this section" : "Expands this section")
             .onHover { isHovering in
                 hover = isHovering
                 if isHovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
@@ -679,7 +695,7 @@ private struct EvolutionRail: View {
                 Circle()
                     .fill(isTop ? Theme.accent : Theme.railDot)
                     .frame(width: isTop ? 7 : 5, height: isTop ? 7 : 5)
-                    .overlay(Circle().stroke(Color.white.opacity(0.75), lineWidth: 3).padding(-0.75))
+                    .overlay(Circle().stroke(Theme.dotHalo, lineWidth: 3).padding(-0.75))
                     .padding(.top, 3)
             }
     }
@@ -773,7 +789,7 @@ private struct ContinuationPreview: View {
                     .textFieldStyle(.plain).font(.system(size: 12.5))
                     .foregroundStyle(Theme.ink(0.85)).lineLimit(1 ... 4)
                     .padding(8)
-                    .background(Color.white, in: RoundedRectangle(cornerRadius: 6))
+                    .background(Theme.raised, in: RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.ink(0.12), lineWidth: 0.5))
             }
 
@@ -838,7 +854,7 @@ private struct ContinuationPreview: View {
             }
         }
         .padding(13).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 10))
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.ink(0.08), lineWidth: 0.5))
     }
 

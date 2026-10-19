@@ -24,6 +24,8 @@ struct CaptureHealthBanner: View {
                     }
                     .buttonStyle(.plain).foregroundStyle(Theme.ink(0.4))
                     .help("Dismiss until next launch")
+                    .accessibilityLabel("Dismiss")
+                    .accessibilityHint("Hides this until the next launch")
                 }
                 if let detail = notice.detail {
                     Text(detail)
