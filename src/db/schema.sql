@@ -201,7 +201,8 @@ CREATE TABLE IF NOT EXISTS idea_corrections (
   thought_ids TEXT NOT NULL,          -- JSON array: the idea's thoughts when corrected
   other_thought_ids TEXT,             -- JSON array: merge target's / split-off thoughts
   value TEXT,                         -- new title / state; for not_idea, the idea's statement
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  origin TEXT                         -- null: a click on a served idea; 'review': judged one thought at a time
 );
 CREATE INDEX IF NOT EXISTS idx_idea_corrections_kind ON idea_corrections(kind);
 
@@ -214,7 +215,8 @@ CREATE TABLE IF NOT EXISTS idea_verdicts (
   verdict TEXT NOT NULL CHECK (verdict IN ('keep')),
   idea_id TEXT NOT NULL,
   thought_ids TEXT NOT NULL,          -- JSON array: the idea's thoughts when confirmed
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  origin TEXT                         -- as idea_corrections.origin
 );
 CREATE INDEX IF NOT EXISTS idx_idea_verdicts_idea ON idea_verdicts(idea_id);
 

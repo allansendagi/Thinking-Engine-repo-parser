@@ -97,14 +97,17 @@ export function buildTasteReport(
   labels: TasteLabels,
   vectors: Map<string, ArrayLike<number>>,
 ): TasteReport {
-  const keeps = labels.history.filter((h) => h.verdict === "keep").length;
-  const notIdeas = labels.history.filter((h) => h.verdict === "not_idea").length;
+  const keeps = labels.history.filter((h) => h.verdict === "keep").length + labels.reviewed.keeps;
+  const notIdeas = labels.history.filter((h) => h.verdict === "not_idea").length + labels.reviewed.notIdeas;
   const ready = keeps >= MIN_LABELS_PER_CLASS && notIdeas >= MIN_LABELS_PER_CLASS;
   const recent = labels.history.slice(-ACCEPTANCE_WINDOW);
   const acceptanceRate = recent.length ? recent.filter((h) => h.verdict === "keep").length / recent.length : null;
 
   const out: IdeaTaste[] = ideas.map((idea) => {
-    if (labels.keptIdeaIds.has(idea.id)) return { ideaId: idea.id, tier: "confirmed", score: 1 };
+    // By id, or by thought: a regrouping pass can give a kept idea a new id, never new thoughts.
+    if (labels.keptIdeaIds.has(idea.id) || idea.thoughtIds.some((t) => labels.keptThoughtIds.has(t))) {
+      return { ideaId: idea.id, tier: "confirmed", score: 1 };
+    }
     if (!ready) return { ideaId: idea.id, tier: "suggested", score: null };
     const scores = idea.thoughtIds
       .map((t) => thoughtTaste(t, vectors, labels.positives, labels.negatives))

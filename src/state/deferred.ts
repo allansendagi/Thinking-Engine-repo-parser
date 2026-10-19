@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { basename } from "node:path";
 import { loadCanonicalEvents, loadIdeas } from "../db/queries";
 import { dismissedExamples } from "../mining/corrections";
+import { scheduleShadowMining } from "../mining/shadow";
 import { applyRetention } from "../db/retention";
 import type { CanonicalEvent } from "../types";
 import {
@@ -319,7 +320,10 @@ export function scheduleDeferredRetry(
       db = open(userId);
       if (deferredStatus(db).count === 0 || backlogPaused(db)) return;
       const r = await drainDeferredExtraction(db, providers);
-      if (r.processed > 0) console.log(`[Thread] resumed extraction for ${userId}: ${r.processed} messages, ${r.remaining} left`);
+      if (r.processed > 0) {
+        console.log(`[Thread] resumed extraction for ${userId}: ${r.processed} messages, ${r.remaining} left`);
+        scheduleShadowMining(userId, open); // new thoughts: regroup, as after a live capture
+      }
       if (r.error) console.error(`[Thread] extraction still waiting for ${userId}: ${r.error}`);
     } catch (e) {
       console.error(`[Thread] deferred retry failed for ${userId}:`, e);

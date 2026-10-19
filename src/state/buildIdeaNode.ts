@@ -29,6 +29,12 @@ function stripNarration(s: string): string {
   return cleaned.split(/\s+/).length >= 3 ? cleaned : s.trim();
 }
 
+/** A title that names an idea: short, whole (not a cut-off sentence), not about the person. */
+export function isNamingTitle(title: string): boolean {
+  const words = title.trim().split(/\s+/);
+  return words.length >= 2 && words.length <= 8 && !title.trim().endsWith("…") && !PERSON_SUBJECT.test(title);
+}
+
 /**
  * A short, noun-phrase-ish title for an idea. Prefers the extractor's own `title` when it gave a
  * usable one; otherwise carves one out of `statement` -- narration stripped, ~8 words, no

@@ -58,7 +58,7 @@ import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
 import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
-import { ideaThoughtIds, recordCorrection, recordKeep } from "../mining/corrections";
+import { ideaThoughtIds, recordCorrection, recordKeep, recordThoughtReviews } from "../mining/corrections";
 import { tasteReport } from "../taste/taste";
 import { redactDeep, redactSecrets } from "../capture/redact";
 import { parsePastedConversation } from "../import/pasteParser";
@@ -746,6 +746,27 @@ export function createRequestHandler(
       // and the acceptance rate (share of the last 20 verdicts that were Keep).
       if (req.method === "GET" && pathname === "/v1/taste") {
         return json(tasteReport(db));
+      }
+
+      // Verdicts on single thoughts (a review of what was captured): they teach taste and the
+      // grouping like Keep / Not an idea clicks, without counting toward the acceptance rate.
+      if (req.method === "POST" && pathname === "/v1/taste/reviews") {
+        let body: { reviews?: unknown };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        const reviews = Array.isArray(body.reviews)
+          ? body.reviews.filter(
+              (r): r is { thoughtId: string; verdict: "keep" | "not_idea" } =>
+                typeof r?.thoughtId === "string" && (r.verdict === "keep" || r.verdict === "not_idea"),
+            )
+          : [];
+        if (reviews.length === 0 || reviews.length > 500) return error(400, 'reviews must be 1-500 of {thoughtId, verdict: "keep" | "not_idea"}');
+        const recorded = recordThoughtReviews(db, reviews);
+        scheduleShadowMining(userId, openUserDb);
+        return json({ recorded, taste: tasteReport(db) });
       }
 
       if (req.method === "GET" && pathname === "/v1/ideas") {
