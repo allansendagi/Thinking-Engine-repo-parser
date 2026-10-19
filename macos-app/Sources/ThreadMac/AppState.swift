@@ -1465,6 +1465,28 @@ final class AppState: ObservableObject {
         await refreshCaptureHealth()
         await refreshTaste()
         if listTab == .all, allMode == .activity { await loadConversations() }
+        await prefetchTraces()
+    }
+
+    private var isPrefetchingTraces = false
+
+    /// Opening an idea should never wait on the network. After each sync, fetch -- quietly, a few
+    /// at a time -- the trace of every idea this Mac doesn't have yet or whose content changed,
+    /// and drop traces of ideas that no longer exist. A trace is ~10 KB, so this stays small.
+    func prefetchTraces(limit: Int = 30) async {
+        guard !isPrefetchingTraces, !thinkingStateIsLocal, !isOffline, let ideas = thinkingState?.currentIdeas else { return }
+        isPrefetchingTraces = true
+        defer { isPrefetchingTraces = false }
+        let stale = tracesToPrefetch(ideas: ideas, recentChanges: thinkingState?.recentChanges ?? [], cached: snapshot.traces)
+        let live = Set(ideas.map(\.id))
+        var changed = snapshot.traces.keys.contains { !live.contains($0) }
+        snapshot.traces = snapshot.traces.filter { live.contains($0.key) }
+        for id in stale.prefix(limit) {
+            guard let fresh = try? await client.traceIdea(id: id) else { continue }
+            snapshot.traces[id] = fresh
+            changed = true
+        }
+        if changed { persistSnapshot() }
     }
 
     func search() async {
@@ -1585,9 +1607,11 @@ final class AppState: ObservableObject {
         }
 
         // Cache-first: show the last-synced trace immediately (with unsynced edits overlaid),
-        // then revalidate.
+        // then revalidate. Traces are prefetched after each sync, so this is almost always a hit.
+        let opened = Date()
         let cached = snapshot.traces[id]
         if let cached { selectedTrace = applyAll(pendingEdits, to: cached) }
+        print("[ThreadMac perf] open idea: \(cached == nil ? "miss" : "hit") \(Int(Date().timeIntervalSince(opened) * 1000)) ms")
 
         // Fire-and-forget, after the trace is already showing -- never delays this render.
         fetchStructureIfNeeded(for: id)
@@ -2047,4 +2071,24 @@ final class AppState: ObservableObject {
         if let copy = continuationCopyText, copyContext(copy) { return }
         copyIdeaContext()
     }
+}
+
+/// Which ideas need their trace fetched: not cached yet, or the cached copy is behind -- a
+/// different title or current formulation, or a step newer than the cached copy's last update.
+/// Most recently touched first, so the ideas someone is likely to open come in first.
+func tracesToPrefetch(
+    ideas: [IdeaSummary],
+    recentChanges: [ThinkingStateResponse.RecentChange],
+    cached: [String: IdeaTrace]
+) -> [String] {
+    var touched: [String: String] = [:]
+    for c in recentChanges where (touched[c.ideaId] ?? "") < c.createdAt { touched[c.ideaId] = c.createdAt }
+    return ideas
+        .filter { i in
+            guard let t = cached[i.id] else { return true }
+            return t.idea.title != i.title || t.idea.currentFormulation != i.currentFormulation
+                || (touched[i.id] ?? "") > t.idea.updatedAt
+        }
+        .sorted { (touched[$0.id] ?? "") > (touched[$1.id] ?? "") }
+        .map(\.id)
 }
