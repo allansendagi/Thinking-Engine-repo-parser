@@ -25,6 +25,8 @@ struct RootView: View {
                     ReconnectView()
                 } else if !appState.isPaired || appState.showsWelcome {
                     WelcomeView()
+                } else if appState.lessonOpen {
+                    TeachThreadView()
                 } else if inDetail {
                     IdeaDetailView()
                 } else {

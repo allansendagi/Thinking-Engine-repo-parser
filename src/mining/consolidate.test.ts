@@ -139,3 +139,22 @@ describe("v2 grouping signals", () => {
     expect(ideas.find((i) => i.thoughtIds.includes(soc.id))!.thoughtIds).not.toContain(hire.id);
   });
 });
+
+describe("a person's merge holds whatever kind of thought it names", () => {
+  test("two ideas joined by a must-link on their questions end up as one idea", () => {
+    const t = (id: string, type: MiningThought["type"], statement: string, conv: string): MiningThought => ({
+      id, type, statement, persistence: "high", sourceEventId: `m_${id}`, conversationId: conv, position: 0, createdAt: `2026-09-0${id.length}T00:00:00Z`,
+    });
+    const thoughts = [
+      t("q1", "question", "How should we price the workshop?", "c1"),
+      t("a1x", "new_idea", "Charge per seat for workshops.", "c1"),
+      t("q2xx", "question", "Do onboarding emails need a tour?", "c2"),
+      t("a2xxx", "new_idea", "Onboarding should show value in five minutes.", "c2"),
+    ];
+    const apart = consolidate(thoughts);
+    expect(apart.find((i) => i.thoughtIds.includes("q1"))).not.toBe(apart.find((i) => i.thoughtIds.includes("q2xx")));
+    const together = consolidate(thoughts, { constraints: { mustLink: [["q1", "q2xx"]] } });
+    const home = together.find((i) => i.thoughtIds.includes("q1"))!;
+    expect(home.thoughtIds).toContain("q2xx");
+  });
+});

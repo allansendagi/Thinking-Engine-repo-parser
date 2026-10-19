@@ -85,6 +85,8 @@ export interface TasteReport {
   notIdeas: number;
   /** Share of the person's last `window` verdicts that were Keep -- the live quality number. */
   acceptanceRate: number | null;
+  /** How many verdicts the rate is over -- a rate from one or two clicks shouldn't be shown. */
+  acceptanceSample: number;
   window: number;
   ideas: IdeaTaste[];
 }
@@ -97,8 +99,8 @@ export function buildTasteReport(
   labels: TasteLabels,
   vectors: Map<string, ArrayLike<number>>,
 ): TasteReport {
-  const keeps = labels.history.filter((h) => h.verdict === "keep").length + labels.reviewed.keeps;
-  const notIdeas = labels.history.filter((h) => h.verdict === "not_idea").length + labels.reviewed.notIdeas;
+  const keeps = labels.history.filter((h) => h.verdict === "keep").length + labels.reviewed.keeps + labels.taught.keeps;
+  const notIdeas = labels.history.filter((h) => h.verdict === "not_idea").length + labels.reviewed.notIdeas + labels.taught.notIdeas;
   const ready = keeps >= MIN_LABELS_PER_CLASS && notIdeas >= MIN_LABELS_PER_CLASS;
   const recent = labels.history.slice(-ACCEPTANCE_WINDOW);
   const acceptanceRate = recent.length ? recent.filter((h) => h.verdict === "keep").length / recent.length : null;
@@ -115,7 +117,7 @@ export function buildTasteReport(
     const score = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
     return { ideaId: idea.id, tier: tierFor(score), score };
   });
-  return { ready, keeps, notIdeas, acceptanceRate, window: ACCEPTANCE_WINDOW, ideas: out };
+  return { ready, keeps, notIdeas, acceptanceRate, acceptanceSample: recent.length, window: ACCEPTANCE_WINDOW, ideas: out };
 }
 
 /** Database wrapper: this person's ideas, labels and the account's meaning vectors. */

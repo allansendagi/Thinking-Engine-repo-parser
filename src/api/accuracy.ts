@@ -28,6 +28,8 @@ export interface AccuracyWeek {
   renames: number;
   /** Thought-by-thought reviews (not ideas Thread served) -- teach taste, not counted as keep/not. */
   reviewed: number;
+  /** Teach Thread answers: chosen because Thread was unsure, so kept out of the rates above. */
+  taught: number;
   /** People who gave at least one verdict that week. */
   judges: number;
 }
@@ -63,7 +65,7 @@ export function accuracySummary(now: Date = new Date()): Accuracy {
     d.setUTCDate(d.getUTCDate() - 7 * (WEEKS - 1 - i));
     return d.toISOString().slice(0, 10);
   });
-  const empty = (): Omit<AccuracyWeek, "week" | "judges"> => ({ newIdeas: 0, keeps: 0, notIdeas: 0, merges: 0, splits: 0, renames: 0, reviewed: 0 });
+  const empty = (): Omit<AccuracyWeek, "week" | "judges"> => ({ newIdeas: 0, keeps: 0, notIdeas: 0, merges: 0, splits: 0, renames: 0, reviewed: 0, taught: 0 });
   const byWeek = new Map(weekList.map((w) => [w, { ...empty(), judges: new Set<string>() }]));
   const first = weekList[0]!;
   let read = 0;
@@ -97,12 +99,14 @@ export function accuracySummary(now: Date = new Date()): Accuracy {
         const originCol = has("idea_verdicts", "origin");
         for (const r of db.query(`SELECT created_at, ${originCol ? "origin" : "NULL AS origin"} FROM idea_verdicts`).all() as { created_at: string; origin: string | null }[]) {
           if (r.origin === "review") bump(r.created_at, "reviewed");
+          else if (r.origin === "lesson") bump(r.created_at, "taught", true);
           else bump(r.created_at, "keeps", true);
         }
       }
       const corrOrigin = has("idea_corrections", "origin");
       for (const r of db.query(`SELECT kind, created_at, ${corrOrigin ? "origin" : "NULL AS origin"} FROM idea_corrections`).all() as { kind: string; created_at: string; origin: string | null }[]) {
-        if (r.kind === "not_idea") {
+        if (r.origin === "lesson" && r.kind !== "rename" && r.kind !== "state") bump(r.created_at, "taught", true);
+        else if (r.kind === "not_idea") {
           if (r.origin === "review") bump(r.created_at, "reviewed");
           else bump(r.created_at, "notIdeas", true);
         } else if (r.kind === "merge") bump(r.created_at, "merges", true);
@@ -118,14 +122,14 @@ export function accuracySummary(now: Date = new Date()): Accuracy {
 
   const weeks: AccuracyWeek[] = weekList.map((w) => {
     const x = byWeek.get(w)!;
-    return { week: w, newIdeas: x.newIdeas, keeps: x.keeps, notIdeas: x.notIdeas, merges: x.merges, splits: x.splits, renames: x.renames, reviewed: x.reviewed, judges: x.judges.size };
+    return { week: w, newIdeas: x.newIdeas, keeps: x.keeps, notIdeas: x.notIdeas, merges: x.merges, splits: x.splits, renames: x.renames, reviewed: x.reviewed, taught: x.taught, judges: x.judges.size };
   });
   const sum = (k: keyof ReturnType<typeof empty>) => weeks.reduce((s, w) => s + w[k], 0);
   const allJudges = new Set<string>();
   for (const x of byWeek.values()) for (const j of x.judges) allJudges.add(j);
   const data: Accuracy = {
     weeks,
-    totals: { newIdeas: sum("newIdeas"), keeps: sum("keeps"), notIdeas: sum("notIdeas"), merges: sum("merges"), splits: sum("splits"), renames: sum("renames"), reviewed: sum("reviewed"), judges: allJudges.size },
+    totals: { newIdeas: sum("newIdeas"), keeps: sum("keeps"), notIdeas: sum("notIdeas"), merges: sum("merges"), splits: sum("splits"), renames: sum("renames"), reviewed: sum("reviewed"), taught: sum("taught"), judges: allJudges.size },
     operatorShare: verdicts ? operatorVerdicts / verdicts : null,
     accountsRead: read,
     comparableFrom: "2026-10-19",

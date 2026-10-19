@@ -68,7 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watcher.start()
         connectivity = watcher
         panel.onShow = { [weak appState] in
-            Task { await appState?.refreshIfStale() }
+            appState?.notePanelOpened()
+            Task { await appState?.refreshIfStale(); await appState?.refreshLesson() }
         }
 
         // Keep running across restarts (capture depends on it). Once, on first launch only.

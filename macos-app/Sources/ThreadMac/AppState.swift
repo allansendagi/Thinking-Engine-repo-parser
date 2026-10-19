@@ -327,6 +327,14 @@ final class AppState: ObservableObject {
     /// What Thread has learned about which ideas this person keeps (see Taste.swift). Nil until the
     /// first sync, or against an older backend -- everything is then just a suggestion.
     @Published var taste: TasteReport?
+    // Teach Thread (Teach.swift)
+    @Published var lesson: Lesson?
+    @Published var lessonOpen = false
+    @Published var lessonQuestions: [LessonQuestion] = []
+    @Published var lessonIndex = 0
+    @Published var lessonAnswered = 0
+    @Published var lessonError: String?
+    var lessonFetchedAt: Date?
     @Published var selectedIdeaId: String?
     @Published var selectedTrace: IdeaTrace?
 
@@ -1464,6 +1472,7 @@ final class AppState: ObservableObject {
         await refreshAccount()
         await refreshCaptureHealth()
         await refreshTaste()
+        await refreshLesson()
         if listTab == .all, allMode == .activity { await loadConversations() }
         await prefetchTraces()
     }
