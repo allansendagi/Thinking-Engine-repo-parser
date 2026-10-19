@@ -169,6 +169,69 @@ describe("backlog pause", () => {
     }
   });
 
+  test("a paused account still processes recent work, and holds only the old", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pause-"));
+    const db = openDb(join(dir, "user_cccccccccccccccccccccccc.db"));
+    const prevHours = process.env.THREAD_PAUSE_RECENT_HOURS;
+    try {
+      // An old imported conversation, and a coding session written 20 minutes ago (quiet by now),
+      // both left waiting because the AI was down.
+      await ingestConversation(db, capture("old", "m-old", "We should charge per seat, not a flat fee."), { extraction: unpaid, reasoning: unpaid });
+      const recent = new Date(Date.now() - 20 * 60_000).toISOString();
+      await ingestConversation(
+        db,
+        { conversationId: "live", source: "claude_code" as const, messages: [{ id: "m-live", role: "user" as const, text: "Annual plans only for teams.", createdAt: recent }] },
+        { extraction: unpaid, reasoning: unpaid },
+      );
+      expect(deferredStatus(db).count).toBe(2);
+
+      process.env.THREAD_PAUSE_BACKLOG_USERS = "user_cccccccccccccccccccccccc";
+      const extractionProvider = new FakeProvider([extraction("m-live", "Annual plans only for teams.", "Annual plans only")]);
+      const r = await drainDeferredExtraction(db, { extraction: extractionProvider, reasoning: new FakeProvider([newIdea]) });
+      expect(r.error).toBeNull();
+      expect(r.processed).toBe(1); // the recent session became an idea...
+      expect(loadIdeas(db)).toHaveLength(1);
+      expect(deferredStatus(db).count).toBe(1); // ...the old import is still held back
+      expect(r.remaining).toBe(1);
+
+      // Nothing recent left: a drain returns at once instead of spinning, and spends nothing.
+      const spy: CompletionProvider = { complete: () => { throw new Error("must not be called"); } };
+      const again = await drainDeferredExtraction(db, { extraction: spy, reasoning: spy }, 5_000);
+      expect(again).toEqual({ processed: 0, error: null, remaining: 1 });
+    } finally {
+      restore();
+      if (prevHours === undefined) delete process.env.THREAD_PAUSE_RECENT_HOURS;
+      else process.env.THREAD_PAUSE_RECENT_HOURS = prevHours;
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("THREAD_PAUSE_RECENT_HOURS=0 holds everything, as the pause did before", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pause-"));
+    const db = openDb(join(dir, "user_dddddddddddddddddddddddd.db"));
+    const prevHours = process.env.THREAD_PAUSE_RECENT_HOURS;
+    try {
+      const recent = new Date(Date.now() - 20 * 60_000).toISOString();
+      await ingestConversation(
+        db,
+        { conversationId: "live", source: "claude_code" as const, messages: [{ id: "m-live", role: "user" as const, text: "Annual plans only for teams.", createdAt: recent }] },
+        { extraction: unpaid, reasoning: unpaid },
+      );
+      process.env.THREAD_PAUSE_BACKLOG_USERS = "user_dddddddddddddddddddddddd";
+      process.env.THREAD_PAUSE_RECENT_HOURS = "0";
+      const spy: CompletionProvider = { complete: () => { throw new Error("must not be called"); } };
+      const r = await drainDeferredExtraction(db, { extraction: spy, reasoning: spy }, 5_000);
+      expect(r).toEqual({ processed: 0, error: null, remaining: 1 });
+    } finally {
+      restore();
+      if (prevHours === undefined) delete process.env.THREAD_PAUSE_RECENT_HOURS;
+      else process.env.THREAD_PAUSE_RECENT_HOURS = prevHours;
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("another account is not paused, and `*` pauses everyone", () => {
     const dir = mkdtempSync(join(tmpdir(), "pause-"));
     const db = openDb(join(dir, "user_bbbbbbbbbbbbbbbbbbbbbbbb.db"));
