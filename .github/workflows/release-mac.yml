@@ -91,9 +91,9 @@ jobs:
 
       - name: Verify Gatekeeper accepts the build
         run: |
-          spctl --assess --type execute --verbose=2 dist/ThreadMac.app
+          spctl --assess --type execute --verbose=2 dist/Thread.app
           xcrun stapler validate dist/Thread.dmg
-          lipo -archs dist/ThreadMac.app/Contents/MacOS/ThreadMac
+          lipo -archs dist/Thread.app/Contents/MacOS/Thread
 
       - name: Sign update + write appcast
         env:

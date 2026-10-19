@@ -17,21 +17,21 @@ swift test
 
 step "Package (this Mac's architecture)"
 THREAD_UNIVERSAL=0 ./package.sh >/dev/null
-codesign --verify --deep --strict dist/ThreadMac.app
-plutil -lint dist/ThreadMac.app/Contents/Info.plist >/dev/null
-test -d dist/ThreadMac.app/Contents/Frameworks/Sparkle.framework
+codesign --verify --deep --strict dist/Thread.app
+plutil -lint dist/Thread.app/Contents/Info.plist >/dev/null
+test -d dist/Thread.app/Contents/Frameworks/Sparkle.framework
 
 step "Launch"
-pkill -x ThreadMac 2>/dev/null || true
-open dist/ThreadMac.app
+pkill -x Thread 2>/dev/null || true
+open dist/Thread.app
 sleep 6
-if pgrep -x ThreadMac >/dev/null; then
-  echo "ThreadMac is running. Look for the Thread icon in the menu bar, then try:"
+if pgrep -x Thread >/dev/null; then
+  echo "Thread is running. Look for the Thread icon in the menu bar, then try:"
   echo "  • the recall shortcut (⌘⇧T by default)"
   echo "  • Settings ▸ General (Open at login, shortcut, Spotlight)"
   echo "  • ⌘Space and type a word from one of your ideas"
 else
-  echo "ThreadMac quit within 6 seconds of launch. Crash logs are in Console.app ▸ Crash Reports." >&2
+  echo "Thread quit within 6 seconds of launch. Crash logs are in Console.app ▸ Crash Reports." >&2
   exit 1
 fi
 

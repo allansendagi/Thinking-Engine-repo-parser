@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds a real, double-clickable ThreadMac.app and zips it for distribution.
+# Builds a real, double-clickable Thread.app and zips it for distribution.
 #
 # Environment (all optional):
 #   THREAD_VERSION             version string (default below; the release workflow sets it from the tag)
@@ -18,10 +18,11 @@ set -e
 
 cd "$(dirname "$0")"
 
-APP_NAME="ThreadMac"
+APP_NAME="ThreadMac"          # the SwiftPM product / module (build output, App Intents metadata)
+BUNDLE_NAME="Thread"           # what people see: Thread.app in Finder, and the program inside it
 BUNDLE_ID="com.thread.mac"
 VERSION="${THREAD_VERSION:-0.2.13}"
-APP_DIR="dist/${APP_NAME}.app"
+APP_DIR="dist/${BUNDLE_NAME}.app"
 
 # Universal (Apple Silicon + Intel) by default -- an arm64-only build won't launch on Intel Macs.
 # THREAD_UNIVERSAL=0 builds just this machine's architecture (faster local iteration).
@@ -43,7 +44,7 @@ echo "Building app icon..."
 echo "Assembling ${APP_DIR}..."
 rm -rf "${APP_DIR}" "dist/${APP_NAME}-${VERSION}-macos.zip"
 mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
-cp "${BUILD_DIR}/${APP_NAME}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+cp "${BUILD_DIR}/${APP_NAME}" "${APP_DIR}/Contents/MacOS/${BUNDLE_NAME}"
 cp "dist/AppIcon.icns" "${APP_DIR}/Contents/Resources/AppIcon.icns"
 
 # Sparkle (auto-updates). ditto keeps the framework's Versions/ symlinks intact; the binary finds
@@ -79,7 +80,7 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>${APP_NAME}</string>
+    <string>${BUNDLE_NAME}</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleName</key>
@@ -210,7 +211,7 @@ if [ -n "${THREAD_SIGN_IDENTITY:-}" ]; then
   codesign --force --options runtime --timestamp --sign "${THREAD_SIGN_IDENTITY}" \
     "${APP_DIR}/Contents/Frameworks/Sparkle.framework"
   codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" \
-    --sign "${THREAD_SIGN_IDENTITY}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+    --sign "${THREAD_SIGN_IDENTITY}" "${APP_DIR}/Contents/MacOS/${BUNDLE_NAME}"
   codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" \
     --sign "${THREAD_SIGN_IDENTITY}" "${APP_DIR}"
   codesign --verify --deep --strict --verbose=1 "${APP_DIR}"
@@ -223,7 +224,7 @@ else
 fi
 
 cd dist
-zip -r -q "${APP_NAME}-${VERSION}-macos.zip" "${APP_NAME}.app"
+zip -r -q "${APP_NAME}-${VERSION}-macos.zip" "${BUNDLE_NAME}.app"
 cd ..
 
 # DMG -- the polished Mac distribution surface (drag Thread.app -> Applications). This is the
@@ -232,12 +233,12 @@ cd ..
 # the header). Output name is stable ("Thread.dmg") so replacing it never changes the site CTA.
 echo "Building DMG..."
 rm -f "dist/Thread.dmg" "dist/Thread ${VERSION}.dmg"
-npx --yes create-dmg "dist/${APP_NAME}.app" dist/ >/dev/null 2>&1 || true
+npx --yes create-dmg "dist/${BUNDLE_NAME}.app" dist/ >/dev/null 2>&1 || true
 if [ -f "dist/Thread ${VERSION}.dmg" ]; then
   mv "dist/Thread ${VERSION}.dmg" "dist/Thread.dmg"
 else
   DMG_STAGE="$(mktemp -d)"
-  cp -R "${APP_DIR}" "${DMG_STAGE}/Thread.app"
+  cp -R "${APP_DIR}" "${DMG_STAGE}/${BUNDLE_NAME}.app"
   ln -s /Applications "${DMG_STAGE}/Applications"
   hdiutil create -volname "Thread" -srcfolder "${DMG_STAGE}" -ov -format UDZO -quiet "dist/Thread.dmg"
   rm -rf "${DMG_STAGE}"
