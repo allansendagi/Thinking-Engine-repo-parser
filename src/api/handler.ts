@@ -1154,28 +1154,32 @@ function retentionText(days: number | null): string {
 /** Plain-language note on backups, shown wherever deletion is promised. */
 function backupNote(): string {
   const days = Number(process.env.THREAD_BACKUP_DAYS ?? 7) || 7;
-  return `Deleted data can remain in the server's rolling backups for up to ${days} days, then it is gone for good. Nothing restores it into your account.`;
+  return `Deleted data is gone from backups within ${days} days.`;
 }
 
-/** Who else receives what -- derived from what's actually configured, not a fixed claim. */
+/**
+ * Who else receives your data, and why -- derived from what's actually configured. Deliberately
+ * short: who and why (what privacy law asks for), not how Thread's servers are built. The full
+ * detail is on the privacy page.
+ */
 function dataProcessors(p: PipelineProviders): Record<string, unknown>[] {
   const list: Record<string, unknown>[] = [
     {
       name: "Anthropic",
-      purpose: "Reads the text of a conversation to find ideas, decisions and open questions.",
-      receives: "Conversation text (secrets are stripped first). Not used to train its models by default, and not retained by default; its published exceptions apply (certain models, safety-flagged content, legal holds).",
+      purpose: "Finds the ideas in your conversations.",
+      receives: "Conversation text, with secrets removed first. Not used to train its models.",
     },
   ];
   if (process.env.VOYAGE_API_KEY)
     list.push({
       name: "Voyage AI",
-      purpose: "Turns idea statements into meaning-vectors so related thinking can be connected.",
-      receives: "Short idea statements Thread derived -- not whole conversations. Thread has opted out of Voyage using submitted data for training; opted-out data is deleted after processing.",
+      purpose: "Connects related ideas.",
+      receives: "Short idea statements, never whole conversations. Not used to train its models.",
     });
   list.push({
     name: "Railway",
-    purpose: "Hosts Thread's server and the database volume.",
-    receives: "Everything Thread stores, at rest.",
+    purpose: "Hosts Thread's servers.",
+    receives: "Your Thread data, stored for your account.",
   });
   return list;
 }
