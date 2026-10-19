@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -65,7 +66,8 @@ import { askMyThinking } from "../thinking/ask";
 import { VoyageEmbeddingProvider, voyageConfigured } from "../providers/voyage";
 import { headlineThoughtIds, servesV2 } from "../mining/serve";
 import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
-import { ideaThoughtIds, recordCorrection, recordKeep, recordThoughtReviews } from "../mining/corrections";
+import { ideaThoughtIds, recordCorrection, recordKeep, recordThoughtReviews, type VerdictOrigin } from "../mining/corrections";
+import { buildLesson, pairKey } from "../taste/lesson";
 import { tasteReport } from "../taste/taste";
 import { redactDeep, redactSecrets } from "../capture/redact";
 import { parsePastedConversation } from "../import/pasteParser";
@@ -218,6 +220,27 @@ async function authenticate(
 async function embedQueryFor(q: string, model: string): Promise<number[] | null> {
   if (!voyageConfigured() || !model.startsWith("voyage:")) return null;
   return new VoyageEmbeddingProvider(undefined, model.slice("voyage:".length)).embedQuery(q);
+}
+
+/**
+ * "Not an idea" -- one path for a click while browsing and an answer in Teach Thread. Remembered by
+ * its thoughts so a regroup can't rebuild it; on v2 only the thoughts the person saw (title +
+ * headline) are labelled, and the rest of a large group is regrouped at once.
+ */
+function markNotAnIdea(db: Database, userId: string, ideaId: string, origin: VerdictOrigin): boolean {
+  const v2 = servesV2(userId);
+  const thoughtIds = v2 ? headlineThoughtIds(db, ideaId) : ideaThoughtIds(db, ideaId);
+  const statement = getIdea(db, ideaId)?.currentFormulation;
+  const deleted = deleteIdea(db, ideaId);
+  if (deleted) recordCorrection(db, { kind: "not_idea", ideaId, thoughtIds, value: statement, origin });
+  if (deleted && v2) scheduleShadowMining(userId, openUserDb);
+  return deleted;
+}
+
+/** "Keep" -- one path for a click and a Teach Thread answer. */
+function markKeep(db: Database, userId: string, ideaId: string, origin: VerdictOrigin): void {
+  noteMilestone(userId, "first_keep");
+  recordKeep(db, ideaId, servesV2(userId) ? headlineThoughtIds(db, ideaId) : ideaThoughtIds(db, ideaId), origin);
 }
 
 export function createRequestHandler(
@@ -803,6 +826,45 @@ export function createRequestHandler(
       // What Thread has learned about what this person keeps: a tier per idea (confirmed / likely /
       // unsure / unlikely / suggested -- "unlikely" is the Maybe tray, never a deletion), readiness,
       // and the acceptance rate (share of the last 20 verdicts that were Keep).
+      // Teach Thread: a few questions chosen so each answer teaches the most (taste/lesson.ts).
+      if (req.method === "GET" && pathname === "/v1/learn") {
+        return json(buildLesson(db));
+      }
+      if (req.method === "POST" && pathname === "/v1/learn/answer") {
+        let body: { kind?: unknown; ideaId?: unknown; a?: unknown; b?: unknown; answer?: unknown };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        const now = new Date().toISOString();
+        if (body.kind === "idea" && typeof body.ideaId === "string") {
+          const ideaId = body.ideaId;
+          if (!getIdea(db, ideaId)) return error(404, "Idea not found");
+          if (body.answer === "keep") markKeep(db, userId, ideaId, "lesson");
+          else if (body.answer === "not_idea") markNotAnIdea(db, userId, ideaId, "lesson");
+          else if (body.answer === "skip") db.prepare("INSERT OR REPLACE INTO learn_skips (idea_id, skipped_at) VALUES (?, ?)").run(ideaId, now);
+          else return error(400, 'answer must be "keep", "not_idea" or "skip"');
+        } else if (body.kind === "pair" && typeof body.a === "string" && typeof body.b === "string") {
+          const { a, b } = body as { a: string; b: string };
+          const ta = ideaThoughtIds(db, a), tb = ideaThoughtIds(db, b);
+          const key = pairKey(db, a, b);
+          if (!ta.length || !tb.length || !key) return error(404, "Idea not found");
+          if (body.answer !== "same" && body.answer !== "different" && body.answer !== "skip") {
+            return error(400, 'answer must be "same", "different" or "skip"');
+          }
+          // Same: these belong together (a merge every regroup respects). Different: never join
+          // them (a split). Both are constraints on the person's own grouping, not universal rules.
+          if (body.answer === "same") recordCorrection(db, { kind: "merge", ideaId: a, thoughtIds: ta, otherThoughtIds: tb, origin: "lesson" });
+          if (body.answer === "different") recordCorrection(db, { kind: "split", ideaId: a, thoughtIds: [...ta, ...tb], otherThoughtIds: tb, origin: "lesson" });
+          db.prepare("INSERT OR REPLACE INTO learn_pairs (pair_key, answer, answered_at) VALUES (?, ?, ?)").run(key, body.answer, now);
+          if (body.answer !== "skip") scheduleShadowMining(userId, openUserDb);
+        } else {
+          return error(400, "Provide {kind: 'idea', ideaId, answer} or {kind: 'pair', a, b, answer}");
+        }
+        return json(buildLesson(db));
+      }
+
       if (req.method === "GET" && pathname === "/v1/taste") {
         return json(tasteReport(db));
       }
@@ -928,12 +990,7 @@ export function createRequestHandler(
         // Remember what was deleted by its thoughts, so a v2 pass can't rebuild it. On v2 the
         // verdict covers the thoughts the person actually saw (title + headline); the rest of a
         // large group is regrouped right away and shown on its own.
-        const v2 = servesV2(userId);
-        const thoughtIds = v2 ? headlineThoughtIds(db, ideaId) : ideaThoughtIds(db, ideaId);
-        const statement = getIdea(db, ideaId)?.currentFormulation;
-        const deleted = deleteIdea(db, ideaId);
-        if (deleted) recordCorrection(db, { kind: "not_idea", ideaId, thoughtIds, value: statement });
-        if (deleted && v2) scheduleShadowMining(userId, openUserDb);
+        const deleted = markNotAnIdea(db, userId, ideaId, null);
         return deleted ? json({ deleted: true }) : error(404, "Idea not found");
       }
 
@@ -953,8 +1010,7 @@ export function createRequestHandler(
         if (body.verdict !== undefined) {
           if (body.verdict !== "keep") return error(400, 'verdict must be "keep" (use DELETE for "not an idea")');
           if (!getIdea(db, ideaId)) return error(404, "Idea not found");
-          noteMilestone(userId, "first_keep");
-          recordKeep(db, ideaId, servesV2(userId) ? headlineThoughtIds(db, ideaId) : ideaThoughtIds(db, ideaId));
+          markKeep(db, userId, ideaId, null);
         }
         if (body.state !== undefined) {
           if (!VALID_IDEA_STATES.includes(body.state as IdeaState)) {

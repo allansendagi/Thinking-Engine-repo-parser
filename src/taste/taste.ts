@@ -97,8 +97,8 @@ export function buildTasteReport(
   labels: TasteLabels,
   vectors: Map<string, ArrayLike<number>>,
 ): TasteReport {
-  const keeps = labels.history.filter((h) => h.verdict === "keep").length + labels.reviewed.keeps;
-  const notIdeas = labels.history.filter((h) => h.verdict === "not_idea").length + labels.reviewed.notIdeas;
+  const keeps = labels.history.filter((h) => h.verdict === "keep").length + labels.reviewed.keeps + labels.taught.keeps;
+  const notIdeas = labels.history.filter((h) => h.verdict === "not_idea").length + labels.reviewed.notIdeas + labels.taught.notIdeas;
   const ready = keeps >= MIN_LABELS_PER_CLASS && notIdeas >= MIN_LABELS_PER_CLASS;
   const recent = labels.history.slice(-ACCEPTANCE_WINDOW);
   const acceptanceRate = recent.length ? recent.filter((h) => h.verdict === "keep").length / recent.length : null;

@@ -11,6 +11,7 @@ const labels = (pos: string[], neg: string[], history?: TasteLabels["history"]):
   keptThoughtIds: new Set(),
   history: history ?? [...pos.map(() => ({ verdict: "keep" as const, at: "2026-01-01" })), ...neg.map(() => ({ verdict: "not_idea" as const, at: "2026-01-02" }))],
   reviewed: { keeps: 0, notIdeas: 0 },
+  taught: { keeps: 0, notIdeas: 0 },
 });
 
 describe("thoughtTaste", () => {

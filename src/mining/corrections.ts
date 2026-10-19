@@ -17,12 +17,20 @@ export function ideaThoughtIds(db: Database, ideaId: string): string[] {
   }[]).map((r) => r.cognitive_event_id);
 }
 
+/**
+ * Where a verdict came from. null: a click while browsing ideas (counts toward the acceptance
+ * rate). "lesson": an answer in Teach Thread, which deliberately asks about the ideas Thread is
+ * least sure of -- it teaches like any click but would bias the acceptance rate, so it's kept out
+ * of it. "review": a thought-by-thought review (not an idea Thread served).
+ */
+export type VerdictOrigin = "lesson" | "review" | null;
+
 export function recordCorrection(
   db: Database,
-  c: { kind: CorrectionKind; ideaId: string; thoughtIds: string[]; otherThoughtIds?: string[]; value?: string },
+  c: { kind: CorrectionKind; ideaId: string; thoughtIds: string[]; otherThoughtIds?: string[]; value?: string; origin?: VerdictOrigin },
 ): void {
   db.prepare(
-    "INSERT INTO idea_corrections (kind, idea_id, thought_ids, other_thought_ids, value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO idea_corrections (kind, idea_id, thought_ids, other_thought_ids, value, created_at, origin) VALUES (?, ?, ?, ?, ?, ?, ?)",
   ).run(
     c.kind,
     c.ideaId,
@@ -30,20 +38,23 @@ export function recordCorrection(
     c.otherThoughtIds ? JSON.stringify(c.otherThoughtIds) : null,
     c.value ?? null,
     new Date().toISOString(),
+    c.origin ?? null,
   );
 }
 
 /** A person's explicit "keep": this idea is worth having. Idempotent per idea. */
-export function recordKeep(db: Database, ideaId: string, thoughtIds: string[]): void {
+export function recordKeep(db: Database, ideaId: string, thoughtIds: string[], origin: VerdictOrigin = null): void {
   if (db.query("SELECT 1 FROM idea_verdicts WHERE idea_id = ? AND verdict = 'keep'").get(ideaId)) return;
-  db.prepare("INSERT INTO idea_verdicts (verdict, idea_id, thought_ids, created_at) VALUES ('keep', ?, ?, ?)").run(
+  db.prepare("INSERT INTO idea_verdicts (verdict, idea_id, thought_ids, created_at, origin) VALUES ('keep', ?, ?, ?, ?)").run(
     ideaId,
     JSON.stringify(thoughtIds),
     new Date().toISOString(),
+    origin,
   );
 }
 
 const REVIEW = "review";
+const LESSON = "lesson";
 
 /**
  * Verdicts on single thoughts ("is this worth keeping?"), e.g. from a review of what was
@@ -91,11 +102,13 @@ export interface TasteLabels {
   /** Verdicts given one thought at a time (a review, not ideas Thread showed): they teach taste
    *  but aren't a judgment of what Thread served, so they stay out of the acceptance rate. */
   reviewed: { keeps: number; notIdeas: number };
+  /** Answers given in Teach Thread (served ideas, chosen because Thread was unsure). */
+  taught: { keeps: number; notIdeas: number };
 }
 
 /** Everything the person has said about what is, and isn't, an idea. */
 export function loadTasteLabels(db: Database): TasteLabels {
-  const out: TasteLabels = { positives: new Set(), negatives: new Set(), keptIdeaIds: new Set(), keptThoughtIds: new Set(), history: [], reviewed: { keeps: 0, notIdeas: 0 } };
+  const out: TasteLabels = { positives: new Set(), negatives: new Set(), keptIdeaIds: new Set(), keptThoughtIds: new Set(), history: [], reviewed: { keeps: 0, notIdeas: 0 }, taught: { keeps: 0, notIdeas: 0 } };
   const parse = (j: string): string[] => {
     try {
       return JSON.parse(j) as string[];
@@ -113,13 +126,15 @@ export function loadTasteLabels(db: Database): TasteLabels {
     }
     out.keptIdeaIds.add(r.idea_id);
     for (const t of parse(r.thought_ids)) out.keptThoughtIds.add(t);
-    out.history.push({ verdict: "keep", at: r.created_at });
+    if (r.origin === LESSON) out.taught.keeps++; // teaches and confirms, but chosen for uncertainty
+    else out.history.push({ verdict: "keep", at: r.created_at });
   }
   for (const r of db.query("SELECT thought_ids, created_at, origin FROM idea_corrections WHERE kind = 'not_idea' ORDER BY id").all() as {
     thought_ids: string; created_at: string; origin: string | null;
   }[]) {
     for (const t of parse(r.thought_ids)) out.negatives.add(t);
     if (r.origin === REVIEW) out.reviewed.notIdeas++;
+    else if (r.origin === LESSON) out.taught.notIdeas++;
     else out.history.push({ verdict: "not_idea", at: r.created_at });
   }
   out.history.sort((a, b) => a.at.localeCompare(b.at));

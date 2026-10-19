@@ -256,3 +256,15 @@ CREATE INDEX IF NOT EXISTS idx_evolution_cognitive ON evolution_steps(cognitive_
 CREATE INDEX IF NOT EXISTS idx_loops_idea ON open_loops(idea_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_idea ON decisions(idea_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_source ON decisions(source_event_id);
+
+-- Teach Thread: questions already answered, so none is asked twice. A "Same idea?" pair is keyed
+-- by its two ideas' founding thoughts (stable across regrouping); a skipped idea rests for a week.
+CREATE TABLE IF NOT EXISTS learn_pairs (
+  pair_key TEXT PRIMARY KEY,
+  answer TEXT NOT NULL CHECK (answer IN ('same', 'different', 'skip')),
+  answered_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS learn_skips (
+  idea_id TEXT PRIMARY KEY,
+  skipped_at TEXT NOT NULL
+);
