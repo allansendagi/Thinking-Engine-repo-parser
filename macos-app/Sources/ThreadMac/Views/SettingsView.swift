@@ -309,6 +309,7 @@ private struct GeneralSection: View {
     @State private var voiceShortcut = VoiceShortcut.current
     @State private var autoUpdate = AppDelegate.shared?.updater.automaticallyChecks ?? false
     @State private var spotlight = SpotlightIndex.isEnabled
+    @State private var widget = WidgetFeed.isEnabled
 
     private var updater: Updater? { AppDelegate.shared?.updater }
 
@@ -331,6 +332,16 @@ private struct GeneralSection: View {
                     SpotlightIndex.isEnabled = on
                     if on, let ideas = AppDelegate.shared?.appState.thinkingState?.currentIdeas {
                         SpotlightIndex.sync(ideas)
+                    }
+                }
+
+            Toggle("Show my recent ideas in the Thread widget", isOn: $widget)
+                .font(.caption)
+                .help("Only the newest idea titles are shared with the widget, on this Mac. Turning it off clears them.")
+                .onChange(of: widget) { _, on in
+                    WidgetFeed.isEnabled = on
+                    if let app = AppDelegate.shared?.appState {
+                        WidgetFeed.sync(state: app.isPaired ? app.thinkingState : nil, excluding: app.maybeIdeaIds)
                     }
                 }
 

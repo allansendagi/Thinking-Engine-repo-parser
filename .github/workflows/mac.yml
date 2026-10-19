@@ -35,6 +35,8 @@ jobs:
       - run: |
           lipo -archs dist/Thread.app/Contents/MacOS/Thread
           test -d dist/Thread.app/Contents/Frameworks/Sparkle.framework
+          test -x dist/Thread.app/Contents/PlugIns/ThreadWidget.appex/Contents/MacOS/ThreadWidget
+          plutil -lint dist/Thread.app/Contents/PlugIns/ThreadWidget.appex/Contents/Info.plist
           otool -l dist/Thread.app/Contents/MacOS/Thread | grep -A2 LC_RPATH | grep -q '@executable_path/../Frameworks'
           codesign --verify --deep --strict dist/Thread.app
           plutil -lint dist/Thread.app/Contents/Info.plist
