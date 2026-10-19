@@ -21,6 +21,10 @@ export interface GaReport {
   connected: boolean;
   error: string | null;
   windowDays: number;
+  /** Visitors on the site in the last 30 minutes (GA realtime -- no processing delay). */
+  activeNow: number | null;
+  /** Standard reports are empty while Google processes a new property (up to ~24h). */
+  processing: boolean;
   totals: { users: number; newUsers: number; sessions: number; engagedSessions: number; downloadClicks: number; avgEngagementSeconds: number } | null;
   byDay: { day: string; users: number; sessions: number; downloadClicks: number }[];
   sources: { source: string; medium: string; sessions: number; users: number; downloadClicks: number }[];
@@ -95,7 +99,7 @@ const dim = (r: Row, i: number) => r.dimensionValues?.[i]?.value ?? "";
 let cache: { key: string; at: number; data: GaReport } | null = null;
 
 export async function gaReport(windowDays = 30, fetcher: typeof fetch = fetch): Promise<GaReport> {
-  const base: GaReport = { connected: false, error: null, windowDays, totals: null, byDay: [], sources: [], landingPages: [], countries: [], devices: [], fetchedAt: null };
+  const base: GaReport = { connected: false, error: null, windowDays, activeNow: null, processing: false, totals: null, byDay: [], sources: [], landingPages: [], countries: [], devices: [], fetchedAt: null };
   const cfg = config();
   if (!cfg) return base;
   const key = `${cfg.propertyId}|${windowDays}`;
@@ -105,6 +109,7 @@ export async function gaReport(windowDays = 30, fetcher: typeof fetch = fetch): 
     const dateRanges = [{ startDate: `${windowDays}daysAgo`, endDate: "today" }];
     const downloads = { filter: { fieldName: "eventName", stringFilter: { value: DOWNLOAD_EVENT } } };
     const run = (body: object) => runReport(cfg.propertyId, bearer, { dateRanges, ...body }, fetcher);
+    const realtime = runRealtime(cfg.propertyId, bearer, fetcher).catch(() => null);
     const [totals, dlTotal, byDay, dlByDay, sources, dlBySource, pages, dlByPage, countries, devices] = await Promise.all([
       run({ metrics: [{ name: "totalUsers" }, { name: "newUsers" }, { name: "sessions" }, { name: "engagedSessions" }, { name: "userEngagementDuration" }] }),
       run({ metrics: [{ name: "eventCount" }], dimensionFilter: downloads }),
@@ -118,6 +123,7 @@ export async function gaReport(windowDays = 30, fetcher: typeof fetch = fetch): 
       run({ dimensions: [{ name: "deviceCategory" }], metrics: [{ name: "totalUsers" }], orderBys: [{ metric: { metricName: "totalUsers" }, desc: true }] }),
     ]);
     const t = totals[0];
+    const activeNow = await realtime;
     const dlDay = new Map(dlByDay.map((r) => [dim(r, 0), num(r, 0)]));
     const dlSrc = new Map(dlBySource.map((r) => [`${dim(r, 0)}|${dim(r, 1)}`, num(r, 0)]));
     const dlPage = new Map(dlByPage.map((r) => [dim(r, 0), num(r, 0)]));
@@ -126,13 +132,15 @@ export async function gaReport(windowDays = 30, fetcher: typeof fetch = fetch): 
       connected: true,
       error: null,
       windowDays,
+      activeNow,
+      processing: !t,
       totals: t
         ? {
             users: num(t, 0), newUsers: num(t, 1), sessions: num(t, 2), engagedSessions: num(t, 3),
             downloadClicks: dlTotal[0] ? num(dlTotal[0], 0) : 0,
             avgEngagementSeconds: num(t, 0) ? Math.round(num(t, 4) / num(t, 0)) : 0,
           }
-        : null,
+        : { users: 0, newUsers: 0, sessions: 0, engagedSessions: 0, downloadClicks: 0, avgEngagementSeconds: 0 },
       byDay: byDay.map((r) => ({ day: isoDay(dim(r, 0)), users: num(r, 0), sessions: num(r, 1), downloadClicks: dlDay.get(dim(r, 0)) ?? 0 })),
       sources: sources.map((r) => ({ source: dim(r, 0), medium: dim(r, 1), sessions: num(r, 0), users: num(r, 1), downloadClicks: dlSrc.get(`${dim(r, 0)}|${dim(r, 1)}`) ?? 0 })),
       landingPages: pages.map((r) => ({ page: dim(r, 0), sessions: num(r, 0), downloadClicks: dlPage.get(dim(r, 0)) ?? 0 })),
@@ -145,4 +153,16 @@ export async function gaReport(windowDays = 30, fetcher: typeof fetch = fetch): 
   } catch (e) {
     return { ...base, connected: true, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** Active users in the last 30 minutes. */
+async function runRealtime(propertyId: string, bearer: string, fetcher: typeof fetch): Promise<number> {
+  const res = await fetcher(`https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runRealtimeReport`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+    body: JSON.stringify({ metrics: [{ name: "activeUsers" }] }),
+  });
+  if (!res.ok) throw new Error(`GA realtime ${res.status}`);
+  const rows = ((await res.json()) as { rows?: Row[] }).rows ?? [];
+  return rows[0] ? num(rows[0], 0) : 0;
 }
