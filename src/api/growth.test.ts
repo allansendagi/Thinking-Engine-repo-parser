@@ -152,6 +152,31 @@ describe("old clicks get the best source the data allows", () => {
   });
 });
 
+describe("test traffic", () => {
+  test("bots are judged from the raw browser string; old test rows are flagged once", async () => {
+    const { flagTestDownloads } = await import("./growth");
+    const reg = openRegistry();
+    try {
+      reg.exec("DELETE FROM growth_meta WHERE key = 'test_downloads_flagged'");
+    } finally {
+      reg.close();
+    }
+    const at = new Date("2026-10-11T00:00:00Z");
+    recordDownload({ userAgent: "curl/8.4.0", uaFamily: "Unknown device" }, at); // bot, caught by the raw string
+    recordDownload({ uaFamily: "Chrome on Linux", referrer: "http://127.0.0.1:8080/" }, at); // CI copy of the site
+    recordDownload({ uaFamily: "Safari on macOS", referrer: "https://mind-stream-continuity.vercel.app/" }, at); // preview
+    recordDownload({ uaFamily: "Safari on macOS", referrer: "https://www.google.com/" }, at); // a person
+    flagTestDownloads();
+    const db = openRegistry();
+    try {
+      const rows = db.query("SELECT bot FROM download_events WHERE created_at = '2026-10-11T00:00:00.000Z' ORDER BY id").all() as { bot: number }[];
+      expect(rows.map((r) => r.bot)).toEqual([1, 1, 1, 0]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe("GitHub download counts", () => {
   test("website DMG vs Sparkle updates vs update checks, summed across signed releases", async () => {
     const fetcher = (async () =>

@@ -388,6 +388,7 @@ export function createRequestHandler(
           version: body.version,
           referrer: body.firstReferrer ?? body.referrer,
           country: body.country ?? req.headers.get("x-vercel-ip-country"),
+          userAgent: str(body.uaFamily) ?? req.headers.get("user-agent"),
           uaFamily: deviceLabel(
             null,
             (body.uaFamily as string) ?? req.headers.get("user-agent"),
