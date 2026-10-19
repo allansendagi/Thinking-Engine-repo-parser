@@ -57,6 +57,8 @@ import { deferredStatus, scheduleDeferredRetry } from "../state/deferred";
 import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
+import { askMyThinking } from "../thinking/ask";
+import { VoyageEmbeddingProvider, voyageConfigured } from "../providers/voyage";
 import { headlineThoughtIds, servesV2 } from "../mining/serve";
 import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
 import { ideaThoughtIds, recordCorrection, recordKeep, recordThoughtReviews } from "../mining/corrections";
@@ -205,6 +207,13 @@ async function authenticate(
   const tokenHash = await verifyTokenHash(userId, token);
   if (!tokenHash) return error(401, "Invalid credentials");
   return { userId, tokenHash };
+}
+
+/** The question's vector in the space the account's thoughts were embedded in (Voyage only:
+ *  on-device Apple vectors come from the Mac and the server can't produce them). */
+async function embedQueryFor(q: string, model: string): Promise<number[] | null> {
+  if (!voyageConfigured() || !model.startsWith("voyage:")) return null;
+  return new VoyageEmbeddingProvider(undefined, model.slice("voyage:".length)).embedQuery(q);
 }
 
 export function createRequestHandler(
@@ -642,7 +651,9 @@ export function createRequestHandler(
         // Clients redact on-device; this catches captures from builds that predate it.
         body.messages = body.messages.map((m) => (typeof m?.text === "string" ? { ...m, text: redactSecrets(m.text) } : m));
         const result = await ingestConversation(db, body, providers);
-        scheduleShadowMining(userId, openUserDb);
+        // Clients resend whole conversations (the extension on every flush, Cursor every ~20s):
+        // regroup only when this capture actually added thoughts.
+        if (result.newCognitiveEvents + result.discardedEvents + result.promotedFromDiscard > 0) scheduleShadowMining(userId, openUserDb);
         return json(result);
       }
 
@@ -998,6 +1009,13 @@ export function createRequestHandler(
           if (e instanceof VectorValidationError) return error(400, e.message);
           throw e;
         }
+      }
+
+      // "What do I actually think about X?" -- from the person's own thinking, with sources.
+      if (req.method === "GET" && pathname === "/v1/ask") {
+        const q = (url.searchParams.get("q") ?? "").trim();
+        if (!q || q.length > 500) return error(400, "q (1-500 characters) is required");
+        return json(await askMyThinking(db, q, embedQueryFor));
       }
 
       if (req.method === "GET" && pathname === "/v1/thinking-state") {

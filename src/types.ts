@@ -243,4 +243,9 @@ export interface ThinkingState {
   }[];
   contradictions: { ideaId: string; ideaTitle: string; formulation: string; createdAt: string }[];
   relatedIdeas: { id: string; title: string }[];
+  /**
+   * "You never answered this": questions raised a while ago, still open, on a subject the person
+   * is back on right now (the idea, or one in its theme, moved in the last few days). Newest return first.
+   */
+  revisit: { ideaId: string; ideaTitle: string; loopId: string; statement: string; raisedAt: string; backOnTopicAt: string; via: string | null }[];
 }

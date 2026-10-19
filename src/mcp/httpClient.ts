@@ -70,6 +70,7 @@ export function makeClient(creds: ThreadCredentials) {
     searchIdeas: (query: string) => call(`/v1/ideas${qs({ q: query })}`),
     getIdea: (id: string) => call(`/v1/ideas/${encodeURIComponent(id)}`),
     traceIdea: (id: string) => call(`/v1/ideas/${encodeURIComponent(id)}/trace`),
+    askMyThinking: (question: string) => call(`/v1/ask${qs({ q: question })}`),
     getThreadState: (topic?: string) => call(`/v1/thinking-state${qs({ topic })}`),
     getOpenLoops: (topic?: string) => call(`/v1/open-loops${qs({ topic })}`),
     getRecentChanges: (sinceDays?: number) => call(`/v1/recent-changes${qs({ sinceDays })}`),

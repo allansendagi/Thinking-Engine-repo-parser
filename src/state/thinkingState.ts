@@ -5,7 +5,15 @@ export interface ThinkingStateOptions {
    *  match needs the embeddings signal (see identity/signals.ts) -- this is a placeholder. */
   topic?: string;
   recentWindowDays?: number;
+  /** Injectable clock (tests). */
+  now?: Date;
 }
+
+/** A question counts as unanswered-for-a-while after this many days open... */
+export const REVISIT_AFTER_DAYS = 7;
+/** ...and the person counts as "back on the topic" if it moved within this many days. */
+export const BACK_ON_TOPIC_DAYS = 3;
+const MAX_REVISIT = 5;
 
 function matchesTopic(idea: IdeaNode, topic: string): boolean {
   const needle = topic.toLowerCase();
@@ -27,6 +35,7 @@ export function buildThinkingState(
   sourceByEventId: Map<string, string> = new Map(),
 ): ThinkingState {
   const cognitiveEventsById = new Map(cognitiveEvents.map((e) => [e.id, e]));
+  const ideasByIdAll = new Map(ideas.map((i) => [i.id, i]));
 
   const latestSourceOf = (idea: IdeaNode): string | null => {
     const last = idea.evolution[idea.evolution.length - 1];
@@ -42,7 +51,8 @@ export function buildThinkingState(
   // without padding `recentChanges` with steps too old to ever nudge. Callers that want a tighter
   // window (MCP prose) still pass their own.
   const recentWindowDays = options.recentWindowDays ?? 35;
-  const cutoff = Date.now() - recentWindowDays * 24 * 60 * 60 * 1000;
+  const nowMs = (options.now ?? new Date()).getTime();
+  const cutoff = nowMs - recentWindowDays * 24 * 60 * 60 * 1000;
 
   const recentChanges: ThinkingState["recentChanges"] = [];
   const contradictions: ThinkingState["contradictions"] = [];
@@ -118,6 +128,37 @@ export function buildThinkingState(
     .filter((i): i is IdeaNode => i !== undefined)
     .map((i) => ({ id: i.id, title: i.title }));
 
+  // "You never answered this": an open question older than REVISIT_AFTER_DAYS, on an idea that
+  // -- itself or through its theme -- moved in the last BACK_ON_TOPIC_DAYS. Surfacing it the
+  // moment the person is back on the subject is when answering it is cheapest. Deterministic.
+  const DAY = 24 * 60 * 60 * 1000;
+  const lastMoved = (idea: IdeaNode, exceptThought?: string): string | null => {
+    const steps = idea.evolution.filter((s) => s.cognitiveEventId !== exceptThought);
+    return steps.length ? steps.reduce((a, b) => (b.createdAt > a.createdAt ? b : a)).createdAt : null;
+  };
+  const revisit: ThinkingState["revisit"] = [];
+  for (const idea of relevant) {
+    for (const loop of idea.openLoops) {
+      if (loop.resolved || nowMs - Date.parse(loop.createdAt) < REVISIT_AFTER_DAYS * DAY) continue;
+      const loopThought = loop.id.startsWith("loop_") ? loop.id.slice("loop_".length) : undefined;
+      let best: { at: string; via: string | null } | null = null;
+      const consider = (at: string | null, via: string | null) => {
+        if (!at || at <= loop.createdAt || nowMs - Date.parse(at) > BACK_ON_TOPIC_DAYS * DAY) return;
+        if (!best || at > best.at) best = { at, via };
+      };
+      consider(lastMoved(idea, loopThought), null);
+      for (const rid of idea.relatedIdeaIds) {
+        const r = ideasByIdAll.get(rid);
+        if (r) consider(lastMoved(r), r.title);
+      }
+      if (best) {
+        const b = best as { at: string; via: string | null };
+        revisit.push({ ideaId: idea.id, ideaTitle: idea.title, loopId: loop.id, statement: loop.statement, raisedAt: loop.createdAt, backOnTopicAt: b.at, via: b.via });
+      }
+    }
+  }
+  revisit.sort((a, b) => b.backOnTopicAt.localeCompare(a.backOnTopicAt) || a.raisedAt.localeCompare(b.raisedAt));
+
   return {
     topic: options.topic ?? null,
     currentIdeas: relevant.map((i) => ({
@@ -132,5 +173,6 @@ export function buildThinkingState(
     openLoops,
     contradictions,
     relatedIdeas,
+    revisit: revisit.slice(0, MAX_REVISIT),
   };
 }

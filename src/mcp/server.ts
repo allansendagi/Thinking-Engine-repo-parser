@@ -9,6 +9,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { askMyThinking } from "../thinking/ask";
 import { openDb } from "../db/client";
 import { createReasoningProvider } from "../providers/anthropic";
 import {
@@ -62,6 +63,13 @@ tool(
   "Fetch one idea's evolution alongside the original source text each step is grounded in.",
   { id: z.string() },
   async ({ id }: { id: string }) => json(traceIdea(db, id)),
+);
+
+tool(
+  "what_do_i_think",
+  "Answer \"what do I actually think about X?\" from the user's own captured thinking across every AI tool they use: where they stand now (in their words), how they got there, what they decided, and what is still open -- each point with the conversation it came from. Use this before giving the user advice on a topic they have thought about.",
+  { question: z.string().describe("The topic or question, e.g. 'pricing' or 'what do I think about computable authority?'") },
+  async ({ question }: { question: string }) => json(await askMyThinking(db, question)),
 );
 
 tool(

@@ -28,12 +28,17 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
     return (await this.embedMany([text]))[0]!;
   }
 
-  async embedMany(texts: string[]): Promise<number[][]> {
+  /** A search query, embedded as one (Voyage scores query-vs-document better than doc-vs-doc). */
+  async embedQuery(text: string): Promise<number[]> {
+    return (await this.embedMany([text], "query"))[0]!;
+  }
+
+  async embedMany(texts: string[], inputType: "document" | "query" = "document"): Promise<number[][]> {
     if (!this.apiKey) throw new Error("VOYAGE_API_KEY is not set");
     const res = await this.fetcher("https://api.voyageai.com/v1/embeddings", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify({ input: texts, model: this.model, input_type: "document" }),
+      body: JSON.stringify({ input: texts, model: this.model, input_type: inputType }),
     });
     if (!res.ok) throw new Error(`Voyage embeddings failed: ${res.status}`);
     const body = (await res.json()) as { data: { embedding: number[]; index: number }[] };
