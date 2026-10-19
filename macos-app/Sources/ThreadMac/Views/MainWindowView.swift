@@ -162,7 +162,7 @@ private struct IdeaListColumn: View {
                            isLoop: false, ideaId: i.id, when: when,
                            status: rowStatus(state: i.state, hasOpenLoop: loopIdeaIDs.contains(i.id)))
         }
-        return dateBucketedGroups(rows)
+        return pinnedThenDated(rows, isPinned: appState.isPinned)
     }
 
     /// Ideas Thread isn't sure are yours to keep -- shown collapsed, below the list.

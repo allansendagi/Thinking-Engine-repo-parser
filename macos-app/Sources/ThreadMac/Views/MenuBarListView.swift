@@ -98,18 +98,6 @@ struct MenuBarListView: View {
                 })
             ]
 
-            // All tab leads with a "Pinned" group (mock parity); those ideas are then held out
-            // of the date buckets so they don't show twice.
-            var pinnedGroup: [IdeaRowGroup] = []
-            var pinnedIDs: Set<String> = []
-            if tab == .all {
-                let pinned = ideas.filter { appState.isPinned($0.id) }.map(ideaRow)
-                if !pinned.isEmpty {
-                    pinnedGroup = [IdeaRowGroup(id: "pinned", label: "Pinned", rows: pinned)]
-                    pinnedIDs = Set(pinned.map(\.id))
-                }
-            }
-
             // "You never answered this": questions from a while ago, on a subject you're back on
             // now. Leads Recent; those loops aren't repeated in the date buckets below.
             let revisit = tab == .recent ? (appState.thinkingState?.revisit ?? []) : []
@@ -125,8 +113,8 @@ struct MenuBarListView: View {
             // open-loop mark instead of being replaced by its questions (that turned Recent into
             // a list of questions). The questions themselves live in Open loops and, when you're
             // back on the subject, in "Still unanswered" above.
-            let items: [IdeaRow] = ideas.filter { !pinnedIDs.contains($0.id) }.map(ideaRow)
-            return pendingGroup + revisitGroup + pinnedGroup + dateBucketedGroups(items)
+            // Pinned ideas lead both lists (Recent and All -> Ideas), then the rest by date.
+            return pendingGroup + revisitGroup + pinnedThenDated(ideas.map(ideaRow), isPinned: appState.isPinned)
         }
     }
 
