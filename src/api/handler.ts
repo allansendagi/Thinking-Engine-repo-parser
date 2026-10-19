@@ -57,6 +57,7 @@ import { deferredStatus, scheduleDeferredRetry } from "../state/deferred";
 import { captureHealthSummary } from "../db/evidence";
 import { storeThoughtVectors, thoughtsNeedingVectors, VectorValidationError } from "../db/thoughts";
 import { scheduleShadowMining } from "../mining/shadow";
+import { headlineThoughtIds, servesV2 } from "../mining/serve";
 import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
 import { ideaThoughtIds, recordCorrection, recordKeep, recordThoughtReviews } from "../mining/corrections";
 import { tasteReport } from "../taste/taste";
@@ -866,11 +867,15 @@ export function createRequestHandler(
 
       if (req.method === "DELETE" && ideaMatch && !ideaMatch[2]) {
         const ideaId = decodePathId(ideaMatch[1] as string);
-        // Remember what was deleted by its thoughts, so a v2 pass can't rebuild it.
-        const thoughtIds = ideaThoughtIds(db, ideaId);
+        // Remember what was deleted by its thoughts, so a v2 pass can't rebuild it. On v2 the
+        // verdict covers the thoughts the person actually saw (title + headline); the rest of a
+        // large group is regrouped right away and shown on its own.
+        const v2 = servesV2(userId);
+        const thoughtIds = v2 ? headlineThoughtIds(db, ideaId) : ideaThoughtIds(db, ideaId);
         const statement = getIdea(db, ideaId)?.currentFormulation;
         const deleted = deleteIdea(db, ideaId);
         if (deleted) recordCorrection(db, { kind: "not_idea", ideaId, thoughtIds, value: statement });
+        if (deleted && v2) scheduleShadowMining(userId, openUserDb);
         return deleted ? json({ deleted: true }) : error(404, "Idea not found");
       }
 
@@ -890,7 +895,7 @@ export function createRequestHandler(
         if (body.verdict !== undefined) {
           if (body.verdict !== "keep") return error(400, 'verdict must be "keep" (use DELETE for "not an idea")');
           if (!getIdea(db, ideaId)) return error(404, "Idea not found");
-          recordKeep(db, ideaId, ideaThoughtIds(db, ideaId));
+          recordKeep(db, ideaId, servesV2(userId) ? headlineThoughtIds(db, ideaId) : ideaThoughtIds(db, ideaId));
         }
         if (body.state !== undefined) {
           if (!VALID_IDEA_STATES.includes(body.state as IdeaState)) {

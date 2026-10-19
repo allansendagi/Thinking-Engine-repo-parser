@@ -188,7 +188,11 @@ describe("backlog pause", () => {
 });
 
 describe("coding-assistant sessions wait for quiet", () => {
-  const agentCapture = (conversationId: string, id: string, text: string) => ({ ...capture(conversationId, id, text), source: "claude_code" as const });
+  // A live session: its newest message was just written.
+  const agentCapture = (conversationId: string, id: string, text: string, createdAt = new Date().toISOString()) => {
+    const c = capture(conversationId, id, text);
+    return { ...c, source: "claude_code" as const, messages: c.messages.map((m) => ({ ...m, createdAt })) };
+  };
   const countingProvider = () => {
     let n = 0;
     return { calls: () => n, provider: { async complete() { n++; return extraction("m1", "Charge per seat rather than a flat fee.", "charge per seat"); } } as CompletionProvider };
@@ -219,6 +223,16 @@ describe("coding-assistant sessions wait for quiet", () => {
     expect(c.calls()).toBe(0);
     const later = await retryDeferredExtraction(db, providers, 10, Date.now() + 11 * 60_000);
     expect(later.processed).toBe(1);
+    expect(c.calls()).toBe(1);
+    expect(loadIdeas(db)).toHaveLength(1);
+  });
+
+  test("a session that is already quiet (history read later) is processed right away", async () => {
+    delete process.env.THREAD_AGENT_QUIET_MINUTES;
+    const db = openDb(":memory:");
+    const c = countingProvider();
+    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+    await ingestConversation(db, agentCapture("s1", "m1", "We should charge per seat, not a flat fee.", old), { extraction: c.provider, reasoning: new FakeProvider([newIdea]) });
     expect(c.calls()).toBe(1);
     expect(loadIdeas(db)).toHaveLength(1);
   });

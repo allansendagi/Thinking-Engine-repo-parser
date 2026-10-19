@@ -5,7 +5,7 @@ import { loadIdeas } from "../db/queries";
 import { tasteReport } from "../taste/taste";
 import { consolidate, type MiningThought } from "./consolidate";
 import { loadTasteLabels, recordThoughtReviews } from "./corrections";
-import { hasV1Backup } from "./serve";
+import { hasV1Backup, headlineThoughtIds } from "./serve";
 import { runShadowMining, syncServing } from "./shadow";
 
 const USER = "user_test";
@@ -62,6 +62,25 @@ describe("serving v2", () => {
     syncServing(USER, db, runShadowMining(db).ideas);
     expect(loadIdeas(db)).toEqual(before);
     expect(hasV1Backup(db)).toBe(false);
+  });
+
+  test("a click on a v2 idea judges its founding and current thoughts only, not the whole group", () => {
+    const db = seed();
+    db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx) VALUES ('m3', 'c1', 'chatgpt', 'user', 'x', '2026-09-01T00:02:00Z', 2)").run();
+    db.prepare("INSERT INTO cognitive_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote) VALUES ('cog_m3_0', 'claim', 'Per seat pricing should exclude guests.', 0.9, 'high', 'm3', 'x')").run();
+    process.env.THREAD_V2_SERVING_USERS = USER;
+    syncServing(USER, db, runShadowMining(db).ideas);
+    expect(loadIdeas(db)[0]!.evolution).toHaveLength(3);
+    expect(headlineThoughtIds(db, "idea_cog_m1_0")).toEqual(["cog_m1_0", "cog_m3_0"]); // the question isn't judged
+  });
+
+  test("a lone new thought is served at once (a spark), so it can be found right after capture", () => {
+    const db = seed();
+    db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx) VALUES ('m9', 'c9', 'chatgpt', 'user', 'x', '2026-09-05T00:00:00Z', 0)").run();
+    db.prepare("INSERT INTO cognitive_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote) VALUES ('cog_m9_0', 'claim', 'Onboarding should show value within five minutes.', 0.9, 'medium', 'm9', 'x')").run();
+    process.env.THREAD_V2_SERVING_USERS = USER;
+    syncServing(USER, db, runShadowMining(db).ideas);
+    expect(titles(db)).toContain("Onboarding should show value within five minutes");
   });
 
   test("deleting a conversation also drops the saved v1 copy of it", () => {

@@ -67,13 +67,14 @@ export function restoreV1(db: Database): boolean {
 }
 
 /**
- * Replace the served graph with the v2 ideas. Sparks (a lone thought nobody came back to) are
- * not served -- they stay in idea_view_v2 and become ideas once they recur. What the person
+ * Replace the served graph with the v2 ideas. What the person
  * already knows an idea by survives the rewrite: its id (kept by consolidate), its title, why it
  * matters, and every question they marked answered.
  */
 export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served: number; sparks: number } {
-  const served = ideas.filter((i) => !i.isSpark);
+  // Sparks are served too: a new thought must be findable the moment it's captured, and taste
+  // (the Maybe tray) -- not hiding -- is what keeps weak ones out of the way.
+  const served = ideas;
   const servedIds = new Set(served.map((i) => i.node.id));
   db.transaction(() => {
     backupV1(db);
@@ -93,42 +94,20 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
         (r) => [r.id, r.statement],
       ),
     );
-    const typeOf = new Map((db.query("SELECT id, type FROM cognitive_events").all() as { id: string; type: string }[]).map((r) => [r.id, r.type]));
-    /** v1 ids are `idea_<founding thought>`: was this idea founded on an idea, not a question/ask? */
-    const foundedOnIdea = (v1: string) => ["new_idea", "claim", "refinement"].includes(typeOf.get(v1.replace(/^idea_/, "")) ?? "");
     /**
-     * Names, assigned once each across the whole graph: a title the person gave first, then the
-     * clearest existing titles (founded on an idea, then most of the group's thoughts) -- each to
-     * the group holding most of that old idea's thoughts, so no two ideas end up with one name.
-     * A group with no name of its own gets one carved from its founding statement.
+     * The title must name what the person is judging when they press Keep or Not an idea: the
+     * idea's founding thought (see headlineThoughtIds). So: their own rename of this idea, else
+     * the title the founding thought's old idea had (when it reads as a name and no other idea
+     * took it), else one carved from the founding statement.
      */
-    const claims: { group: number; v1: string; rank: number[] }[] = [];
-    served.forEach(({ node, thoughtIds }, group) => {
-      const votes = new Map<string, number>();
-      for (const t of thoughtIds) {
-        const v1 = v1IdeaOf.get(t);
-        if (v1 && before.has(v1)) votes.set(v1, (votes.get(v1) ?? 0) + 1);
-      }
-      for (const [v1, n] of votes) {
-        if (!renamed.has(v1) && !isNamingTitle(before.get(v1)!.title)) continue;
-        claims.push({ group, v1, rank: [renamed.has(v1) ? 1 : 0, foundedOnIdea(v1) ? 1 : 0, n, v1 === node.id ? 1 : 0] });
-      }
-    });
-    const cmp = (a: number[], b: number[]) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return b[i]! - a[i]!; return 0; };
-    claims.sort((a, b) => cmp(a.rank, b.rank) || a.v1.localeCompare(b.v1));
-    const named = new Map<number, string>();
     const usedTitles = new Set<string>();
-    for (const c of claims) {
-      const title = before.get(c.v1)!.title;
-      if (named.has(c.group) || usedTitles.has(title.toLowerCase())) continue;
-      named.set(c.group, title);
-      usedTitles.add(title.toLowerCase());
-    }
-    const titleFor = (group: number): string => {
-      const own = named.get(group);
-      if (own) return own;
-      const { node, founderId } = served[group]!;
-      return deriveTitle(statementOf.get(founderId) ?? node.currentFormulation);
+    const titleFor = (node: ConsolidatedIdea["node"], founderId: string): string => {
+      const pick = (t: string) => (usedTitles.add(t.toLowerCase()), t);
+      if (renamed.has(node.id) && before.has(node.id)) return pick(before.get(node.id)!.title);
+      const v1 = v1IdeaOf.get(founderId);
+      const old = v1 ? before.get(v1)?.title : undefined;
+      if (old && isNamingTitle(old) && !usedTitles.has(old.toLowerCase())) return pick(old);
+      return pick(deriveTitle(statementOf.get(founderId) ?? node.currentFormulation));
     };
     const resolvedLoops = new Set((db.query("SELECT id FROM open_loops WHERE resolved = 1").all() as { id: string }[]).map((r) => r.id));
     const why = new Map(
@@ -157,9 +136,11 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
     const putDecision = db.prepare("INSERT OR REPLACE INTO decisions (id, idea_id, statement, decided_at, source_event_id) VALUES (?, ?, ?, ?, ?)");
     const putRelated = db.prepare("INSERT OR IGNORE INTO related_ideas (idea_id, related_idea_id) VALUES (?, ?)");
 
-    served.forEach(({ node, thoughtIds }, group) => {
+    // Renamed ideas claim their titles first, so a derived name can't take a person's own.
+    const order = [...served].sort((a, b) => Number(renamed.has(b.node.id)) - Number(renamed.has(a.node.id)));
+    order.forEach(({ node, thoughtIds, founderId }) => {
       const prior = before.get(node.id);
-      const title = titleFor(group);
+      const title = titleFor(node, founderId);
       const whyItMatters = prior?.why_it_matters ?? thoughtIds.map((t) => why.get(t)).find((w) => w) ?? null;
       putIdea.run(node.id, title, node.state, node.currentFormulation, whyItMatters, node.createdAt, node.updatedAt);
       for (const s of node.evolution) putStep.run(node.id, s.cognitiveEventId, s.formulation, s.createdAt, s.sourceEventId);
@@ -174,5 +155,27 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
       }
     }
   })();
-  return { served: served.length, sparks: ideas.length - served.length };
+  return { served: served.length, sparks: ideas.filter((i) => i.isSpark).length };
+}
+
+const POSITIONAL = new Set(["new_idea", "claim", "refinement", "contradiction", "decision"]);
+
+/**
+ * The thoughts a person is judging when they press Keep or Not an idea on a v2 idea: the one it
+ * was founded on (its title) and the one it currently says (its headline) -- not every thought
+ * grouped under it. A v2 idea can hold dozens of thoughts; one click must not permanently label
+ * them all. Whatever else was in the group is regrouped on the next pass and shown on its own.
+ */
+export function headlineThoughtIds(db: Database, ideaId: string): string[] {
+  const steps = db
+    .query(
+      `SELECT s.cognitive_event_id AS id, c.type, c.role FROM evolution_steps s JOIN cognitive_events c ON c.id = s.cognitive_event_id
+        WHERE s.idea_id = ? ORDER BY s.created_at, s.cognitive_event_id`,
+    )
+    .all(ideaId) as { id: string; type: string; role: string | null }[];
+  if (steps.length === 0) return [];
+  const positional = steps.filter((t) => POSITIONAL.has(t.type) && !(t.type === "claim" && (t.role === "option" || t.role === "reason")));
+  const founder = steps.find((t) => t.type === "new_idea") ?? positional[0] ?? steps[0]!;
+  const current = positional.at(-1) ?? steps.at(-1)!;
+  return [...new Set([founder.id, current.id])];
 }

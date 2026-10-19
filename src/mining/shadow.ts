@@ -60,8 +60,8 @@ export function loadMiningInput(db: Database): MiningInput {
 /**
  * Themes: ideas whose thoughts average at least this similar are listed as related. Tuned on the
  * owner's own two-level labels (114 pairs: same idea / same theme / unrelated): theme-level MCC
- * 0.55 without themes -> 0.75 at 0.15 (held-out 0.72-0.74; 0.10 and 0.20 both scored lower),
- * idea level unchanged at 0.47 (v1 today: 0.25 / 0.17).
+ * 0.55 without themes -> 0.75 at 0.15 (0.10: 0.69, 0.20: 0.66; tuned on random halves and scored
+ * on the other: 0.73, 10-90% 0.63-0.84), idea level unchanged at 0.47 (v1 today: 0.25 / 0.17).
  */
 export const THEME_THRESHOLD = 0.15;
 
@@ -195,7 +195,7 @@ export function scheduleShadowMining(userId: string, open: (userId: string) => D
 export function syncServing(userId: string, db: Database, ideas: ConsolidatedIdea[]): void {
   if (servesV2(userId)) {
     const r = materializeV2(db, ideas);
-    console.log(`[Thread] serving v2 for ${userId}: ${r.served} ideas (${r.sparks} sparks held back)`);
+    console.log(`[Thread] serving v2 for ${userId}: ${r.served} ideas (${r.sparks} of them sparks)`);
   } else if (hasV1Backup(db) && restoreV1(db)) {
     console.log(`[Thread] v2 switched off for ${userId}: v1 ideas restored`);
   }
