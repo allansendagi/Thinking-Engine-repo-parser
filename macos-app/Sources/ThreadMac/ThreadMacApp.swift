@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watcher.start()
         connectivity = watcher
         panel.onShow = { [weak appState] in
+            appState?.notePanelOpened()
             Task { await appState?.refreshIfStale() }
         }
 

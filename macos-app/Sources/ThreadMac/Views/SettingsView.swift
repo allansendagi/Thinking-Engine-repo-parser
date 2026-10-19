@@ -179,6 +179,10 @@ struct SettingsView: View {
 
             Divider()
 
+            LearningSection { dismiss() }
+
+            Divider()
+
             HelpSection()
 
             Divider()
@@ -643,5 +647,38 @@ private struct DataSection: View {
                 message = error.localizedDescription
             }
         }
+    }
+}
+
+/// What Thread has learned about how this person thinks, and a way to teach it more right now.
+private struct LearningSection: View {
+    @EnvironmentObject var appState: AppState
+    let closeSettings: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Learning").font(.subheadline.weight(.semibold))
+            Text(summary).font(.caption).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Teach Thread now") {
+                closeSettings()
+                Task { await appState.startLesson() }
+            }
+            .controlSize(.small)
+            .disabled(!appState.isPaired)
+        }
+    }
+
+    private var summary: String {
+        let learned = appState.lesson?.learned
+            ?? ((appState.taste?.keeps ?? 0) + (appState.taste?.notIdeas ?? 0))
+        if learned == 0 {
+            return "Each Keep or Not an idea teaches Thread what matters to you. A few quick questions are the fastest way to start."
+        }
+        var s = "Thread has learned from \(learned) of your answers."
+        if let r = appState.lesson?.acceptanceRate ?? appState.taste?.acceptanceRate {
+            s += " It keeps \(Int((r * 100).rounded()))% of what it shows you."
+        }
+        return s
     }
 }

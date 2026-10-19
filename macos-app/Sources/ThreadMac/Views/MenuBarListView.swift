@@ -162,6 +162,9 @@ struct MenuBarListView: View {
                     )
                     .onAppear { appState.noteResumeShown(s.ideaId, lastActivity: appState.lastActivity(of: s.ideaId)) }
                 }
+                if !searching, tab == .recent, appState.showsLessonInvite {
+                    LessonInvite()
+                }
                 if groups.isEmpty {
                     EmptyState(loops: tab == .loops)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

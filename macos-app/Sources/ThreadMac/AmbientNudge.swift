@@ -15,6 +15,8 @@ final class AmbientNudge: NSObject, UNUserNotificationCenterDelegate {
     private let returnGap: TimeInterval = 45 * 60      // "away" means at least this long
     private let cooldown: TimeInterval = 4 * 3600      // between notifications
     private let category = "thread.resume"
+    private let lessonCategory = "thread.lesson"
+    private let lessonNotifiedKey = "thread.lesson.lastNotified"
 
     private let lastActiveKey = "thread.ambient.lastThinkingActive"
     private let lastNotifiedKey = "thread.ambient.lastNotified"
@@ -35,7 +37,15 @@ final class AmbientNudge: NSObject, UNUserNotificationCenterDelegate {
                     UNNotificationAction(identifier: "NOT_NOW", title: "Not now", options: []),
                 ],
                 intentIdentifiers: [], options: []
-            )
+            ),
+            UNNotificationCategory(
+                identifier: lessonCategory,
+                actions: [
+                    UNNotificationAction(identifier: "START", title: "Start", options: [.foreground]),
+                    UNNotificationAction(identifier: "NOT_NOW", title: "Not now", options: []),
+                ],
+                intentIdentifiers: [], options: []
+            ),
         ])
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
@@ -69,7 +79,12 @@ final class AmbientNudge: NSObject, UNUserNotificationCenterDelegate {
 
     private func deliverIfWorthIt() async {
         await appState.refresh()                       // pull anything new; cheap, local-first
-        guard !appState.nudgesSilencedByFocus, let s = appState.resumeSuggestion else { return }
+        guard !appState.nudgesSilencedByFocus else { return }
+        // An unfinished idea worth resuming always wins; otherwise, perhaps a Teach Thread lesson.
+        guard let s = appState.resumeSuggestion else {
+            await offerLessonIfWorthIt()
+            return
+        }
 
         appState.noteResumeShown(s.ideaId, lastActivity: appState.lastActivity(of: s.ideaId))
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastNotifiedKey)
@@ -83,6 +98,32 @@ final class AmbientNudge: NSObject, UNUserNotificationCenterDelegate {
 
         try? await UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "thread.resume.\(s.ideaId)", content: content, trigger: nil)
+        )
+    }
+
+    /// "Thread has a few questions for you" -- at most once a week, only when a lesson is ready and
+    /// the person hasn't opened Thread today (they'd have seen the invitation there already).
+    private func offerLessonIfWorthIt() async {
+        let now = Date()
+        guard lessonNotificationShouldFire(
+            now: now,
+            lessonReady: appState.lesson.map { $0.questions.count >= 3 } ?? false,
+            lastNotified: date(forKey: lessonNotifiedKey),
+            lastOpenedThread: appState.lastPanelOpenedAt,
+            lastOffered: appState.lessonLastOffered
+        ), let lesson = appState.lesson else { return }
+        UserDefaults.standard.set(now.timeIntervalSince1970, forKey: lessonNotifiedKey)
+        appState.markLessonOffered()
+
+        let unsure = lesson.questions.filter { if case .idea = $0 { return true }; return false }.count
+        let content = UNMutableNotificationContent()
+        content.title = "Thread has a few questions for you"
+        content.body = unsure > 0
+            ? "\(unsure) idea\(unsure == 1 ? "" : "s") it isn't sure about · about a minute"
+            : "\(lesson.questions.count) quick questions · about a minute"
+        content.categoryIdentifier = lessonCategory
+        try? await UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "thread.lesson", content: content, trigger: nil)
         )
     }
 
@@ -115,6 +156,14 @@ final class AmbientNudge: NSObject, UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
+        if response.notification.request.content.categoryIdentifier == lessonCategory {
+            guard response.actionIdentifier != "NOT_NOW" else { return }
+            await MainActor.run {
+                NotificationCenter.default.post(name: .threadPresentPanel, object: nil)
+                Task { await appState.startLesson() }
+            }
+            return
+        }
         let ideaId = response.notification.request.content.userInfo["ideaId"] as? String ?? ""
         guard !ideaId.isEmpty else { return }
         await MainActor.run {
@@ -149,4 +198,22 @@ func ambientNudgeShouldFire(
     let gapOK = lastThinkingActive.map { now.timeIntervalSince($0) >= returnGap } ?? true
     let cooldownOK = lastNotifiedAt.map { now.timeIntervalSince($0) >= cooldown } ?? true
     return gapOK && cooldownOK
+}
+
+/// The Teach Thread notification: a lesson worth a minute is ready, it hasn't been offered (in the
+/// app or by notification) today, the person hasn't opened Thread today, and the last such
+/// notification was at least a week ago. Pure, so the restraint is testable.
+func lessonNotificationShouldFire(
+    now: Date,
+    lessonReady: Bool,
+    lastNotified: Date?,
+    lastOpenedThread: Date?,
+    lastOffered: Date?,
+    calendar: Calendar = .current
+) -> Bool {
+    guard lessonReady else { return false }
+    if let lastNotified, now.timeIntervalSince(lastNotified) < 7 * 86_400 { return false }
+    if let lastOpenedThread, calendar.isDate(lastOpenedThread, inSameDayAs: now) { return false }
+    if let lastOffered, calendar.isDate(lastOffered, inSameDayAs: now) { return false }
+    return true
 }

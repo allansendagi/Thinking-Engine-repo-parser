@@ -247,6 +247,16 @@ final class APIClient {
         try await request("/v1/taste")
     }
 
+    /// Teach Thread: the questions that would teach Thread the most right now.
+    func getLesson() async throws -> Lesson {
+        try await request("/v1/learn")
+    }
+
+    /// One Teach Thread answer; returns the updated lesson (what's left, what's been learned).
+    func answerLesson(_ body: [String: String]) async throws -> Lesson {
+        try await request("/v1/learn/answer", method: "POST", body: try JSONEncoder().encode(body))
+    }
+
     func deleteIdea(id: String) async throws {
         struct Empty: Decodable {}
         let _: Empty = try await request("/v1/ideas/\(Self.pathSegment(id))", method: "DELETE")
