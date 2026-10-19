@@ -1,16 +1,16 @@
 import {
-  DEFAULT_API_BASE_URL,
   getAccountInfo,
   getCaptureHealth,
   getCaptureQueue,
+  getHistoryComplete,
+  getHistoryImportedCount,
   getHistoryStatus,
   getPairingState,
-  getSettings,
-  setApiBaseUrl,
   setCredentials,
   setPairingState,
 } from "../lib/storage";
 import { parsePairingString } from "../lib/pairing";
+import { historyErrorText } from "../lib/historyText";
 import type { AccountInfo, CaptureHealth, ExtensionStatus, PairingState, Source, SourceHealth } from "../lib/types";
 
 function $(id: string): HTMLElement {
@@ -114,19 +114,65 @@ function render(status: ExtensionStatus): void {
 
 const HISTORY_LABEL: Record<string, string> = { chatgpt: "ChatGPT", claude: "Claude" };
 
-/** One line per source that has run: what it's doing now, or how it ended. */
+const HISTORY_SOURCES = ["chatgpt", "claude"] as const;
+
+/**
+ * Before any import: the "Bring in your history" card. After a full import from a site: one quiet
+ * line per site ("ChatGPT history in · 312 conversations · 15 Oct") with a small "Check for new" --
+ * new conversations arrive on their own, so the big button would only invite a needless re-run.
+ * Below either, a line per site that is running or ended badly.
+ */
 async function renderHistory(): Promise<void> {
-  const all = await getHistoryStatus();
-  const lines = Object.entries(all).map(([source, s]) => {
+  const [all, complete] = await Promise.all([
+    getHistoryStatus(),
+    Promise.all(
+      HISTORY_SOURCES.map(async (s) => {
+        // A run cut short still brought conversations in: show them as in, offer to continue.
+        const c = await getHistoryComplete(s);
+        const imported = c ? 0 : await getHistoryImportedCount(s);
+        return [s, c ?? (imported > 0 ? { at: "", conversations: imported, partial: true } : null)] as const;
+      }),
+    ),
+  ]);
+  const done = complete.filter(([, c]) => c !== null);
+  $("historyIntro").hidden = done.length > 0;
+  $("historyDone").hidden = done.length === 0;
+  const rows = $("historyRows");
+  rows.textContent = "";
+  for (const [source, c] of complete) {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:2px 0";
+    const label = document.createElement("span");
+    const name = HISTORY_LABEL[source] ?? source;
+    const action = document.createElement("button");
+    action.className = "link";
+    action.style.cssText = "background:none;border:0;padding:0;color:inherit;opacity:.7;text-decoration:underline;cursor:pointer;font:inherit";
+    if (c && "partial" in c) {
+      label.textContent = `${name} · ${c.conversations.toLocaleString()} conversations in`;
+      action.textContent = "Finish";
+    } else if (c) {
+      const when = new Date(c.at).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+      label.textContent = `${name} · ${c.conversations.toLocaleString()} conversations · ${when}`;
+      action.textContent = "Check for new";
+    } else {
+      label.textContent = `${name} · not brought in`;
+      action.textContent = "Bring in";
+    }
+    action.addEventListener("click", () => void startHistory(source));
+    row.append(label, action);
+    rows.appendChild(row);
+  }
+
+  const lines = Object.entries(all).flatMap(([source, s]) => {
     const name = HISTORY_LABEL[source] ?? source;
     const todo = Math.max(s.found - s.skipped, 0);
     switch (s.state) {
-      case "listing": return `${name}: finding conversations… (${s.found})`;
-      case "importing": return `${name}: bringing in ${s.imported} of ${todo}…`;
-      case "done": return `${name}: up to date · ${s.found} conversations${s.ideaCount != null ? ` · ${s.ideaCount} ideas` : ""}`;
-      case "capped": return `${name}: stopped at the Free plan's 25 ideas — upgrade to bring in the rest`;
-      case "stopped": return `${name}: paused at ${s.imported} of ${todo} — run again to continue`;
-      case "error": return `${name}: couldn't read history (${s.error ?? "error"}) — are you signed in there?`;
+      case "listing": return [`${name}: checking for conversations… (${s.found})`];
+      case "importing": return [`${name}: bringing in ${s.imported} of ${todo}…`];
+      case "done": return done.some(([d]) => d === source) ? [] : [`${name}: up to date · ${s.found} conversations`];
+      case "capped": return [`${name}: stopped at the Free plan's 25 ideas — upgrade to bring in the rest`];
+      case "stopped": return [`${name}: paused at ${s.imported} of ${todo} — run again to continue`];
+      case "error": return [`${name}: ${historyErrorText(s.error)}`];
     }
   });
   $("historyStatus").textContent = lines.join("\n");
@@ -160,8 +206,6 @@ async function loadStatus(): Promise<ExtensionStatus> {
 }
 
 async function refresh(): Promise<void> {
-  const s = await getSettings();
-  input("apiBaseUrl").value = s.apiBaseUrl === DEFAULT_API_BASE_URL ? "" : s.apiBaseUrl;
   render(await loadStatus());
 }
 
@@ -217,11 +261,7 @@ function init(): void {
   $("historyChatgpt").addEventListener("click", () => void startHistory("chatgpt"));
   $("historyClaude").addEventListener("click", () => void startHistory("claude"));
   chrome.storage.onChanged.addListener((changes) => {
-    if ("historyStatus" in changes) void renderHistory();
-  });
-  $("saveUrl").addEventListener("click", async () => {
-    await setApiBaseUrl(input("apiBaseUrl").value.trim() || DEFAULT_API_BASE_URL);
-    await refresh();
+    if (Object.keys(changes).some((k) => k === "historyStatus" || k.startsWith("historyComplete:"))) void renderHistory();
   });
 }
 
