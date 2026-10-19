@@ -71,6 +71,13 @@ describe("growth funnel and cohorts", () => {
     expect(g.sources).toEqual([{ source: "Google", clicks: 2 }]);
     expect(g.campaigns).toEqual([{ campaign: "launch", source: "x", clicks: 1 }]);
     expect(g.medianHoursToFirstIdea).toBe(2);
+    expect(g.daily).toHaveLength(30);
+    expect(g.daily.at(-1)!.day).toBe("2026-10-19");
+    expect(g.daily.find((d) => d.day === "2026-10-18")!.clicks).toBe(2);
+    expect(g.daily.find((d) => d.day === "2026-10-18")!.people).toBe(1);
+    expect(g.daily.find((d) => d.day === "2026-10-10")!.active).toBe(1);
+    expect(g.totals.current.clicks).toBe(2);
+    expect(g.totals.previous.clicks).toBe(0);
     const sept29 = g.cohorts.find((c) => c.week === "2026-09-28")!;
     expect([sept29.size, sept29.activated, sept29.retained[0]]).toEqual([2, 2, 1]);
     const thisWeek = g.cohorts.at(-1)!;
