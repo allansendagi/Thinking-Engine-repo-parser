@@ -477,16 +477,18 @@ private struct AccordionRow<Trailing: View, Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { expanded.toggle() }
+                // Apple's disclosure behaviour (System Settings, Finder): the header stays put, the
+                // row grows downward and the content fades in place -- a short ease, no bounce.
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 8) {
                     Text(title).font(.system(size: 12.5, weight: .semibold)).kerning(-0.075)
                         .foregroundStyle(Theme.ink(0.85))
                     Spacer(minLength: 0)
                     trailing(expanded)
-                    Image(systemName: "chevron.down")
+                    Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.ink(0.4))
-                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
                 }
                 .padding(.horizontal, 14)
                 .frame(height: 42)
@@ -501,10 +503,12 @@ private struct AccordionRow<Trailing: View, Content: View>: View {
             }
 
             if expanded {
+                // Fade only: content that slides from the top travels over its own header.
                 content()
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(.opacity)
             }
         }
+        .clipped()   // the row grows; nothing draws outside it while it does
         .overlay(alignment: .top) {
             if showDivider { Rectangle().fill(Theme.ink(0.08)).frame(height: 0.5) }
         }
