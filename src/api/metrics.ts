@@ -154,6 +154,9 @@ export interface DownloadHit {
   referrer?: unknown;
   country?: unknown;
   uaFamily?: unknown;
+  /** The raw User-Agent: bots are detected from this, never from the display label (a label like
+   *  "Unknown device" or "Chrome on Linux" has already lost the words that mark a bot). */
+  userAgent?: unknown;
   /** Readable bucket ("Google", "ChatGPT", "Direct", a utm_source). */
   source?: unknown;
   utmSource?: unknown;
@@ -176,7 +179,7 @@ export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
       clip(hit.country, 2)?.toUpperCase() ?? null,
       clip(hit.uaFamily, 40),
       now.toISOString(),
-      isBotUserAgent(hit.uaFamily) ? 1 : 0,
+      isBotUserAgent(hit.userAgent ?? hit.uaFamily) ? 1 : 0,
       clip(hit.source, 60),
       clip(hit.utmSource, 60),
       clip(hit.utmMedium, 60),

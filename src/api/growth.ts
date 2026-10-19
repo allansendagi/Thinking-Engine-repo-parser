@@ -282,6 +282,7 @@ export function weekOf(iso: string): string {
 export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
   backfillMilestones();
   backfillDownloadSources();
+  flagTestDownloads();
   const db = openGrowth();
   try {
     const since = new Date(now.getTime() - windowDays * 86_400_000).toISOString();
@@ -479,4 +480,33 @@ function openedInWindow(db: Database, since: string): number {
       )
       .get(since, since) as { n: number }
   ).n;
+}
+
+/**
+ * Once: mark download clicks that weren't real people. Until 19 Oct the bot check looked at the
+ * display label ("Unknown device", "Chrome on Linux") instead of the raw browser string, so
+ * scripts and headless test browsers were counted; and copies of the site (local, preview, CI)
+ * pinged the production counter. Marked, not deleted: rows from those copies (by referrer host),
+ * our own test campaign tags, and clicks with no recognisable browser at all.
+ */
+export function flagTestDownloads(): number {
+  const db = openGrowth();
+  try {
+    if (db.query("SELECT 1 FROM growth_meta WHERE key = 'test_downloads_flagged'").get()) return 0;
+    const n = db
+      .prepare(
+        `UPDATE download_events SET bot = 1 WHERE bot = 0 AND (
+           ua_family = 'Unknown device'
+           OR referrer LIKE 'http://localhost%' OR referrer LIKE 'http://127.0.0.1%'
+           OR referrer LIKE '%.vercel.app%'
+           OR utm_source IN ('test', 'qa', 'ga-realtime-check')
+           OR source IN ('127.0.0.1', 'localhost') OR source LIKE '%.vercel.app'
+         )`,
+      )
+      .run().changes;
+    db.prepare("INSERT OR REPLACE INTO growth_meta (key, value) VALUES ('test_downloads_flagged', ?)").run(new Date().toISOString());
+    return n;
+  } finally {
+    db.close();
+  }
 }
