@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * HTTP-backed MCP server. Exposes the same seven tools as mcp/server.ts, but reads the user's
+ * HTTP-backed MCP server. Exposes the same eight tools as mcp/server.ts, but reads the user's
  * real Thinking State from the hosted, per-account backend over HTTP instead of a local SQLite
  * file. This is the one to point a compatible AI tool (Claude Desktop, Cursor, the MCP inspector)
  * at -- run it with Thread for Mac open and it adopts that account automatically.
@@ -55,6 +55,13 @@ tool(
   "Fetch one idea's evolution alongside the original source text each step is grounded in.",
   { id: z.string() },
   async ({ id }) => json(await api.traceIdea(id as string)),
+);
+
+tool(
+  "what_do_i_think",
+  "Answer \"what do I actually think about X?\" from the user's own captured thinking across every AI tool they use: where they stand now (in their words), how they got there, what they decided, and what is still open -- each point with the conversation it came from. Use this before giving the user advice on a topic they have thought about.",
+  { question: z.string().describe("The topic or question, e.g. 'pricing' or 'what do I think about computable authority?'") },
+  async ({ question }: { question: string }) => json(await api.askMyThinking(question as string)),
 );
 
 tool(
