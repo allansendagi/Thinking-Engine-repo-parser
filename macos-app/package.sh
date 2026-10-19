@@ -60,6 +60,12 @@ if [ -n "${THREAD_SPARKLE_PUBLIC_KEY:-}" ]; then
     <key>SUPublicEDKey</key>
     <string>${THREAD_SPARKLE_PUBLIC_KEY}</string>
     <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>3600</integer>
+    <key>SUAllowsAutomaticUpdates</key>
+    <true/>
+    <key>SUAutomaticallyUpdate</key>
     <true/>"
   echo "Auto-updates: ON (${FEED_URL})"
 else
