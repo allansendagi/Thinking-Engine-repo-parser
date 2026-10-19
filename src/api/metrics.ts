@@ -13,7 +13,7 @@ import { openRegistry } from "./auth";
  *    account id (already held in the registry), removed with the account.
  */
 
-function openMetrics() {
+export function openMetrics() {
   const db = openRegistry();
   db.exec(
     `CREATE TABLE IF NOT EXISTS download_events (
@@ -29,6 +29,10 @@ function openMetrics() {
   db.exec("CREATE INDEX IF NOT EXISTS download_events_created ON download_events(created_at);");
   const cols = db.query("PRAGMA table_info(download_events)").all() as { name: string }[];
   if (!cols.some((c) => c.name === "bot")) db.exec("ALTER TABLE download_events ADD COLUMN bot INTEGER NOT NULL DEFAULT 0;");
+  // Where the click came from (first touch on the website): a readable bucket plus the campaign.
+  for (const col of ["source", "utm_source", "utm_medium", "utm_campaign"]) {
+    if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE download_events ADD COLUMN ${col} TEXT;`);
+  }
   // Classify rows recorded before the flag existed (idempotent; only touches unflagged rows).
   db.exec(`UPDATE download_events SET bot = 1 WHERE bot = 0 AND ${BOT_SQL}`);
   db.exec(
@@ -92,6 +96,11 @@ export interface DownloadHit {
   referrer?: unknown;
   country?: unknown;
   uaFamily?: unknown;
+  /** Readable bucket ("Google", "ChatGPT", "Direct", a utm_source). */
+  source?: unknown;
+  utmSource?: unknown;
+  utmMedium?: unknown;
+  utmCampaign?: unknown;
 }
 
 export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
@@ -99,8 +108,8 @@ export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
   const db = openMetrics();
   try {
     db.prepare(
-      `INSERT INTO download_events (platform, version, referrer, country, ua_family, created_at, bot)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO download_events (platform, version, referrer, country, ua_family, created_at, bot, source, utm_source, utm_medium, utm_campaign)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       PLATFORMS.has(platform) ? platform : "other",
       clip(hit.version, 24),
@@ -109,6 +118,10 @@ export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
       clip(hit.uaFamily, 40),
       now.toISOString(),
       isBotUserAgent(hit.uaFamily) ? 1 : 0,
+      clip(hit.source, 60),
+      clip(hit.utmSource, 60),
+      clip(hit.utmMedium, 60),
+      clip(hit.utmCampaign, 100),
     );
   } finally {
     db.close();

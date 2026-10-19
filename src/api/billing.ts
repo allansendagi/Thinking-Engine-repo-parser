@@ -1,3 +1,4 @@
+import { noteMilestone } from "./growth";
 import { createHmac, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import {
   findAccountByPaddleCustomer,
@@ -182,6 +183,7 @@ export function applyPaddleEvent(event: PaddleEvent): void {
       const userId = resolveUserId();
       if (!userId) return;
       const period = data.current_billing_period as { ends_at?: string } | undefined;
+      noteMilestone(userId, "pro");
       setPlan(userId, {
         plan: "pro",
         status: mapPaddleStatus(data.status as string),

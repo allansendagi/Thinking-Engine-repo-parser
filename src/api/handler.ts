@@ -37,7 +37,9 @@ import { dataDir, openUserDb, purgeUser } from "../db/tenancy";
 import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
 import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary, scheduleRetentionSweep, setRetentionDays } from "../db/retention";
 import { storageMode } from "../db/durability";
-import { appVersionFrom, downloadSummary, forgetActivity, isAdmin, noteActive, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
+import { appVersionFrom, downloadSummary, forgetActivity, isAdmin, isBotUserAgent, noteActive, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
+import { forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket } from "./growth";
+import { gaReport } from "./ga";
 import { addToWaitlist, waitlistSummary } from "./waitlist";
 import {
   deleteIdea,
@@ -364,16 +366,27 @@ export function createRequestHandler(
         /* empty / malformed body is fine */
       }
       try {
+        const str = (v: unknown) => (typeof v === "string" ? v : null);
+        // `firstReferrer` / utm_* are the visitor's FIRST touch on the website (the site keeps
+        // them for the session); `referrer` is just the site page the button was on.
+        const source = sourceBucket(str(body.utmSource), str(body.firstReferrer) ?? str(body.referrer));
         recordDownload({
+          source,
+          utmSource: body.utmSource,
+          utmMedium: body.utmMedium,
+          utmCampaign: body.utmCampaign,
           platform: body.platform,
           version: body.version,
-          referrer: body.referrer,
+          referrer: body.firstReferrer ?? body.referrer,
           country: body.country ?? req.headers.get("x-vercel-ip-country"),
           uaFamily: deviceLabel(
             null,
             (body.uaFamily as string) ?? req.headers.get("user-agent"),
           ),
         });
+        if (!isBotUserAgent(str(body.uaFamily) ?? req.headers.get("user-agent"))) {
+          sendGaDownload(str(body.gaClientId), { source, file_name: "Thread.dmg", platform: String(body.platform ?? "mac") });
+        }
       } catch (e) {
         console.error("[Thread] download event failed:", e);
       }
@@ -442,7 +455,8 @@ export function createRequestHandler(
         365,
         Math.max(1, Number(url.searchParams.get("days") ?? 30) || 30),
       );
-      return json({ ...downloadSummary(days), usage: usageSummary() });
+      const [github, ga] = await Promise.all([githubDownloads(), gaReport(days)]);
+      return json({ ...downloadSummary(days), usage: usageSummary(), growth: growthSummary(days), github, ga });
     }
 
     // Admin-only: the actual waitlist -- who to onboard, not just a count. `bun src/cli.ts
@@ -596,6 +610,7 @@ export function createRequestHandler(
       const removedData = purgeUser(userId);
       const removedAccount = deleteAccountRecords(userId);
       forgetActivity(userId);
+      forgetMilestones(userId);
       return json({
         deleted: true,
         data: removedData,
@@ -651,6 +666,11 @@ export function createRequestHandler(
         // Clients redact on-device; this catches captures from builds that predate it.
         body.messages = body.messages.map((m) => (typeof m?.text === "string" ? { ...m, text: redactSecrets(m.text) } : m));
         const result = await ingestConversation(db, body, providers);
+        if (result.newCanonicalEvents > 0) {
+          noteMilestone(userId, "first_capture");
+          if (body.capture?.method === "browser_extension") noteMilestone(userId, "extension_connected");
+        }
+        if (result.ideaCount > 0) noteMilestone(userId, "first_idea");
         // Clients resend whole conversations (the extension on every flush, Cursor every ~20s):
         // regroup only when this capture actually added thoughts.
         if (result.newCognitiveEvents + result.discardedEvents + result.promotedFromDiscard > 0) scheduleShadowMining(userId, openUserDb);
@@ -697,6 +717,8 @@ export function createRequestHandler(
           },
           providers,
         );
+        if (result.newCanonicalEvents > 0) noteMilestone(userId, "first_capture");
+        if (result.ideaCount > 0) noteMilestone(userId, "first_idea");
         return json({ conversationId, ...result });
       }
 
@@ -749,6 +771,7 @@ export function createRequestHandler(
           );
         }
         const summary = await importIntoDb(db, events, providers);
+        noteMilestone(userId, "first_capture");
         scheduleShadowMining(userId, openUserDb);
         return json(summary);
       }
@@ -906,6 +929,7 @@ export function createRequestHandler(
         if (body.verdict !== undefined) {
           if (body.verdict !== "keep") return error(400, 'verdict must be "keep" (use DELETE for "not an idea")');
           if (!getIdea(db, ideaId)) return error(404, "Idea not found");
+          noteMilestone(userId, "first_keep");
           recordKeep(db, ideaId, servesV2(userId) ? headlineThoughtIds(db, ideaId) : ideaThoughtIds(db, ideaId));
         }
         if (body.state !== undefined) {
