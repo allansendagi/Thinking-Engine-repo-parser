@@ -85,6 +85,8 @@ export interface TasteReport {
   notIdeas: number;
   /** Share of the person's last `window` verdicts that were Keep -- the live quality number. */
   acceptanceRate: number | null;
+  /** How many verdicts the rate is over -- a rate from one or two clicks shouldn't be shown. */
+  acceptanceSample: number;
   window: number;
   ideas: IdeaTaste[];
 }
@@ -115,7 +117,7 @@ export function buildTasteReport(
     const score = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
     return { ideaId: idea.id, tier: tierFor(score), score };
   });
-  return { ready, keeps, notIdeas, acceptanceRate, window: ACCEPTANCE_WINDOW, ideas: out };
+  return { ready, keeps, notIdeas, acceptanceRate, acceptanceSample: recent.length, window: ACCEPTANCE_WINDOW, ideas: out };
 }
 
 /** Database wrapper: this person's ideas, labels and the account's meaning vectors. */

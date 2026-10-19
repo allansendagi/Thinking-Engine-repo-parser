@@ -58,7 +58,18 @@ struct Lesson: Codable, Equatable {
     let learned: Int
     /// Share of recent verdicts on ideas Thread showed (browsing, not lessons) that were Keep.
     let acceptanceRate: Double?
+    /// How many verdicts that rate is over. Optional: older backends don't send it.
+    var acceptanceSample: Int?
     let ready: Bool
+}
+
+/// The rate is shown only once it rests on enough verdicts to mean something.
+let minimumAcceptanceSample = 10
+
+/// "You kept 82% of the ideas Thread showed you recently." -- or nothing, while there are too few.
+func keptRateSentence(rate: Double?, sample: Int?) -> String? {
+    guard let rate, let sample, sample >= minimumAcceptanceSample else { return nil }
+    return "You kept \(Int((rate * 100).rounded()))% of the ideas Thread showed you recently."
 }
 
 enum LessonAnswer: String {
@@ -87,10 +98,16 @@ extension AppState {
         shouldInviteLesson(lesson, lastOffered: lessonLastOffered, otherNudgeShowing: resumeSuggestion != nil)
     }
 
-    /// Best-effort: an older backend or being offline simply means no invitation.
-    func refreshLesson() async {
+    /// Best-effort: an older backend or being offline simply means no invitation. Picking a lesson
+    /// scores every idea, so it's fetched when Thread is opened and every few hours -- not on every
+    /// background sync.
+    func refreshLesson(force: Bool = false) async {
         guard isPaired, !lessonOpen else { return }
-        if let l = try? await client.getLesson() { lesson = l }
+        if !force, let last = lessonFetchedAt, Date().timeIntervalSince(last) < 3 * 3600 { return }
+        if let l = try? await client.getLesson() {
+            lesson = l
+            lessonFetchedAt = Date()
+        }
     }
 
     /// "Not now" (or starting it) uses today's invitation.
@@ -101,7 +118,7 @@ extension AppState {
 
     func startLesson() async {
         markLessonOffered()
-        if lesson == nil || lesson?.questions.isEmpty == true { await refreshLesson() }
+        if lesson == nil || lesson?.questions.isEmpty == true { await refreshLesson(force: true) }
         lessonQuestions = lesson?.questions ?? []
         lessonIndex = 0
         lessonAnswered = 0
@@ -111,7 +128,7 @@ extension AppState {
 
     func closeLesson() {
         lessonOpen = false
-        Task { await refreshLesson(); await refresh() }
+        Task { await refreshLesson(force: true); await refresh() }
     }
 
     /// Record one answer and move on. Optimistic: the next question shows at once; a failed save is

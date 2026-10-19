@@ -48,6 +48,8 @@ export interface Lesson {
   learned: number;
   /** Share of the last verdicts on ideas Thread showed (browsing, not lessons) that were Keep. */
   acceptanceRate: number | null;
+  /** How many verdicts that rate is over. */
+  acceptanceSample: number;
   /** Taste has enough answers of both kinds to sort ideas. */
   ready: boolean;
 }
@@ -141,6 +143,7 @@ export function buildLesson(db: Database, now: Date = new Date()): Lesson {
     questions: [...ideaQuestions, ...pairQuestions],
     learned: report.keeps + report.notIdeas + pairAnswers + merges,
     acceptanceRate: report.acceptanceRate,
+    acceptanceSample: report.acceptanceSample,
     ready: report.ready,
   };
 }

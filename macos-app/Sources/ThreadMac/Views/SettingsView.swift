@@ -676,8 +676,11 @@ private struct LearningSection: View {
             return "Each Keep or Not an idea teaches Thread what matters to you. A few quick questions are the fastest way to start."
         }
         var s = "Thread has learned from \(learned) of your answers."
-        if let r = appState.lesson?.acceptanceRate ?? appState.taste?.acceptanceRate {
-            s += " It keeps \(Int((r * 100).rounded()))% of what it shows you."
+        if let kept = keptRateSentence(
+            rate: appState.lesson?.acceptanceRate ?? appState.taste?.acceptanceRate,
+            sample: appState.lesson?.acceptanceSample ?? appState.taste?.acceptanceSample
+        ) {
+            s += " " + kept
         }
         return s
     }

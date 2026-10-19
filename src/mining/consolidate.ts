@@ -427,7 +427,22 @@ export function consolidate(thoughts: MiningThought[], options: ConsolidateOptio
     }
   }
 
-  const sorted = groups.map((g) => g.sort((a, b) => time(a).localeCompare(time(b)) || a.localeCompare(b)));
+  // A person's "these belong together" holds whatever kind of thought it names. Anchors honour
+  // must-links while grouping; a question or open loop is only placed afterwards, so a merge
+  // recorded against one (an idea whose oldest thought is a question) is applied here.
+  const merged = new UnionFind();
+  for (const [a, b] of constraints.mustLink ?? []) {
+    const ga = groupOf.get(a), gb = groupOf.get(b);
+    if (ga !== undefined && gb !== undefined && ga !== gb) merged.union(String(ga), String(gb));
+  }
+  const joined = new Map<string, string[]>();
+  groups.forEach((g, i) => {
+    const root = merged.find(String(i));
+    joined.set(root, [...(joined.get(root) ?? []), ...g]);
+  });
+  const finalGroups = [...joined.values()];
+
+  const sorted = finalGroups.map((g) => g.sort((a, b) => time(a).localeCompare(time(b)) || a.localeCompare(b)));
   const keptIds = assignKeptIds(sorted, byId, options.previousIdeaOf);
   const ideas = sorted.map((ids, i) => buildIdea(ids, byId, sim, keptIds[i]!));
   if (options.themeThreshold !== undefined) assignThemes(ideas, sim, options.themeThreshold);

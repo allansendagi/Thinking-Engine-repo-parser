@@ -28,6 +28,8 @@ struct TasteReport: Codable, Equatable {
     let notIdeas: Int
     /// Share of the last `window` verdicts that were Keep -- how well Thread's proposals fit.
     let acceptanceRate: Double?
+    /// How many verdicts the rate is over. Optional: older backends don't send it.
+    var acceptanceSample: Int?
     let window: Int
     let ideas: [TasteIdea]
 }

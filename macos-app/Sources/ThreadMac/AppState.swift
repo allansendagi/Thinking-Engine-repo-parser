@@ -334,6 +334,7 @@ final class AppState: ObservableObject {
     @Published var lessonIndex = 0
     @Published var lessonAnswered = 0
     @Published var lessonError: String?
+    var lessonFetchedAt: Date?
     @Published var selectedIdeaId: String?
     @Published var selectedTrace: IdeaTrace?
 

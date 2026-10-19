@@ -105,6 +105,6 @@ describe("idea accuracy", () => {
     }
     const a = accuracySummary(new Date("2026-10-19T12:00:00Z"));
     const w = a.weeks.find((x) => x.week === "2026-10-12")!;
-    expect(w).toMatchObject({ newIdeas: 2, keeps: 1, notIdeas: 1, merges: 1, renames: 1, reviewed: 1, judges: 1 });
+    expect(w).toMatchObject({ newIdeas: 2, keeps: 1, notIdeas: 1, merges: 1, renames: 1, reviewed: 1, taught: 0, judges: 1 });
   });
 });

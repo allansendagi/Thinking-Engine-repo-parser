@@ -124,7 +124,7 @@ struct TeachThreadView: View {
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 14) {
                 introRow("checkmark.circle.fill", "Keep", "Thread holds on to ideas like this one.")
-                introRow("xmark.circle.fill", "Not an idea", "Thread stops showing ideas like this.")
+                introRow("xmark.circle.fill", "Not an idea", "Thread shows you fewer like this.")
                 introRow("equal.circle.fill", "Same idea?", "Teaches Thread how you group your thinking.")
             }
             Text("You can teach Thread any time, too: right-click any idea and choose Keep or Not an idea.")
@@ -252,7 +252,7 @@ struct TeachThreadView: View {
                 .font(.system(size: 44))
                 .symbolRenderingMode(.palette)
                 .foregroundStyle(.white, Theme.accent)
-            Text(appState.lessonAnswered == 0 ? "No answers this time" : "Thanks — Thread is learning")
+            Text(questions.isEmpty ? "Nothing to ask right now" : appState.lessonAnswered == 0 ? "No answers this time" : "Thanks — Thread is learning")
                 .font(.system(size: 16, weight: .semibold)).kerning(-0.2)
             Text(doneDetail)
                 .font(.system(size: 12.5)).foregroundStyle(Theme.ink(0.55))
@@ -271,11 +271,12 @@ struct TeachThreadView: View {
     }
 
     private var doneDetail: String {
+        if questions.isEmpty { return "Thread will ask when it's unsure about something new." }
         let learned = appState.lesson?.learned ?? 0
-        var s = "Thread has learned from \(learned) of your answers."
-        if let r = appState.lesson?.acceptanceRate {
-            s += "\nIt keeps \(Int((r * 100).rounded()))% of what it shows you."
+        var lines = ["Thread has learned from \(learned) of your answers."]
+        if let kept = keptRateSentence(rate: appState.lesson?.acceptanceRate, sample: appState.lesson?.acceptanceSample) {
+            lines.append(kept)
         }
-        return s
+        return lines.joined(separator: "\n")
     }
 }

@@ -32,6 +32,12 @@ final class TeachTests: XCTestCase {
         XCTAssertFalse(shouldInviteLesson(tiny, lastOffered: nil, otherNudgeShowing: false, now: now))
     }
 
+    func testTheKeptRateNeedsEnoughAnswersAndIsWorded() {
+        XCTAssertNil(keptRateSentence(rate: 0, sample: 1)) // one click is not a rate
+        XCTAssertNil(keptRateSentence(rate: 0.8, sample: nil))
+        XCTAssertEqual(keptRateSentence(rate: 0.82, sample: 12), "You kept 82% of the ideas Thread showed you recently.")
+    }
+
     func testLessonNotificationIsRareAndNeverRedundant() {
         let now = Date()
         let day: TimeInterval = 86_400
