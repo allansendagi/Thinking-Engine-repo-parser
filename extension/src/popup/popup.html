@@ -178,14 +178,22 @@
       <div id="capture" class="capture" hidden></div>
 
       <div id="history" class="card" hidden style="margin-top: 10px">
-        <div style="font-weight: 600; margin-bottom: 4px">Bring in your history</div>
-        <div class="hint" style="margin-bottom: 8px">
-          Thread reads your past conversations while you're signed in and rebuilds your ideas from
-          them, in minutes. No export email needed.
+        <div id="historyIntro">
+          <div style="font-weight: 600; margin-bottom: 4px">Bring in your history</div>
+          <div class="hint" style="margin-bottom: 8px">
+            Thread reads your past conversations while you're signed in and rebuilds your ideas
+            from them, in minutes. No export email needed.
+          </div>
+          <div style="display: flex; gap: 6px">
+            <button id="historyChatgpt" class="primary">ChatGPT</button>
+            <button id="historyClaude" class="primary">Claude</button>
+          </div>
         </div>
-        <div style="display: flex; gap: 6px">
-          <button id="historyChatgpt" class="primary">ChatGPT</button>
-          <button id="historyClaude" class="primary">Claude</button>
+        <!-- After a full import: one quiet line per site; new conversations arrive on their own. -->
+        <div id="historyDone" hidden>
+          <div style="font-weight: 600; margin-bottom: 6px">Your history</div>
+          <div id="historyRows"></div>
+          <div class="hint" style="margin: 6px 0 0">New conversations are captured as you have them.</div>
         </div>
         <div id="historyStatus" class="hint" style="margin: 8px 0 0"></div>
       </div>
@@ -199,15 +207,6 @@
         <input id="pairingString" type="text" placeholder="Paste the copied string" autocomplete="off" spellcheck="false" />
         <div class="row" style="margin-top: 8px">
           <button id="usePairingString" class="primary">Use this pairing string</button>
-        </div>
-      </details>
-
-      <details>
-        <summary>Advanced</summary>
-        <label for="apiBaseUrl">Backend URL — leave blank for the default</label>
-        <div class="row">
-          <input id="apiBaseUrl" type="text" placeholder="Default" autocomplete="off" spellcheck="false" />
-          <button id="saveUrl">Save</button>
         </div>
       </details>
 

@@ -91,3 +91,49 @@ describe("runHistorySync", () => {
     expect(p.error).toContain("401");
   });
 });
+
+describe("checking for new after a full import", () => {
+  // Newest first by update time, like ChatGPT's order=updated.
+  function dated(rows: [string, string][], pageSize = 2): HistoryReader & { pages: number } {
+    const r = {
+      format: "chatgpt" as const,
+      pages: 0,
+      async listPage(page: number) {
+        r.pages++;
+        const items = rows.slice(page * pageSize, page * pageSize + pageSize).map(([id, updatedAt]) => ({ id, updatedAt }));
+        return { items, done: (page + 1) * pageSize >= rows.length };
+      },
+      async fetchForImport(id: string) {
+        return { id };
+      },
+      async fetchMessages() {
+        return [];
+      },
+    };
+    return r;
+  }
+  const rows: [string, string][] = [["new", "2026-10-19"], ["b", "2026-10-10"], ["c", "2026-10-09"], ["d", "2026-10-08"], ["e", "2026-10-01"], ["f", "2026-09-01"]];
+  const synced = { b: "2026-10-10", c: "2026-10-09", d: "2026-10-08", e: "2026-10-01", f: "2026-09-01" };
+
+  test("stops listing at the first page that's all already in, and imports only what's new", async () => {
+    const reader = dated(rows);
+    const sent: unknown[] = [];
+    const p = await runHistorySync({
+      reader, synced: { ...synced }, previouslyComplete: true, delayMs: 0,
+      sendBatch: async (b) => { sent.push(...b); return {}; },
+      markSynced: async () => {},
+    });
+    expect(p.state).toBe("done");
+    expect(sent).toEqual([{ id: "new" }]);
+    expect(reader.pages).toBe(2); // page 0 has "new"; page 1 is all known -> stop; page 2 never fetched
+  });
+
+  test("without a finished earlier import, or if the list isn't newest-first, it walks everything", async () => {
+    const a = dated(rows);
+    await runHistorySync({ reader: a, synced: { ...synced }, delayMs: 0, sendBatch: async () => ({}), markSynced: async () => {} });
+    expect(a.pages).toBe(3);
+    const shuffled = dated([rows[0]!, rows[1]!, rows[5]!, rows[2]!, rows[3]!, rows[4]!]);
+    await runHistorySync({ reader: shuffled, synced: { ...synced }, previouslyComplete: true, delayMs: 0, sendBatch: async () => ({}), markSynced: async () => {} });
+    expect(shuffled.pages).toBe(3);
+  });
+});

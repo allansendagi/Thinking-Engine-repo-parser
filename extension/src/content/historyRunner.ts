@@ -1,5 +1,6 @@
-import { addHistorySynced, getHistorySynced } from "../lib/storage";
+import { addHistorySynced, getHistoryComplete, getHistorySynced, setHistoryComplete } from "../lib/storage";
 import type { HistorySyncStatus, ImportBatchMessage } from "../lib/types";
+import { historyErrorText } from "../lib/historyText";
 import { runHistorySync, type SyncProgress } from "./historySync";
 import type { SiteAdapter } from "./common/siteAdapter";
 
@@ -37,8 +38,10 @@ async function runInPage(adapter: SiteAdapter, doc: Document): Promise<void> {
   const source = adapter.source;
   const pill = showPill(doc);
   try {
-    await runHistorySync({
+    const before = await getHistoryComplete(source);
+    const result = await runHistorySync({
       reader,
+      previouslyComplete: before !== null,
       synced: await getHistorySynced(source),
       async sendBatch(conversations) {
         const msg: ImportBatchMessage = { type: "thread:import-batch", format: reader.format, conversations };
@@ -56,6 +59,10 @@ async function runInPage(adapter: SiteAdapter, doc: Document): Promise<void> {
         void chrome.runtime.sendMessage({ type: "thread:history-progress", source, status }).catch(() => {});
       },
     });
+    if (result.state === "done") {
+      const total = Object.keys(await getHistorySynced(source)).length;
+      await setHistoryComplete(source, { at: new Date().toISOString(), conversations: total });
+    }
   } finally {
     w[RUNNING_KEY] = false;
   }
@@ -102,7 +109,7 @@ function showPill(doc: Document): { update(p: SyncProgress): void } {
           fadeOut();
           break;
         case "error":
-          el.textContent = `Thread · couldn't read your history here (${p.error ?? "unknown error"}). Are you signed in?`;
+          el.textContent = `Thread · ${historyErrorText(p.error)}`;
           fadeOut(9000);
           break;
       }
@@ -116,3 +123,4 @@ function showPill(doc: Document): { update(p: SyncProgress): void } {
     }, after);
   }
 }
+

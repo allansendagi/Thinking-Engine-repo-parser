@@ -292,3 +292,30 @@ export async function setHistoryStatus(source: string, status: import("./types")
   const all = await getHistoryStatus();
   await chrome.storage.local.set({ historyStatus: { ...all, [source]: status } });
 }
+
+/** A full history import finished for this source: when, and how many conversations it saw. */
+export interface HistoryComplete {
+  at: string;
+  conversations: number;
+}
+
+export async function getHistoryComplete(source: string): Promise<HistoryComplete | null> {
+  const key = `historyComplete:${source}`;
+  const marked = (await chrome.storage.local.get(key))[key] as HistoryComplete | undefined;
+  if (marked) return marked;
+  // Imports from before this marker existed: a run that finished counts as complete.
+  const last = (await getHistoryStatus())[source];
+  if (last?.state === "done") {
+    return { at: last.updatedAt, conversations: Object.keys(await getHistorySynced(source)).length || last.found };
+  }
+  return null;
+}
+
+/** Conversations already brought in from this source (whether or not a full run finished). */
+export async function getHistoryImportedCount(source: string): Promise<number> {
+  return Object.keys(await getHistorySynced(source)).length;
+}
+
+export async function setHistoryComplete(source: string, value: HistoryComplete): Promise<void> {
+  await chrome.storage.local.set({ [`historyComplete:${source}`]: value });
+}

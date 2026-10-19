@@ -29,6 +29,12 @@ export interface SyncDeps {
   batchSize?: number;
   /** Safety valve against an endpoint that ignores paging. */
   maxPages?: number;
+  /**
+   * A full import has finished before. Then a run is a check for what's new: listing stops at the
+   * first page that is entirely already imported -- provided the list really is newest-first,
+   * which is verified page by page -- instead of walking the whole history again.
+   */
+  previouslyComplete?: boolean;
 }
 
 export interface SyncProgress {
@@ -55,20 +61,30 @@ export async function runHistorySync(deps: SyncDeps): Promise<SyncProgress> {
     // 1. List everything first (cheap), newest first, de-duplicated across pages.
     const todo: { id: string; updatedAt: string }[] = [];
     const seen = new Set<string>();
+    let newestFirst = true;
+    let previous: string | null = null;
     for (let page = 0; page < maxPages; page++) {
       if (deps.shouldStop?.()) return finish("stopped");
       const { items, done } = await reader.listPage(page);
       let fresh = 0;
+      let allKnown = items.length > 0;
       for (const c of items) {
+        if (previous !== null && c.updatedAt > previous) newestFirst = false;
+        previous = c.updatedAt;
         if (seen.has(c.id)) continue;
         seen.add(c.id);
         fresh++;
         progress.found++;
         if (deps.synced[c.id] === c.updatedAt) progress.skipped++;
-        else todo.push(c);
+        else {
+          todo.push(c);
+          allKnown = false;
+        }
       }
       report();
       if (done || fresh === 0) break; // fresh === 0: an endpoint that ignores offset
+      // Everything older than an all-known page was imported last time and hasn't changed.
+      if (deps.previouslyComplete && newestFirst && allKnown) break;
     }
 
     // 2. Fetch + import in batches.
