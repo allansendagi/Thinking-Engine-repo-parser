@@ -222,7 +222,44 @@ export interface Growth {
   campaigns: { campaign: string; source: string | null; clicks: number }[];
   /** Median hours from opening the app to the first idea, for accounts in the window. */
   medianHoursToFirstIdea: number | null;
+  /** Headline numbers for this window and the one before it (same length), for "vs previous". */
+  totals: { current: PeriodTotals; previous: PeriodTotals };
+  /** One row per UTC day in the window, oldest first, zero-filled -- for trend lines. */
+  daily: ({ day: string } & PeriodTotals)[];
   note: string;
+}
+
+export interface PeriodTotals {
+  clicks: number;
+  people: number;
+  /** New installs opened (each Mac once; older builds per account). */
+  opened: number;
+  /** Distinct accounts that used Thread (over a day: that day; over a window: any day in it). */
+  active: number;
+  firstIdeas: number;
+  pro: number;
+}
+
+/** Headline numbers for [from, to). Days are UTC ISO strings; `to` exclusive. */
+function periodTotals(db: Database, from: string, to: string): PeriodTotals {
+  const n = (sql: string, ...a: string[]) => (db.query(sql).get(...a) as { n: number }).n;
+  return {
+    clicks: n("SELECT COUNT(*) AS n FROM download_events WHERE bot = 0 AND created_at >= ? AND created_at < ?", from, to),
+    people: n(
+      `SELECT COUNT(*) AS n FROM (SELECT COALESCE(visitor || substr(created_at, 1, 10), 'row' || id) AS k
+         FROM download_events WHERE bot = 0 AND created_at >= ? AND created_at < ? GROUP BY k)`,
+      from, to,
+    ),
+    opened: n(
+      `SELECT COUNT(DISTINCT COALESCE(u.install_id, u.id)) AS n FROM users u
+         LEFT JOIN installs i ON i.install_id = u.install_id
+        WHERE u.created_at >= ? AND u.created_at < ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)`,
+      from, to, from,
+    ),
+    active: n("SELECT COUNT(DISTINCT user_id) AS n FROM active_days WHERE day >= ? AND day < ?", from.slice(0, 10), to.slice(0, 10)),
+    firstIdeas: n("SELECT COUNT(*) AS n FROM milestones WHERE kind = 'first_idea' AND at >= ? AND at < ?", from, to),
+    pro: n("SELECT COUNT(*) AS n FROM milestones WHERE kind = 'pro' AND at >= ? AND at < ?", from, to),
+  };
 }
 
 const COHORT_WEEKS = 8;
@@ -316,6 +353,15 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
       sources,
       campaigns,
       medianHoursToFirstIdea: hours.length ? Math.round(hours[Math.floor(hours.length / 2)]! * 10) / 10 : null,
+      totals: {
+        current: periodTotals(db, since, now.toISOString()),
+        previous: periodTotals(db, new Date(now.getTime() - 2 * windowDays * DAY).toISOString(), since),
+      },
+      daily: Array.from({ length: windowDays }, (_, i) => {
+        const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - (windowDays - 1 - i)));
+        const end = new Date(start.getTime() + DAY);
+        return { day: start.toISOString().slice(0, 10), ...periodTotals(db, start.toISOString(), end.toISOString()) };
+      }),
       note: "“Opened” counts each Mac once (from app 0.4.5, which sends an install id). Accounts from older builds count one each, so it can still run slightly high until those update.",
     };
   } finally {
