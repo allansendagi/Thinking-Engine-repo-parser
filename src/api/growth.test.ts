@@ -284,3 +284,51 @@ describe("what happened lately", () => {
     expect(JSON.stringify(feed)).not.toContain("user_feed"); // no ids
   });
 });
+
+describe("one definition of who counts", () => {
+  const OP = "11111111-1111-4111-8111-aaaaaaaaaaaa";
+  const REAL = "22222222-2222-4222-8222-bbbbbbbbbbbb";
+  beforeEach(() => {
+    process.env.THREAD_ANALYTICS_START = "2026-10-14T00:00:00.000Z";
+    process.env.THREAD_METRICS_EXCLUDE_USERS = "def_operator,def_op_feed";
+  });
+  afterEach(() => {
+    delete process.env.THREAD_ANALYTICS_START;
+    delete process.env.THREAD_METRICS_EXCLUDE_USERS;
+  });
+
+  test("Pro, first-idea and opened totals leave out operator accounts and accounts from before launch, in both periods", () => {
+    const now = new Date("2026-10-25T12:00:00Z");
+    const cur = () => growthSummary(7, now).totals!;
+    const before = { c: cur().current, p: cur().previous };
+    addUser("def_operator", "2026-10-22T09:00:00Z", "pro");
+    addUser("def_predev", "2026-09-01T09:00:00Z", "pro");
+    addUser("def_real", "2026-10-23T09:00:00Z", "pro");
+    for (const [id, kind, at] of [
+      ["def_operator", "pro", "2026-10-22T09:00:00Z"], ["def_operator", "first_idea", "2026-10-22T10:00:00Z"],
+      ["def_predev", "pro", "2026-10-15T09:00:00Z"], ["def_predev", "first_idea", "2026-10-16T09:00:00Z"], // previous period
+      ["def_real", "pro", "2026-10-23T09:00:00Z"], ["def_real", "first_idea", "2026-10-23T10:00:00Z"],
+    ] as const) noteMilestone(id, kind, new Date(at));
+    const after = cur();
+    expect(after.current.pro - before.c.pro).toBe(1);
+    expect(after.current.firstIdeas - before.c.firstIdeas).toBe(1);
+    expect(after.current.opened - before.c.opened).toBe(1);
+    expect(after.previous.pro - before.p.pro).toBe(0);
+    expect(after.previous.firstIdeas - before.p.firstIdeas).toBe(0);
+    expect(after.previous.opened - before.p.opened).toBe(0);
+  });
+
+  test("the activity feed doesn't list an operator's Mac, or a pre-launch one, as a new account", () => {
+    const t = new Date("2026-10-26T09:00:00Z");
+    addUser("def_op_feed", "2026-10-26T08:00:00Z");
+    addUser("def_real_feed", "2026-10-26T08:30:00Z");
+    recordAccountCreated("16.0", new Date("2026-10-26T08:00:00Z"), OP, "def_op_feed");
+    recordAccountCreated("0.7.0", new Date("2026-10-26T08:30:00Z"), REAL, "def_real_feed");
+    recordAccountCreated("0.2.9", new Date("2026-10-02T08:30:00Z")); // before launch
+    const accounts = activityFeed(new Date(t.getTime() - 86_400_000 * 40).toISOString()).filter((e) => e.kind === "account");
+    const versions = accounts.map((e) => e.detail);
+    expect(versions).toContain("app 0.7.0");
+    expect(versions).not.toContain("app 16.0");
+    expect(versions).not.toContain("app 0.2.9");
+  });
+});

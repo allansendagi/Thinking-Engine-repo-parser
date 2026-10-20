@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { openMetrics } from "./metrics";
+import { launchedSince, notCountedInstall, notCountedUser, openMetrics, type Population } from "./metrics";
 import { excludedUserIds } from "./revenue";
 import { dbPathForUser } from "../db/tenancy";
 
@@ -243,10 +243,14 @@ export interface PeriodTotals {
 }
 
 /** Headline numbers for [from, to). Days are UTC ISO strings; `to` exclusive. */
-/** `AND <col> NOT IN (...)` for operator/test accounts (ids validated, so safe to inline). */
-function notExcluded(db: Database, col: string): string {
-  const ids = [...excludedUserIds(db)].filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
-  return ids.length ? ` AND ${col} NOT IN (${ids.map((i) => `'${i}'`).join(",")})` : "";
+/** Who counts as a customer: not an operator/test account, and made after the launch cutoff. See `Population`. */
+export function population(db: Database): Population {
+  return { excluded: excludedUserIds(db), since: analyticsStart() };
+}
+
+/** `AND <col> NOT IN (...)` so a query over accounts, or rows keyed by account, counts customers only. */
+function notCounted(db: Database, col: string): string {
+  return notCountedUser(population(db), col);
 }
 
 function periodTotals(db: Database, from: string, to: string): PeriodTotals {
@@ -261,12 +265,12 @@ function periodTotals(db: Database, from: string, to: string): PeriodTotals {
     opened: n(
       `SELECT COUNT(DISTINCT COALESCE(u.install_id, u.id)) AS n FROM users u
          LEFT JOIN installs i ON i.install_id = u.install_id
-        WHERE u.created_at >= ? AND u.created_at < ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)${notExcluded(db, "u.id")}`,
+        WHERE u.created_at >= ? AND u.created_at < ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)${notCounted(db, "u.id")}`,
       from, to, from,
     ),
-    active: n(`SELECT COUNT(DISTINCT user_id) AS n FROM active_days WHERE day >= ? AND day < ?${notExcluded(db, "user_id")}`, from.slice(0, 10), to.slice(0, 10)),
-    firstIdeas: n("SELECT COUNT(*) AS n FROM milestones WHERE kind = 'first_idea' AND at >= ? AND at < ?", from, to),
-    pro: n("SELECT COUNT(*) AS n FROM milestones WHERE kind = 'pro' AND at >= ? AND at < ?", from, to),
+    active: n(`SELECT COUNT(DISTINCT user_id) AS n FROM active_days WHERE day >= ? AND day < ?${notCounted(db, "user_id")}`, from.slice(0, 10), to.slice(0, 10)),
+    firstIdeas: n(`SELECT COUNT(*) AS n FROM milestones WHERE kind = 'first_idea' AND at >= ? AND at < ?${notCounted(db, "user_id")}`, from, to),
+    pro: n(`SELECT COUNT(*) AS n FROM milestones WHERE kind = 'pro' AND at >= ? AND at < ?${notCounted(db, "user_id")}`, from, to),
   };
 }
 
@@ -296,7 +300,7 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
   try {
     const since = new Date(now.getTime() - windowDays * 86_400_000).toISOString();
     const accountsFrom = since > analyticsStart() ? since : analyticsStart();
-    const users = db.query(`SELECT id, created_at, plan FROM users WHERE created_at >= ?${notExcluded(db, "id")}`).all(accountsFrom) as { id: string; created_at: string; plan: string | null }[];
+    const users = db.query(`SELECT id, created_at, plan FROM users WHERE created_at >= ?${notCounted(db, "id")}`).all(accountsFrom) as { id: string; created_at: string; plan: string | null }[];
     const ids = new Set(users.map((u) => u.id));
     const ms = db.query("SELECT user_id, kind, at FROM milestones").all() as { user_id: string; kind: Milestone; at: string }[];
     const reached = (kind: Milestone) => new Set(ms.filter((m) => m.kind === kind && ids.has(m.user_id)).map((m) => m.user_id));
@@ -320,7 +324,7 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
     const returned = eligible.filter((u) => (daysOf.get(u.id) ?? []).some((d) => { const o = offset(u.created_at, d); return o >= 7 && o < 14; }));
 
     // Cohorts: every account (not only the window), by install week, last COHORT_WEEKS weeks.
-    const all = db.query(`SELECT id, created_at FROM users WHERE created_at >= ?${notExcluded(db, "id")}`).all(analyticsStart()) as { id: string; created_at: string }[];
+    const all = db.query(`SELECT id, created_at FROM users WHERE created_at >= ?${notCounted(db, "id")}`).all(analyticsStart()) as { id: string; created_at: string }[];
     const captured = new Set(ms.filter((m) => m.kind === "first_capture").map((m) => m.user_id));
     const thisWeek = weekOf(now.toISOString());
     const weeks = Array.from({ length: COHORT_WEEKS }, (_, i) => {
@@ -486,7 +490,7 @@ function openedInWindow(db: Database, since: string): number {
       .query(
         `SELECT COUNT(DISTINCT COALESCE(u.install_id, u.id)) AS n FROM users u
           LEFT JOIN installs i ON i.install_id = u.install_id
-          WHERE u.created_at >= ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)${notExcluded(db, "u.id")}`,
+          WHERE u.created_at >= ? AND (u.install_id IS NULL OR i.first_seen IS NULL OR i.first_seen >= ?)${notCounted(db, "u.id")}`,
       )
       .get(since, since) as { n: number }
   ).n;
@@ -566,6 +570,7 @@ type ExcludedLabel = "bot" | "internal" | "unverified";
 export function activityFeed(since: string, limit = 400): FeedEvent[] {
   const db = openGrowth();
   try {
+    const pop = population(db);
     const out: FeedEvent[] = [];
     for (const r of db
       .query("SELECT created_at AS at, country, source, ua_family AS ua, bot, reason FROM download_events WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?")
@@ -577,11 +582,11 @@ export function activityFeed(since: string, limit = 400): FeedEvent[] {
         excluded: r.bot ? (r.reason ?? "bot") : null,
       });
     }
-    for (const r of db.query("SELECT created_at AS at, version FROM account_created WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?").all(since, limit) as { at: string; version: string | null }[]) {
+    for (const r of db.query(`SELECT created_at AS at, version FROM account_created WHERE created_at >= ?${launchedSince(pop, "created_at")}${notCountedInstall(pop)} ORDER BY created_at DESC LIMIT ?`).all(since, limit) as { at: string; version: string | null }[]) {
       out.push({ at: r.at, kind: "account", detail: r.version ? `app ${r.version}` : null, excluded: null });
     }
     for (const r of db
-      .query(`SELECT at, kind FROM milestones WHERE at >= ?${notExcluded(db, "user_id")} ORDER BY at DESC LIMIT ?`)
+      .query(`SELECT at, kind FROM milestones WHERE at >= ?${notCounted(db, "user_id")} ORDER BY at DESC LIMIT ?`)
       .all(since, limit) as { at: string; kind: Milestone }[]) {
       out.push({ at: r.at, kind: r.kind, detail: null, excluded: null });
     }

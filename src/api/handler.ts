@@ -39,9 +39,9 @@ import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
 import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary, scheduleRetentionSweep, setRetentionDays } from "../db/retention";
 import { storageMode } from "../db/durability";
 import { openMetrics, appVersionFrom, downloadSummary, forgetActivity, installIdFrom, isAdmin, isBotUserAgent, noteActive, noteInstall, osVersionFrom, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
-import { activityFeed, forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, visitorKey } from "./growth";
+import { activityFeed, forgetMilestones, githubDownloads, growthSummary, noteMilestone, population, sendGaDownload, sourceBucket, visitorKey } from "./growth";
 import { gaReport } from "./ga";
-import { backfillBillingFromPaddle, excludedUserIds, revenueSummary } from "./revenue";
+import { backfillBillingFromPaddle, revenueSummary } from "./revenue";
 import { accuracySummary } from "./accuracy";
 import { addToWaitlist, waitlistSummary } from "./waitlist";
 import {
@@ -160,11 +160,11 @@ const CAPTURE_FIDELITIES: ReadonlySet<CaptureFidelity> = new Set(["high", "mediu
  * anything partial or unrecognized becomes null (read downstream as browser_extension/high per
  * THREAD.md §7), never stored half-formed. Exported for direct unit testing.
  */
-/** Operator/test account ids (admin emails + THREAD_METRICS_EXCLUDE_USERS), kept out of the usage numbers. */
-function operatorIds(): Set<string> {
+/** Who counts as a customer in the usage numbers (see metrics.ts `Population`). */
+function usagePopulation() {
   const db = openMetrics();
   try {
-    return excludedUserIds(db);
+    return population(db);
   } finally {
     db.close();
   }
@@ -508,7 +508,7 @@ export function createRequestHandler(
       const [github, ga] = await Promise.all([githubDownloads(), gaReport(days)]);
       return json({
         ...downloadSummary(days),
-        usage: usageSummary(new Date(), operatorIds()),
+        usage: usageSummary(new Date(), usagePopulation()),
         growth: growthSummary(days),
         github,
         ga,
