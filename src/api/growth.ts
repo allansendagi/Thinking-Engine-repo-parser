@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { launchedSince, notCountedInstall, notCountedUser, openMetrics, type Population } from "./metrics";
+import { analyticsStart, launchedSince, notCountedInstall, notCountedUser, openMetrics, type Population } from "./metrics";
 import { excludedUserIds } from "./revenue";
 import { dbPathForUser } from "../db/tenancy";
 
@@ -281,7 +281,7 @@ const COHORT_WEEKS = 8;
  * founder's own development accounts (a restart once stranded a credential and the app made a new
  * account each time), not customers, so they're kept out of the funnel and the cohorts.
  */
-export const analyticsStart = (): string => process.env.THREAD_ANALYTICS_START ?? "2026-10-14T00:00:00.000Z";
+export { analyticsStart } from "./metrics";
 
 /** Monday (UTC) of the week holding `iso`, as YYYY-MM-DD. */
 export function weekOf(iso: string): string {

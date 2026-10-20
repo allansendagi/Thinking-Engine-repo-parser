@@ -296,7 +296,7 @@ export function createRequestHandler(
         const installId = installIdFrom(req.headers.get("x-thread-install"));
         const appVersion = appVersionFrom(req.headers.get("x-thread-app"), req.headers.get("user-agent"));
         recordAccountCreated(appVersion, new Date(), installId, user.userId);
-        noteInstall(installId, appVersion, osVersionFrom(req.headers.get("x-thread-os")));
+        noteInstall(installId, appVersion, osVersionFrom(req.headers.get("x-thread-os")), new Date(), user.userId);
       } catch {
         /* metrics must never fail account creation */
       }
@@ -494,6 +494,8 @@ export function createRequestHandler(
       installIdFrom(req.headers.get("x-thread-install")),
       appVersionFrom(req.headers.get("x-thread-app"), req.headers.get("user-agent")),
       osVersionFrom(req.headers.get("x-thread-os")),
+      new Date(),
+      userId,
     );
 
     // Admin-only product metrics (THREAD_ADMIN_EMAILS). Downloads for now.

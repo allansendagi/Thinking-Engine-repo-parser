@@ -136,4 +136,23 @@ describe("operator accounts are not customers", () => {
     expect(launched.accountsCreated.byVersion.map((v) => v.version)).not.toContain("0.3.0");
     expect(launched.installs.total).toBe(all.installs.total - 1);
   });
+
+  test("an operator account made before builds sent an install id is still recognised by the Mac it uses", () => {
+    const now = new Date("2026-10-20T10:00:00Z");
+    const OLD_MAC = "55555555-5555-4555-8555-555555555555";
+    const reg = openRegistry();
+    try {
+      reg.prepare("INSERT INTO users (id, token_hash, created_at) VALUES ('op_legacy', 'h', '2026-09-05T09:00:00Z')").run(); // no install_id
+    } finally {
+      reg.close();
+    }
+    noteInstall(OLD_MAC, "0.7.0", "26.9", now, "op_legacy"); // seen later, on an authenticated request
+    const pop = { excluded: new Set(["op_legacy"]), since: "2026-10-14T00:00:00.000Z" };
+    expect(usageSummary(now).installs.byOs.find((o) => o.os === "macOS 26.9")?.installs).toBe(1); // counted when nobody is excluded
+    // The same account excluded only by the launch cutoff (not named as an operator) also drops its Mac.
+    for (const p of [pop, { excluded: new Set<string>(), since: "2026-10-14T00:00:00.000Z" }]) {
+      const u = usageSummary(now, p);
+      expect(u.installs.byOs.find((o) => o.os === "macOS 26.9")).toBeUndefined();
+    }
+  });
 });

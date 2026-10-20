@@ -63,7 +63,7 @@ export function openMetrics() {
   );
   // Which install an account was created on, so signing out and back in on the same Mac isn't a
   // second install. Null for accounts from builds that predate the install id.
-  for (const [table, col] of [["account_created", "install_id"], ["users", "install_id"]] as const) {
+  for (const [table, col] of [["account_created", "install_id"], ["users", "install_id"], ["installs", "user_id"]] as const) {
     const have = db.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
     if (have.length && !have.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT;`);
   }
@@ -88,20 +88,25 @@ export function osVersionFrom(header: unknown): string | null {
 
 const seenInstalls = new Map<string, string>();
 
-/** This install was used now, with this app and macOS version. Once per install per day; never throws. */
-export function noteInstall(installId: string | null, appVersion: string | null, osVersion: string | null, now: Date = new Date()): void {
+/**
+ * This install was used now, with this app and macOS version, by this account. Once per install per
+ * day; never throws. The account is what lets an install be recognised as the founder's (or a
+ * pre-launch dev Mac) even when the account was made before builds sent an install id.
+ */
+export function noteInstall(installId: string | null, appVersion: string | null, osVersion: string | null, now: Date = new Date(), userId: string | null = null): void {
   if (!installId) return;
   try {
-    const memo = `${now.toISOString().slice(0, 10)}|${appVersion ?? ""}|${osVersion ?? ""}`;
+    const memo = `${now.toISOString().slice(0, 10)}|${appVersion ?? ""}|${osVersion ?? ""}|${userId ?? ""}`;
     if (seenInstalls.get(installId) === memo) return;
     const db = openMetrics();
     try {
       db.prepare(
-        `INSERT INTO installs (install_id, first_seen, last_seen, app_version, os_version) VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO installs (install_id, first_seen, last_seen, app_version, os_version, user_id) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(install_id) DO UPDATE SET last_seen = excluded.last_seen,
            app_version = COALESCE(excluded.app_version, installs.app_version),
-           os_version = COALESCE(excluded.os_version, installs.os_version)`,
-      ).run(installId, now.toISOString(), now.toISOString(), clip(appVersion, 24), clip(osVersion, 16));
+           os_version = COALESCE(excluded.os_version, installs.os_version),
+           user_id = COALESCE(excluded.user_id, installs.user_id)`,
+      ).run(installId, now.toISOString(), now.toISOString(), clip(appVersion, 24), clip(osVersion, 16), userId);
     } finally {
       db.close();
     }
@@ -351,6 +356,9 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
   }
 }
 
+/** Where the numbers begin: the first public download. See growth.ts. */
+export const analyticsStart = (): string => process.env.THREAD_ANALYTICS_START ?? "2026-10-14T00:00:00.000Z";
+
 /**
  * Who counts as a customer in every account-based number on /admin: not an operator/test account
  * (`excluded`, from revenue.ts `excludedUserIds`) and created on or after `since` (the first public
@@ -379,11 +387,18 @@ export function notCountedUser(p: Population, col: string): string {
     (ids.length ? ` AND ${col} NOT IN (${ids.map((i) => `'${i}'`).join(",")})` : "");
 }
 
-/** `AND (<col> IS NULL OR <col> NOT IN (...))` for a column holding an install id: Macs an uncounted account was made on. */
+/**
+ * `AND (<col> IS NULL OR <col> NOT IN (...))` for a column holding an install id: Macs an uncounted
+ * account was made on (`users.install_id`, set at creation) or has been seen using (`installs.user_id`,
+ * set on every request -- covers accounts created before builds sent an install id).
+ */
 export function notCountedInstall(p: Population, col = "install_id"): string {
   const ids = safeIds(p.excluded);
-  const who = `created_at < '${safeIso(p.since)}'${ids.length ? ` OR id IN (${ids.map((i) => `'${i}'`).join(",")})` : ""}`;
-  return ` AND (${col} IS NULL OR ${col} NOT IN (SELECT install_id FROM users WHERE install_id IS NOT NULL AND (${who})))`;
+  const list = ids.map((i) => `'${i}'`).join(",");
+  const old = `created_at < '${safeIso(p.since)}'`;
+  const madeOn = `SELECT install_id FROM users WHERE install_id IS NOT NULL AND (${old}${ids.length ? ` OR id IN (${list})` : ""})`;
+  const usedBy = `SELECT install_id FROM installs WHERE user_id IS NOT NULL AND (user_id IN (SELECT id FROM users WHERE ${old})${ids.length ? ` OR user_id IN (${list})` : ""})`;
+  return ` AND (${col} IS NULL OR (${col} NOT IN (${madeOn}) AND ${col} NOT IN (${usedBy})))`;
 }
 
 export interface UsageSummary {

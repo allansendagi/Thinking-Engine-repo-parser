@@ -55,6 +55,7 @@ describe("billing log", () => {
     recordBillingEvent({ event_id: "e_c1", event_type: "subscription.canceled", occurred_at: "2026-10-12T00:00:00Z", data: { id: "sub_c1" } }, "user_c1");
     payment("t4", "user_owner", "2026-10-02T00:00:00Z", 1500);
     process.env.THREAD_ADMIN_EMAILS = "owner@example.com";
+    process.env.THREAD_ANALYTICS_START = "2026-10-01T00:00:00.000Z";
     const r = revenueSummary(30, now);
     expect(r.excluded).toBe(1);
     expect(r.activeSubscribers).toBe(2);
@@ -63,6 +64,12 @@ describe("billing log", () => {
     expect(r.churned).toBe(1);
     expect(r.newSubscribers).toBe(2);
     expect(r.conversion).toEqual({ installs: 3, pro: 2 });
+    // Accounts from before launch are the founder's development, not installs; real payments still count.
+    process.env.THREAD_ANALYTICS_START = "2026-10-04T00:00:00.000Z"; // p1 (1 Oct) is now pre-launch
+    const late = revenueSummary(30, now);
+    expect(late.conversion).toEqual({ installs: 2, pro: 1 });
+    expect(late.revenueMinor).toBe(1500 + 18000);
+    delete process.env.THREAD_ANALYTICS_START;
     expect(r.currency).toBe("USD");
     expect(r.mrrWeekly.at(-1)).toEqual({ week: "2026-10-19", mrrMinor: 3000, subscribers: 2 });
   });

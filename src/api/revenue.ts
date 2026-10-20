@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { adminEmails } from "./admin";
-import { openMetrics } from "./metrics";
+import { analyticsStart, openMetrics } from "./metrics";
 
 /**
  * Subscriptions, measured: an append-only log of what Paddle told us (`billing_events`), so MRR,
@@ -294,7 +294,7 @@ export function revenueSummary(windowDays = 30, now: Date = new Date()): Revenue
       .filter((d): d is number => d !== null && d >= 0)
       .sort((a, b) => a - b);
 
-    const windowUsers = users.filter((u) => u.created_at >= since);
+    const windowUsers = users.filter((u) => u.created_at >= since && u.created_at >= analyticsStart()); // pre-launch accounts are the founder's development, not installs
     const DAY = 86_400_000;
     const mrrWeekly = Array.from({ length: 12 }, (_, i) => {
       const end = new Date(now.getTime() - (11 - i) * 7 * DAY);
