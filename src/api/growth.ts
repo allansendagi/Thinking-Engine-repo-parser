@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { analyticsStart, launchedSince, notCountedInstall, notCountedUser, openMetrics, type Population } from "./metrics";
+import { analyticsStart, findBursts, launchedSince, notCountedInstall, notCountedUser, openMetrics, type Population } from "./metrics";
 import { excludedUserIds } from "./revenue";
 import { dbPathForUser } from "../db/tenancy";
 
@@ -296,6 +296,7 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
   backfillDownloadSources();
   flagTestDownloads();
   classifyDownloads();
+  settleHistory();
   const db = openGrowth();
   try {
     const since = new Date(now.getTime() - windowDays * 86_400_000).toISOString();
@@ -549,6 +550,37 @@ export function classifyDownloads(): number {
   }
 }
 
+/**
+ * Once: apply the burst rule (metrics.ts `findBursts`) to the clicks recorded before it existed, and
+ * remove the install row the Swift test runner wrote ("16.0" is the `xctest` binary's own version, from
+ * tests that called production; the app now refuses the network under XCTest). Marked, not deleted,
+ * for clicks; the one stale install row is deleted. Never reruns.
+ */
+export function settleHistory(): { bursts: number; installs: number } {
+  const db = openGrowth();
+  try {
+    const out = { bursts: 0, installs: 0 };
+    db.transaction(() => {
+      if (!db.query("SELECT 1 FROM growth_meta WHERE key = 'download_bursts_v1'").get()) {
+        const rows = (db.query("SELECT id, created_at FROM download_events WHERE bot = 0 ORDER BY created_at, id").all() as { id: number; created_at: string }[])
+          .map((r) => ({ id: r.id, t: Date.parse(r.created_at) }));
+        const ids = [...findBursts(rows)];
+        for (let i = 0; i < ids.length; i += 500) {
+          out.bursts += db.prepare(`UPDATE download_events SET bot = 1, reason = 'burst' WHERE id IN (${ids.slice(i, i + 500).join(",")})`).run().changes;
+        }
+        db.prepare("INSERT OR REPLACE INTO growth_meta (key, value) VALUES ('download_bursts_v1', ?)").run(new Date().toISOString());
+      }
+      if (!db.query("SELECT 1 FROM growth_meta WHERE key = 'installs_xctest_v1'").get()) {
+        out.installs = db.prepare("DELETE FROM installs WHERE app_version = '16.0'").run().changes;
+        db.prepare("INSERT OR REPLACE INTO growth_meta (key, value) VALUES ('installs_xctest_v1', ?)").run(new Date().toISOString());
+      }
+    })();
+    return out;
+  } finally {
+    db.close();
+  }
+}
+
 // ------------------------------------------------------------------------------ what happened lately
 
 export type FeedKind = "download" | "account" | Milestone;
@@ -560,7 +592,7 @@ export interface FeedEvent {
   /** For a download click that isn't a person: why. */
   excluded: ExcludedLabel | null;
 }
-type ExcludedLabel = "bot" | "internal" | "unverified";
+type ExcludedLabel = "bot" | "internal" | "unverified" | "burst";
 
 /**
  * Everything that happened since `since`, newest first: download clicks (with why a click doesn't

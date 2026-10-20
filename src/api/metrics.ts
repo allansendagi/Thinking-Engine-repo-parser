@@ -179,7 +179,31 @@ export interface DownloadHit {
  *  - unverified: Vercel's edge adds the visitor's country to every real visit, so a click with no
  *    country didn't come through the live site (a test run, a copy of the site, a script).
  */
-export type ExcludedReason = "bot" | "internal" | "unverified";
+export type ExcludedReason = "bot" | "internal" | "unverified" | "burst";
+
+/**
+ * A burst: this many counted clicks inside this window. No person clicks Download six times in ten
+ * seconds; a script rotating browser strings does (13 clicks in 1.3 s on 20 Oct, each passing the
+ * bot check). At the site's real traffic, even a popular post sends a few clicks in ten seconds, so
+ * six is well past anything human. All the clicks of a burst are excluded, never deleted.
+ */
+export const BURST_CLICKS = 6;
+export const BURST_WINDOW_MS = 10_000;
+
+/**
+ * The same rule applied to history: `rows` are the counted clicks, oldest first. Walks them like the
+ * live path does (a click is a burst if, with the clicks of the previous window that are counted or
+ * already burst, it makes BURST_CLICKS) and returns the ids to exclude.
+ */
+export function findBursts(rows: { id: number; t: number }[]): Set<number> {
+  const burst = new Set<number>();
+  for (let k = 0; k < rows.length; k++) {
+    let from = k;
+    while (from > 0 && rows[k]!.t - rows[from - 1]!.t <= BURST_WINDOW_MS) from--;
+    if (k - from + 1 >= BURST_CLICKS) for (let j = from; j <= k; j++) burst.add(rows[j]!.id);
+  }
+  return burst;
+}
 export function excludedReason(hit: { userAgent?: unknown; uaFamily?: unknown; internal?: unknown; country?: unknown }): ExcludedReason | null {
   if (isBotUserAgent(hit.userAgent ?? hit.uaFamily)) return "bot";
   if (hit.internal === true) return "internal";
@@ -187,7 +211,7 @@ export function excludedReason(hit: { userAgent?: unknown; uaFamily?: unknown; i
   return null;
 }
 
-export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
+export function recordDownload(hit: DownloadHit, now: Date = new Date()): ExcludedReason | null {
   const platform = clip(hit.platform, 16)?.toLowerCase() ?? "mac";
   const reason = excludedReason(hit);
   const db = openMetrics();
@@ -210,6 +234,15 @@ export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
       clip(hit.visitor, 32),
       reason,
     );
+    if (reason) return reason;
+    // A burst: with this click, the counted (or already burst) clicks of the last few seconds reach
+    // the threshold. Mark them all, so the first five of a script's clicks don't stay counted.
+    const peers = db
+      .query("SELECT id FROM download_events WHERE created_at >= ? AND created_at <= ? AND (bot = 0 OR reason = 'burst')")
+      .all(new Date(now.getTime() - BURST_WINDOW_MS).toISOString(), now.toISOString()) as { id: number }[];
+    if (peers.length < BURST_CLICKS) return null;
+    db.exec(`UPDATE download_events SET bot = 1, reason = 'burst' WHERE id IN (${peers.map((p) => p.id).join(",")})`);
+    return "burst";
   } finally {
     db.close();
   }
@@ -268,7 +301,7 @@ export interface DownloadSummary {
   /** Hits in the window that aren't people (bots, tests, the founder) -- excluded from every number below. */
   bots: number;
   /** The same hits by reason. */
-  excluded: { bot: number; internal: number; unverified: number };
+  excluded: { bot: number; internal: number; unverified: number; burst: number };
   total: number;
   today: number;
   last7: number;
@@ -322,7 +355,7 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
     );
 
     const bots = count("SELECT COUNT(*) AS n FROM download_events WHERE bot = 1 AND created_at >= ?", since);
-    const excluded = { bot: 0, internal: 0, unverified: 0 };
+    const excluded = { bot: 0, internal: 0, unverified: 0, burst: 0 };
     for (const r of db
       .query("SELECT COALESCE(reason, 'bot') AS r, COUNT(*) AS n FROM download_events WHERE bot = 1 AND created_at >= ? GROUP BY r")
       .all(since) as { r: keyof typeof excluded; n: number }[]) {
