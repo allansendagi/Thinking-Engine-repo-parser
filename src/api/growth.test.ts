@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openRegistry } from "./auth";
 import { gaReport } from "./ga";
-import { activityFeed, classifyDownloads, forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, weekOf } from "./growth";
-import { downloadSummary, excludedReason, noteActive, recordAccountCreated, recordDownload } from "./metrics";
+import { activityFeed, classifyDownloads, settleHistory, forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, weekOf } from "./growth";
+import { BURST_CLICKS, downloadSummary, excludedReason, findBursts, noteActive, noteInstall, recordAccountCreated, recordDownload } from "./metrics";
 
 let dir = "";
 const saved = { reg: process.env.THREAD_REGISTRY_PATH, data: process.env.THREAD_DATA_DIR };
@@ -233,7 +233,7 @@ describe("why a download click isn't a person", () => {
     expect(s.excluded.internal).toBeGreaterThanOrEqual(1);
     expect(s.excluded.unverified).toBeGreaterThanOrEqual(2);
     expect(s.excluded.bot).toBeGreaterThanOrEqual(1);
-    expect(s.bots).toBe(s.excluded.bot + s.excluded.internal + s.excluded.unverified);
+    expect(s.bots).toBe(s.excluded.bot + s.excluded.internal + s.excluded.unverified + s.excluded.burst);
   });
 
   test("old rows with no country are reclassified once, never deleted", () => {
@@ -330,5 +330,83 @@ describe("one definition of who counts", () => {
     expect(versions).toContain("app 0.7.0");
     expect(versions).not.toContain("app 16.0");
     expect(versions).not.toContain("app 0.2.9");
+  });
+});
+
+describe("a script's burst of clicks is not people", () => {
+  const T0 = Date.parse("2026-10-27T10:54:43.996Z");
+  const click = (offsetMs: number, ua = "Chrome on Windows") =>
+    recordDownload({ uaFamily: ua, country: "US", visitor: `v${offsetMs}${ua}` }, new Date(T0 + offsetMs));
+  const states = () => {
+    const db = openRegistry();
+    try {
+      return db
+        .query("SELECT bot, reason FROM download_events WHERE created_at >= ? AND created_at <= ? ORDER BY created_at")
+        .all(new Date(T0 - 1000).toISOString(), new Date(T0 + 6 * 3_600_000).toISOString()) as { bot: number; reason: string | null }[];
+    } finally {
+      db.close();
+    }
+  };
+
+  test("13 clicks in about a second, each with a real-looking browser, are all excluded as a burst -- including the first five", () => {
+    const results = Array.from({ length: 13 }, (_, i) => click(i * 100, ["Chrome on Windows", "Edge on Windows", "Firefox on macOS"][i % 3]));
+    expect(results.slice(0, BURST_CLICKS - 1).every((r) => r === null)).toBe(true); // not yet known to be a burst
+    expect(results.slice(BURST_CLICKS - 1).every((r) => r === "burst")).toBe(true);
+    const rows = states();
+    expect(rows).toHaveLength(13);
+    expect(rows.every((r) => r.bot === 1 && r.reason === "burst")).toBe(true); // the early five were marked too
+  });
+
+  test("clicks at a human pace are never touched, even a handful close together", () => {
+    const base = 4 * 3_600_000; // well apart from the burst above
+    for (let i = 0; i < 5; i++) click(base + i * 1500); // five in 6 s: still under the threshold
+    for (let i = 0; i < 12; i++) click(base + 60_000 + i * 11_000); // one every 11 s, however long it goes on
+    const rows = states().filter((_, i) => i >= 13);
+    expect(rows).toHaveLength(17);
+    expect(rows.every((r) => r.bot === 0 && r.reason === null)).toBe(true);
+  });
+
+  test("findBursts applies the same rule to history", () => {
+    const rows = Array.from({ length: 8 }, (_, i) => ({ id: i + 1, t: T0 + i * 800 }));
+    expect([...findBursts(rows)].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(findBursts(rows.slice(0, BURST_CLICKS - 1)).size).toBe(0);
+    expect(findBursts(Array.from({ length: 30 }, (_, i) => ({ id: i, t: T0 + i * 10_001 }))).size).toBe(0);
+  });
+
+  test("history recorded before the rule is settled once: bursts marked, never deleted; the test-runner install row removed", () => {
+    const reg = openRegistry();
+    const base = Date.parse("2026-10-28T08:00:00Z");
+    try {
+      reg.exec("DELETE FROM growth_meta WHERE key IN ('download_bursts_v1', 'installs_xctest_v1')");
+      for (let i = 0; i < 9; i++)
+        reg.prepare("INSERT INTO download_events (platform, created_at, bot, ua_family, country, visitor) VALUES ('mac', ?, 0, 'Firefox on Windows', 'US', ?)").run(new Date(base + i * 150).toISOString(), `h${i}`);
+      reg.prepare("INSERT INTO download_events (platform, created_at, bot, ua_family, country, visitor) VALUES ('mac', ?, 0, 'Safari', 'AE', 'real')").run(new Date(base + 3_600_000).toISOString());
+    } finally {
+      reg.close();
+    }
+    noteInstall("66666666-6666-4666-8666-666666666666", "16.0", "26.6", new Date(base));
+    noteInstall("77777777-7777-4777-8777-777777777777", "0.7.0", "15.1", new Date(base));
+    const first = settleHistory();
+    expect(first.bursts).toBe(9);
+    expect(first.installs).toBe(1);
+    expect(settleHistory()).toEqual({ bursts: 0, installs: 0 }); // once
+    const db = openRegistry();
+    try {
+      const rows = db.query("SELECT bot, reason FROM download_events WHERE created_at >= ? ORDER BY created_at").all(new Date(base).toISOString()) as { bot: number; reason: string | null }[];
+      expect(rows).toHaveLength(10); // nothing deleted
+      expect(rows.slice(0, 9).every((r) => r.bot === 1 && r.reason === "burst")).toBe(true);
+      expect(rows[9]).toEqual({ bot: 0, reason: null });
+      const versions = (db.query("SELECT app_version AS v FROM installs").all() as { v: string }[]).map((r) => r.v);
+      expect(versions).not.toContain("16.0");
+      expect(versions).toContain("0.7.0"); // a real install is left alone
+    } finally {
+      db.close();
+    }
+  });
+
+  test("the summary reports burst clicks as left out, with their own count", () => {
+    const s = downloadSummary(30, new Date("2026-10-29T00:00:00Z"));
+    expect(s.excluded.burst).toBeGreaterThanOrEqual(13);
+    expect(s.bots).toBe(s.excluded.bot + s.excluded.internal + s.excluded.unverified + s.excluded.burst);
   });
 });

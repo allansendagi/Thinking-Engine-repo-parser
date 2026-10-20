@@ -39,7 +39,7 @@ import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
 import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary, scheduleRetentionSweep, setRetentionDays } from "../db/retention";
 import { storageMode } from "../db/durability";
 import { openMetrics, appVersionFrom, downloadSummary, forgetActivity, installIdFrom, isAdmin, isBotUserAgent, noteActive, noteInstall, osVersionFrom, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
-import { activityFeed, forgetMilestones, githubDownloads, growthSummary, noteMilestone, population, sendGaDownload, sourceBucket, visitorKey } from "./growth";
+import { activityFeed, forgetMilestones, githubDownloads, growthSummary, noteMilestone, population, settleHistory, sendGaDownload, sourceBucket, visitorKey } from "./growth";
 import { gaReport } from "./ga";
 import { backfillBillingFromPaddle, revenueSummary } from "./revenue";
 import { accuracySummary } from "./accuracy";
@@ -411,7 +411,7 @@ export function createRequestHandler(
         // The visitor's IP comes from the website's server (this request is the site's, not
         // theirs); it's only hashed into the daily key, never stored.
         const visitor = await visitorKey(str(body.ip), str(body.uaFamily) ?? req.headers.get("user-agent"));
-        recordDownload({
+        const excludedAs = recordDownload({
           visitor,
           source,
           utmSource: body.utmSource,
@@ -428,7 +428,7 @@ export function createRequestHandler(
             (body.uaFamily as string) ?? req.headers.get("user-agent"),
           ),
         });
-        if (!isBotUserAgent(str(body.uaFamily) ?? req.headers.get("user-agent"))) {
+        if (excludedAs !== "burst" && !isBotUserAgent(str(body.uaFamily) ?? req.headers.get("user-agent"))) {
           sendGaDownload(str(body.gaClientId), { source, file_name: "Thread.dmg", platform: String(body.platform ?? "mac") });
         }
       } catch (e) {
@@ -507,6 +507,7 @@ export function createRequestHandler(
         Math.max(1, Number(url.searchParams.get("days") ?? 30) || 30),
       );
       await backfillBillingFromPaddle();
+      settleHistory(); // before downloadSummary reads, so the first response after a deploy is already right
       const [github, ga] = await Promise.all([githubDownloads(), gaReport(days)]);
       return json({
         ...downloadSummary(days),
