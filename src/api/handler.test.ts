@@ -1048,7 +1048,7 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
         byVersion: { version: string; count: number }[];
         byCountry: { country: string; count: number }[];
       };
-      expect(s.total).toBe(4); // 3 good + 1 empty-body (defaults to platform "mac")
+      expect(s.total).toBe(3); // the 3 served by the live site; the empty-body hit has no country header, so it is not counted
       expect(s.byVersion.find((v) => v.version === "0.2.0")?.count).toBe(3);
       expect(s.byCountry.find((c) => c.country === "QA")?.count).toBe(3);
     } finally {

@@ -272,6 +272,13 @@ function periodTotals(db: Database, from: string, to: string): PeriodTotals {
 
 const COHORT_WEEKS = 8;
 
+/**
+ * Where the numbers begin: the first public download (14 Oct 2026). Accounts before it are the
+ * founder's own development accounts (a restart once stranded a credential and the app made a new
+ * account each time), not customers, so they're kept out of the funnel and the cohorts.
+ */
+export const analyticsStart = (): string => process.env.THREAD_ANALYTICS_START ?? "2026-10-14T00:00:00.000Z";
+
 /** Monday (UTC) of the week holding `iso`, as YYYY-MM-DD. */
 export function weekOf(iso: string): string {
   const d = new Date(iso.slice(0, 10) + "T00:00:00Z");
@@ -284,10 +291,12 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
   backfillMilestones();
   backfillDownloadSources();
   flagTestDownloads();
+  classifyDownloads();
   const db = openGrowth();
   try {
     const since = new Date(now.getTime() - windowDays * 86_400_000).toISOString();
-    const users = db.query(`SELECT id, created_at, plan FROM users WHERE created_at >= ?${notExcluded(db, "id")}`).all(since) as { id: string; created_at: string; plan: string | null }[];
+    const accountsFrom = since > analyticsStart() ? since : analyticsStart();
+    const users = db.query(`SELECT id, created_at, plan FROM users WHERE created_at >= ?${notExcluded(db, "id")}`).all(accountsFrom) as { id: string; created_at: string; plan: string | null }[];
     const ids = new Set(users.map((u) => u.id));
     const ms = db.query("SELECT user_id, kind, at FROM milestones").all() as { user_id: string; kind: Milestone; at: string }[];
     const reached = (kind: Milestone) => new Set(ms.filter((m) => m.kind === kind && ids.has(m.user_id)).map((m) => m.user_id));
@@ -311,7 +320,7 @@ export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
     const returned = eligible.filter((u) => (daysOf.get(u.id) ?? []).some((d) => { const o = offset(u.created_at, d); return o >= 7 && o < 14; }));
 
     // Cohorts: every account (not only the window), by install week, last COHORT_WEEKS weeks.
-    const all = db.query(`SELECT id, created_at FROM users WHERE 1=1${notExcluded(db, "id")}`).all() as { id: string; created_at: string }[];
+    const all = db.query(`SELECT id, created_at FROM users WHERE created_at >= ?${notExcluded(db, "id")}`).all(analyticsStart()) as { id: string; created_at: string }[];
     const captured = new Set(ms.filter((m) => m.kind === "first_capture").map((m) => m.user_id));
     const thisWeek = weekOf(now.toISOString());
     const weeks = Array.from({ length: COHORT_WEEKS }, (_, i) => {
@@ -507,6 +516,76 @@ export function flagTestDownloads(): number {
       .run().changes;
     db.prepare("INSERT OR REPLACE INTO growth_meta (key, value) VALUES ('test_downloads_flagged', ?)").run(new Date().toISOString());
     return n;
+  } finally {
+    db.close();
+  }
+}
+
+
+/**
+ * Once: give every download click a reason it isn't a person, where it isn't. Vercel's edge adds the
+ * visitor's country to every real visit; hits with none came from test runs and scripts before the
+ * website stopped reporting copies of itself (they appeared as pairs a few seconds apart, "Chrome on
+ * Windows" then "Chrome on Linux", from automated test browsers that look like ordinary Chrome).
+ * Marked, never deleted.
+ */
+export function classifyDownloads(): number {
+  const db = openGrowth();
+  try {
+    if (db.query("SELECT 1 FROM growth_meta WHERE key = 'download_reasons_v1'").get()) return 0;
+    let n = 0;
+    db.transaction(() => {
+      n += db.prepare("UPDATE download_events SET bot = 1, reason = 'unverified' WHERE bot = 0 AND (country IS NULL OR country = '')").run().changes;
+      db.prepare("UPDATE download_events SET reason = 'bot' WHERE bot = 1 AND reason IS NULL").run();
+      db.prepare("INSERT OR REPLACE INTO growth_meta (key, value) VALUES ('download_reasons_v1', ?)").run(new Date().toISOString());
+    })();
+    return n;
+  } finally {
+    db.close();
+  }
+}
+
+// ------------------------------------------------------------------------------ what happened lately
+
+export type FeedKind = "download" | "account" | Milestone;
+export interface FeedEvent {
+  at: string;
+  kind: FeedKind;
+  /** Short, anonymous: country · source · device for a click; the app version for a new account. */
+  detail: string | null;
+  /** For a download click that isn't a person: why. */
+  excluded: ExcludedLabel | null;
+}
+type ExcludedLabel = "bot" | "internal" | "unverified";
+
+/**
+ * Everything that happened since `since`, newest first: download clicks (with why a click doesn't
+ * count), new accounts and each account's first-time milestones. Anonymous: no ids, no emails, no
+ * IPs. The Today tab groups it by the viewer's own day.
+ */
+export function activityFeed(since: string, limit = 400): FeedEvent[] {
+  const db = openGrowth();
+  try {
+    const out: FeedEvent[] = [];
+    for (const r of db
+      .query("SELECT created_at AS at, country, source, ua_family AS ua, bot, reason FROM download_events WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?")
+      .all(since, limit) as { at: string; country: string | null; source: string | null; ua: string | null; bot: number; reason: ExcludedLabel | null }[]) {
+      out.push({
+        at: r.at,
+        kind: "download",
+        detail: [r.country ?? "no location", r.source ?? null, r.ua ?? null].filter(Boolean).join(" · "),
+        excluded: r.bot ? (r.reason ?? "bot") : null,
+      });
+    }
+    for (const r of db.query("SELECT created_at AS at, version FROM account_created WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?").all(since, limit) as { at: string; version: string | null }[]) {
+      out.push({ at: r.at, kind: "account", detail: r.version ? `app ${r.version}` : null, excluded: null });
+    }
+    for (const r of db
+      .query(`SELECT at, kind FROM milestones WHERE at >= ?${notExcluded(db, "user_id")} ORDER BY at DESC LIMIT ?`)
+      .all(since, limit) as { at: string; kind: Milestone }[]) {
+      out.push({ at: r.at, kind: r.kind, detail: null, excluded: null });
+    }
+    return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
   } finally {
     db.close();
   }

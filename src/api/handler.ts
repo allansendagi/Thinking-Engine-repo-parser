@@ -39,7 +39,7 @@ import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
 import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary, scheduleRetentionSweep, setRetentionDays } from "../db/retention";
 import { storageMode } from "../db/durability";
 import { appVersionFrom, downloadSummary, forgetActivity, installIdFrom, isAdmin, isBotUserAgent, noteActive, noteInstall, osVersionFrom, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
-import { forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, visitorKey } from "./growth";
+import { activityFeed, forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, visitorKey } from "./growth";
 import { gaReport } from "./ga";
 import { backfillBillingFromPaddle, revenueSummary } from "./revenue";
 import { accuracySummary } from "./accuracy";
@@ -409,6 +409,7 @@ export function createRequestHandler(
           utmCampaign: body.utmCampaign,
           platform: body.platform,
           version: body.version,
+          internal: body.internal === true,
           referrer: body.firstReferrer ?? body.referrer,
           country: body.country ?? req.headers.get("x-vercel-ip-country"),
           userAgent: str(body.uaFamily) ?? req.headers.get("user-agent"),
@@ -503,6 +504,9 @@ export function createRequestHandler(
         ga,
         revenue: revenueSummary(days),
         accuracy: accuracySummary(),
+        // The last day and a half of everything that happened, for the Today tab (it groups by the
+        // viewer's own day, so it needs a margin either side).
+        feed: activityFeed(new Date(Date.now() - 36 * 3_600_000).toISOString()),
       });
     }
 
