@@ -201,6 +201,8 @@ fi
 # Built with swiftc (no Xcode project) and embedded before signing, so the app's seal covers it. It is
 # signed with the same identity (ad-hoc when there isn't one).
 ./build-widget.sh "${APP_DIR}" "${VERSION}" "${THREAD_SIGN_IDENTITY:-}"
+# The Share-menu extension, the same way.
+./build-share.sh "${APP_DIR}" "${VERSION}" "${THREAD_SIGN_IDENTITY:-}"
 
 # --- Sign -------------------------------------------------------------------------------------
 # Set THREAD_SIGN_IDENTITY to a "Developer ID Application: NAME (TEAMID)" identity for a real,
