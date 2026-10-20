@@ -101,12 +101,58 @@ describe("operator accounts are not customers", () => {
     noteActive("real_user", "0.7.0", now);
 
     const all = usageSummary(now);
-    const real = usageSummary(now, new Set(["op_user"]));
+    const real = usageSummary(now, { excluded: new Set(["op_user"]), since: "2026-10-14T00:00:00.000Z" });
     expect(all.installs.new7 - real.installs.new7).toBe(1);
     expect(real.installs.byApp.map((a) => a.version)).not.toContain("16.0");
     expect(real.installs.byApp.map((a) => a.version)).toContain("0.7.0");
     expect(all.active.today - real.active.today).toBe(1);
     expect(real.accountsCreated.byVersion.map((v) => v.version)).not.toContain("16.0");
     expect(real.active.byVersion.map((v) => v.version)).not.toContain("16.0");
+  });
+
+  test("accounts from before launch (the founder's development) are not customers either", () => {
+    const now = new Date("2026-10-19T10:00:00Z");
+    const reg = openRegistry();
+    try {
+      const add = reg.prepare("INSERT INTO users (id, token_hash, created_at, install_id) VALUES (?, 'h', ?, ?)");
+      add.run("dev_old", "2026-09-02T09:00:00Z", "33333333-3333-4333-8333-333333333333");
+      add.run("cust_new", "2026-10-17T09:00:00Z", "44444444-4444-4444-8444-444444444444");
+    } finally {
+      reg.close();
+    }
+    recordAccountCreated("0.3.0", new Date("2026-09-02T09:00:00Z"), "33333333-3333-4333-8333-333333333333", "dev_old");
+    recordAccountCreated("0.7.0", new Date("2026-10-17T09:00:00Z"), "44444444-4444-4444-8444-444444444444", "cust_new");
+    noteInstall("33333333-3333-4333-8333-333333333333", "0.3.0", "26.6", new Date("2026-09-02T09:00:00Z"));
+    noteInstall("33333333-3333-4333-8333-333333333333", "0.3.0", "26.6", now); // still in use today
+    noteInstall("44444444-4444-4444-8444-444444444444", "0.7.0", "15.1", new Date("2026-10-17T09:00:00Z"));
+    noteInstall("44444444-4444-4444-8444-444444444444", "0.7.0", "15.1", now);
+    noteActive("dev_old", "0.3.0", now);
+    noteActive("cust_new", "0.7.0", now);
+    const all = usageSummary(now);
+    const launched = usageSummary(now, { excluded: new Set(), since: "2026-10-14T00:00:00.000Z" });
+    expect(all.active.today - launched.active.today).toBe(1);
+    expect(launched.installs.byApp.map((a) => a.version)).not.toContain("0.3.0");
+    expect(launched.installs.byApp.map((a) => a.version)).toContain("0.7.0");
+    expect(launched.accountsCreated.byVersion.map((v) => v.version)).not.toContain("0.3.0");
+    expect(launched.installs.total).toBe(all.installs.total - 1);
+  });
+
+  test("an operator account made before builds sent an install id is still recognised by the Mac it uses", () => {
+    const now = new Date("2026-10-20T10:00:00Z");
+    const OLD_MAC = "55555555-5555-4555-8555-555555555555";
+    const reg = openRegistry();
+    try {
+      reg.prepare("INSERT INTO users (id, token_hash, created_at) VALUES ('op_legacy', 'h', '2026-09-05T09:00:00Z')").run(); // no install_id
+    } finally {
+      reg.close();
+    }
+    noteInstall(OLD_MAC, "0.7.0", "26.9", now, "op_legacy"); // seen later, on an authenticated request
+    const pop = { excluded: new Set(["op_legacy"]), since: "2026-10-14T00:00:00.000Z" };
+    expect(usageSummary(now).installs.byOs.find((o) => o.os === "macOS 26.9")?.installs).toBe(1); // counted when nobody is excluded
+    // The same account excluded only by the launch cutoff (not named as an operator) also drops its Mac.
+    for (const p of [pop, { excluded: new Set<string>(), since: "2026-10-14T00:00:00.000Z" }]) {
+      const u = usageSummary(now, p);
+      expect(u.installs.byOs.find((o) => o.os === "macOS 26.9")).toBeUndefined();
+    }
   });
 });

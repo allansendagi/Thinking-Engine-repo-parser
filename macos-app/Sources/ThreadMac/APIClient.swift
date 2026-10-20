@@ -43,22 +43,25 @@ final class APIClient {
         guard let url = URL(string: baseURL + path), let scheme = url.scheme, scheme.hasPrefix("http"), url.host != nil else {
             throw APIError.http(status: 0, message: "Thread can't reach its server address. Reinstall Thread from threadnow.app to reset it.")
         }
+        // A test run never reaches the real server. Tests that exercise this client pass their own
+        // stubbed session (MockURLProtocol); anything on the shared session is a test that built an
+        // AppState and would otherwise call production with the developer's own Keychain sign-in,
+        // as an "install" running the test runner's version.
+        if Self.isRunningTests && session === URLSession.shared {
+            throw APIError.http(status: 0, message: "Tests don't reach the network.")
+        }
         var req = URLRequest(url: url)
         req.httpMethod = method
         if let timeout { req.timeoutInterval = timeout }
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         // Which build is talking: lets the server count active installs by version (so old ones
         // that can't self-update are visible). Version only -- nothing about the person.
-        // Not under XCTest: there Bundle.main is Xcode's test runner (version "16.0"), and a test
-        // run is not an install -- it would show up in /admin as one.
-        if !Self.isRunningTests {
-            if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                req.setValue("ThreadMac/\(v)", forHTTPHeaderField: "x-thread-app")
-            }
-            // One Mac = one install, across sign-outs (InstallIdentity), and which macOS it runs.
-            req.setValue(InstallIdentity.id(), forHTTPHeaderField: "x-thread-install")
-            req.setValue(InstallIdentity.osVersion, forHTTPHeaderField: "x-thread-os")
+        if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+            req.setValue("ThreadMac/\(v)", forHTTPHeaderField: "x-thread-app")
         }
+        // One Mac = one install, across sign-outs (InstallIdentity), and which macOS it runs.
+        req.setValue(InstallIdentity.id(), forHTTPHeaderField: "x-thread-install")
+        req.setValue(InstallIdentity.osVersion, forHTTPHeaderField: "x-thread-os")
         if let credentials {
             req.setValue("Bearer \(credentials.userId):\(credentials.token)", forHTTPHeaderField: "authorization")
         }
