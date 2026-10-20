@@ -32,11 +32,11 @@ export function openMetrics() {
   // Where the click came from (first touch on the website): a readable bucket plus the campaign.
   // `visitor`: an anonymous, daily-rotating fingerprint (see growth.ts visitorKey) -- counts
   // people, not clicks. Never an IP address.
-  for (const col of ["source", "utm_source", "utm_medium", "utm_campaign", "visitor"]) {
+  for (const col of ["source", "utm_source", "utm_medium", "utm_campaign", "visitor", "reason"]) {
     if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE download_events ADD COLUMN ${col} TEXT;`);
   }
   // Classify rows recorded before the flag existed (idempotent; only touches unflagged rows).
-  db.exec(`UPDATE download_events SET bot = 1 WHERE bot = 0 AND ${BOT_SQL}`);
+  db.exec(`UPDATE download_events SET bot = 1, reason = COALESCE(reason, 'bot') WHERE bot = 0 AND ${BOT_SQL}`);
   db.exec(
     `CREATE TABLE IF NOT EXISTS account_created (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,15 +163,33 @@ export interface DownloadHit {
   utmMedium?: unknown;
   utmCampaign?: unknown;
   visitor?: unknown;
+  /** The person recording the click is the founder (an operator cookie on the website): never a customer. */
+  internal?: unknown;
+}
+
+/**
+ * Why a click isn't counted as a person, or null when it is:
+ *  - bot: a crawler, link preview, script or headless browser (from the raw User-Agent);
+ *  - internal: the founder's own browser (operator cookie);
+ *  - unverified: Vercel's edge adds the visitor's country to every real visit, so a click with no
+ *    country didn't come through the live site (a test run, a copy of the site, a script).
+ */
+export type ExcludedReason = "bot" | "internal" | "unverified";
+export function excludedReason(hit: { userAgent?: unknown; uaFamily?: unknown; internal?: unknown; country?: unknown }): ExcludedReason | null {
+  if (isBotUserAgent(hit.userAgent ?? hit.uaFamily)) return "bot";
+  if (hit.internal === true) return "internal";
+  if (!clip(hit.country, 2)) return "unverified";
+  return null;
 }
 
 export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
   const platform = clip(hit.platform, 16)?.toLowerCase() ?? "mac";
+  const reason = excludedReason(hit);
   const db = openMetrics();
   try {
     db.prepare(
-      `INSERT INTO download_events (platform, version, referrer, country, ua_family, created_at, bot, source, utm_source, utm_medium, utm_campaign, visitor)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO download_events (platform, version, referrer, country, ua_family, created_at, bot, source, utm_source, utm_medium, utm_campaign, visitor, reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       PLATFORMS.has(platform) ? platform : "other",
       clip(hit.version, 24),
@@ -179,12 +197,13 @@ export function recordDownload(hit: DownloadHit, now: Date = new Date()): void {
       clip(hit.country, 2)?.toUpperCase() ?? null,
       clip(hit.uaFamily, 40),
       now.toISOString(),
-      isBotUserAgent(hit.userAgent ?? hit.uaFamily) ? 1 : 0,
+      reason ? 1 : 0,
       clip(hit.source, 60),
       clip(hit.utmSource, 60),
       clip(hit.utmMedium, 60),
       clip(hit.utmCampaign, 100),
       clip(hit.visitor, 32),
+      reason,
     );
   } finally {
     db.close();
@@ -241,8 +260,10 @@ export function forgetActivity(userId: string): void {
 export interface DownloadSummary {
   /** Distinct people (daily-rotating anonymous key), from when it was recorded; null before. */
   people: { today: number; last7: number; last30: number };
-  /** Automated hits (crawlers, link previews, scripts) in the window -- excluded from every number below. */
+  /** Hits in the window that aren't people (bots, tests, the founder) -- excluded from every number below. */
   bots: number;
+  /** The same hits by reason. */
+  excluded: { bot: number; internal: number; unverified: number };
   total: number;
   today: number;
   last7: number;
@@ -296,6 +317,13 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
     );
 
     const bots = count("SELECT COUNT(*) AS n FROM download_events WHERE bot = 1 AND created_at >= ?", since);
+    const excluded = { bot: 0, internal: 0, unverified: 0 };
+    for (const r of db
+      .query("SELECT COALESCE(reason, 'bot') AS r, COUNT(*) AS n FROM download_events WHERE bot = 1 AND created_at >= ? GROUP BY r")
+      .all(since) as { r: keyof typeof excluded; n: number }[]) {
+      if (r.r in excluded) excluded[r.r] = r.n;
+      else excluded.bot += r.n;
+    }
     // A person is one fingerprint per day; rows from before fingerprints existed count once each.
     const people = (from: string) =>
       count(
@@ -306,6 +334,7 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
     return {
       people: { today: people(startOfToday), last7: people(ago(7)), last30: people(ago(30)) },
       bots,
+      excluded,
       total,
       today,
       last7,

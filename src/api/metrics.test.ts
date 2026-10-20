@@ -38,9 +38,9 @@ describe("app version", () => {
 describe("downloads exclude bots from every number", () => {
   test("counted separately and not in totals, byDay or recent", () => {
     const now = new Date("2026-10-16T10:00:00Z");
-    recordDownload({ platform: "mac", version: "latest", uaFamily: "Mozilla/5.0 Safari" }, now);
-    recordDownload({ platform: "mac", version: "latest", uaFamily: "Mozilla/5.0 Safari" }, now);
-    recordDownload({ platform: "mac", version: "latest", uaFamily: "Slackbot-LinkExpanding" }, now);
+    recordDownload({ platform: "mac", version: "latest", uaFamily: "Mozilla/5.0 Safari", country: "AE" }, now);
+    recordDownload({ platform: "mac", version: "latest", uaFamily: "Mozilla/5.0 Safari", country: "AE" }, now);
+    recordDownload({ platform: "mac", version: "latest", uaFamily: "Slackbot-LinkExpanding", country: "US" }, now);
     const s = downloadSummary(30, now);
     expect(s.total).toBe(2);
     expect(s.bots).toBe(1);

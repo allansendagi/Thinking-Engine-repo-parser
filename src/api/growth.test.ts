@@ -1,11 +1,11 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openRegistry } from "./auth";
 import { gaReport } from "./ga";
-import { forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, weekOf } from "./growth";
-import { noteActive, recordDownload } from "./metrics";
+import { activityFeed, classifyDownloads, forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, weekOf } from "./growth";
+import { downloadSummary, excludedReason, noteActive, recordAccountCreated, recordDownload } from "./metrics";
 
 let dir = "";
 const saved = { reg: process.env.THREAD_REGISTRY_PATH, data: process.env.THREAD_DATA_DIR };
@@ -49,6 +49,8 @@ describe("where a download came from", () => {
 });
 
 describe("growth funnel and cohorts", () => {
+  beforeEach(() => { process.env.THREAD_ANALYTICS_START = "2026-01-01T00:00:00.000Z"; });
+  afterEach(() => { delete process.env.THREAD_ANALYTICS_START; });
   test("each step counts accounts from the window that got that far; week 2 only for accounts old enough", () => {
     const now = new Date("2026-10-19T12:00:00Z");
     addUser("user_ga", "2026-10-01T09:00:00Z", "pro");
@@ -59,9 +61,9 @@ describe("growth funnel and cohorts", () => {
     noteMilestone("user_gb", "first_capture", new Date("2026-10-03T09:00:00Z"));
     noteActive("user_ga", "0.4.3", new Date("2026-10-10T08:00:00Z")); // day 8-9: back in week 2
     noteActive("user_gb", "0.4.3", new Date("2026-10-04T08:00:00Z")); // only week 1
-    recordDownload({ source: "Google", uaFamily: "Safari", visitor: "v1" }, new Date("2026-10-18T00:00:00Z"));
-    recordDownload({ source: "Google", uaFamily: "Safari", utmCampaign: "launch", utmSource: "x", visitor: "v1" }, new Date("2026-10-18T00:00:00Z")); // same person, clicked twice
-    recordDownload({ source: "Direct", uaFamily: "Googlebot/2.1" }, new Date("2026-10-18T00:00:00Z")); // a bot: never counted
+    recordDownload({ source: "Google", uaFamily: "Safari", visitor: "v1", country: "AE" }, new Date("2026-10-18T00:00:00Z"));
+    recordDownload({ source: "Google", uaFamily: "Safari", utmCampaign: "launch", utmSource: "x", visitor: "v1", country: "AE" }, new Date("2026-10-18T00:00:00Z")); // same person, clicked twice
+    recordDownload({ source: "Direct", uaFamily: "Googlebot/2.1", country: "US" }, new Date("2026-10-18T00:00:00Z")); // a bot: never counted
 
     const g = growthSummary(30, now);
     expect(g.funnel).toEqual({
@@ -165,7 +167,7 @@ describe("test traffic", () => {
     recordDownload({ userAgent: "curl/8.4.0", uaFamily: "Unknown device" }, at); // bot, caught by the raw string
     recordDownload({ uaFamily: "Chrome on Linux", referrer: "http://127.0.0.1:8080/" }, at); // CI copy of the site
     recordDownload({ uaFamily: "Safari on macOS", referrer: "https://mind-stream-continuity.vercel.app/" }, at); // preview
-    recordDownload({ uaFamily: "Safari on macOS", referrer: "https://www.google.com/" }, at); // a person
+    recordDownload({ uaFamily: "Safari on macOS", referrer: "https://www.google.com/", country: "AE" }, at); // a person
     flagTestDownloads();
     const db = openRegistry();
     try {
@@ -206,5 +208,79 @@ describe("Google Analytics", () => {
     delete process.env.GA_MEASUREMENT_ID;
     delete process.env.GA_API_SECRET;
     expect(calls).toBe(1);
+  });
+});
+
+
+describe("why a download click isn't a person", () => {
+  test("bot, the founder's own browser, or no location (not served by the live site) -- else it counts", () => {
+    expect(excludedReason({ userAgent: "Mozilla/5.0 HeadlessChrome/130", country: "US" })).toBe("bot");
+    expect(excludedReason({ uaFamily: "Safari", internal: true, country: "AE" })).toBe("internal");
+    expect(excludedReason({ uaFamily: "Chrome on Windows" })).toBe("unverified"); // the CI test-browser pairs: no country
+    expect(excludedReason({ uaFamily: "Safari", country: "AE" })).toBeNull();
+    expect(excludedReason({ uaFamily: "Safari", country: "" })).toBe("unverified");
+  });
+
+  test("the summary counts only people and says what was left out and why", () => {
+    const at = new Date("2026-10-18T10:00:00Z");
+    recordDownload({ uaFamily: "Safari", country: "DE", visitor: "p1" }, at);
+    recordDownload({ uaFamily: "Safari", country: "AE", internal: true }, at);
+    recordDownload({ uaFamily: "Chrome on Windows" }, at);
+    recordDownload({ uaFamily: "Chrome on Linux" }, at);
+    recordDownload({ userAgent: "Googlebot/2.1", country: "US" }, at);
+    const s = downloadSummary(30, new Date("2026-10-19T00:00:00Z"));
+    expect(s.total).toBeGreaterThanOrEqual(1);
+    expect(s.excluded.internal).toBeGreaterThanOrEqual(1);
+    expect(s.excluded.unverified).toBeGreaterThanOrEqual(2);
+    expect(s.excluded.bot).toBeGreaterThanOrEqual(1);
+    expect(s.bots).toBe(s.excluded.bot + s.excluded.internal + s.excluded.unverified);
+  });
+
+  test("old rows with no country are reclassified once, never deleted", () => {
+    const reg = openRegistry();
+    try {
+      reg.exec("DELETE FROM growth_meta WHERE key = 'download_reasons_v1'");
+      reg.prepare("INSERT INTO download_events (platform, created_at, bot, ua_family, country) VALUES ('mac', '2026-10-12T00:00:00Z', 0, 'Chrome on Linux', NULL)").run();
+      reg.prepare("INSERT INTO download_events (platform, created_at, bot, ua_family, country) VALUES ('mac', '2026-10-12T00:00:01Z', 0, 'Safari', 'AE')").run();
+    } finally {
+      reg.close();
+    }
+    expect(classifyDownloads()).toBeGreaterThanOrEqual(1);
+    expect(classifyDownloads()).toBe(0); // once
+    const db = openRegistry();
+    try {
+      const rows = db.query("SELECT ua_family AS ua, bot, reason FROM download_events WHERE created_at IN ('2026-10-12T00:00:00Z', '2026-10-12T00:00:01Z') ORDER BY created_at").all();
+      expect(rows).toEqual([{ ua: "Chrome on Linux", bot: 1, reason: "unverified" }, { ua: "Safari", bot: 0, reason: null }]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("the numbers begin at the first public download", () => {
+  test("accounts made before the launch cutoff (the founder's own development accounts) stay out of the account-based funnel steps and cohorts", () => {
+    const before = growthSummary(90, new Date("2026-10-20T12:00:00Z"));
+    addUser("user_dev1", "2026-09-02T09:00:00Z", "pro");
+    addUser("user_dev2", "2026-09-03T09:00:00Z", "pro");
+    addUser("user_real", "2026-10-16T09:00:00Z", "pro");
+    const g = growthSummary(90, new Date("2026-10-20T12:00:00Z"));
+    expect(g.funnel.pro - before.funnel.pro).toBe(1); // account-based steps: only the one made after launch
+    expect(g.cohorts.reduce((n, c) => n + c.size, 0) - before.cohorts.reduce((n, c) => n + c.size, 0)).toBe(1);
+  });
+});
+
+describe("what happened lately", () => {
+  test("clicks (with why they don't count), new accounts and milestones, newest first, anonymous", () => {
+    const now = new Date("2026-10-21T10:00:00Z");
+    recordDownload({ uaFamily: "Safari on macOS", country: "DE", source: "Google" }, new Date("2026-10-21T09:00:00Z"));
+    recordDownload({ uaFamily: "Chrome on Linux" }, new Date("2026-10-21T09:30:00Z"));
+    recordAccountCreated("0.7.0", new Date("2026-10-21T09:45:00Z"));
+    addUser("user_feed", "2026-10-21T09:45:00Z");
+    noteMilestone("user_feed", "first_capture", new Date("2026-10-21T09:50:00Z"));
+    const feed = activityFeed(new Date(now.getTime() - 3_600_000 * 3).toISOString());
+    expect(feed.map((e) => e.kind)).toEqual(["first_capture", "account", "download", "download"]);
+    expect(feed.find((e) => e.kind === "download" && e.excluded)?.excluded).toBe("unverified");
+    expect(feed.find((e) => e.kind === "download" && !e.excluded)?.detail).toContain("DE · Google");
+    expect(JSON.stringify(feed)).not.toContain("user_feed"); // no ids
   });
 });
