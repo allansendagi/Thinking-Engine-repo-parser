@@ -28,4 +28,23 @@ final class PackagingTests: XCTestCase {
         let groups = try XCTUnwrap(plist["com.apple.security.application-groups"] as? [String])
         XCTAssertEqual(groups, ["RPU3YJFJK7.com.thread.mac"], "must match WidgetStore.group and the widget's entitlement")
     }
+
+    /// The extensions' own plists and entitlements are read by the same strict parsers at signing and
+    /// launch, so check them here too.
+    func testExtensionPlistsAreStrictlyValidXML() throws {
+        for path in ["Widget/Info.plist", "Widget/ThreadWidget.entitlements", "ShareExtension/Info.plist", "ShareExtension/ThreadShare.entitlements"] {
+            let data = try Data(contentsOf: macosApp.appendingPathComponent(path))
+            let parser = XMLParser(data: data)
+            XCTAssertTrue(parser.parse(), "\(path) isn't valid XML: \(parser.parserError?.localizedDescription ?? "?") (line \(parser.lineNumber))")
+        }
+    }
+
+    func testBothExtensionsShareTheAppsGroupAndAreSandboxed() throws {
+        for path in ["Widget/ThreadWidget.entitlements", "ShareExtension/ThreadShare.entitlements"] {
+            let data = try Data(contentsOf: macosApp.appendingPathComponent(path))
+            let plist = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+            XCTAssertEqual(plist["com.apple.security.app-sandbox"] as? Bool, true, "\(path): extensions must be sandboxed")
+            XCTAssertEqual(plist["com.apple.security.application-groups"] as? [String], ["RPU3YJFJK7.com.thread.mac"], path)
+        }
+    }
 }

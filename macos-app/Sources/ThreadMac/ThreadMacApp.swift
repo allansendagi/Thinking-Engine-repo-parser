@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var connectivity: ConnectivityWatcher?
     private var spotlightSync: AnyCancellable?
     private var widgetSync: AnyCancellable?
+    private var shareInbox: ShareInboxWatcher?
     let updater = Updater()
     private let setupNotifier = SetupNotifier()
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
@@ -128,6 +129,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     WidgetFeed.sync(state: appState.isPaired ? state : nil, excluding: appState.maybeIdeaIds)
                 }
             }
+
+        // Text shared to Thread from any app's Share menu arrives in a shared inbox; capture it.
+        let inbox = ShareInboxWatcher { [appState] text in appState.capture(text) }
+        shareInbox = inbox
+        inbox.start()
 
         let state = appState
         let server = PairingServer(
