@@ -31,6 +31,11 @@ final class APIClient {
         self.decoder = JSONDecoder()
     }
 
+    /// True when this process is a test run (XCTest sets this and loads its bundle).
+    static let isRunningTests: Bool =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        || NSClassFromString("XCTestCase") != nil
+
     private func rawRequest(_ path: String, method: String = "GET", body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Data {
         // A base URL with no scheme (e.g. a bare host typed into Settings) still yields a non-nil
         // *relative* URL here, which URLSession then rejects with the opaque "unsupported URL".
@@ -44,12 +49,16 @@ final class APIClient {
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         // Which build is talking: lets the server count active installs by version (so old ones
         // that can't self-update are visible). Version only -- nothing about the person.
-        if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-            req.setValue("ThreadMac/\(v)", forHTTPHeaderField: "x-thread-app")
+        // Not under XCTest: there Bundle.main is Xcode's test runner (version "16.0"), and a test
+        // run is not an install -- it would show up in /admin as one.
+        if !Self.isRunningTests {
+            if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                req.setValue("ThreadMac/\(v)", forHTTPHeaderField: "x-thread-app")
+            }
+            // One Mac = one install, across sign-outs (InstallIdentity), and which macOS it runs.
+            req.setValue(InstallIdentity.id(), forHTTPHeaderField: "x-thread-install")
+            req.setValue(InstallIdentity.osVersion, forHTTPHeaderField: "x-thread-os")
         }
-        // One Mac = one install, across sign-outs (InstallIdentity), and which macOS it runs.
-        req.setValue(InstallIdentity.id(), forHTTPHeaderField: "x-thread-install")
-        req.setValue(InstallIdentity.osVersion, forHTTPHeaderField: "x-thread-os")
         if let credentials {
             req.setValue("Bearer \(credentials.userId):\(credentials.token)", forHTTPHeaderField: "authorization")
         }
