@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appVersionFrom, downloadSummary, forgetActivity, isBotUserAgent, noteActive, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
+import { openRegistry } from "./auth";
+import { appVersionFrom, noteInstall, downloadSummary, forgetActivity, isBotUserAgent, noteActive, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
 
 let dir = "";
 const prev = process.env.THREAD_REGISTRY_PATH;
@@ -78,5 +79,34 @@ describe("accounts created and active installs", () => {
     const before = usageSummary(now).active.last7;
     forgetActivity("user_gone");
     expect(usageSummary(now).active.last7).toBe(before - 1);
+  });
+});
+
+describe("operator accounts are not customers", () => {
+  test("their activity and the Macs they created accounts on are left out of usage", () => {
+    const now = new Date("2026-10-18T10:00:00Z");
+    const reg = openRegistry();
+    try {
+      const add = reg.prepare("INSERT INTO users (id, token_hash, created_at, install_id) VALUES (?, 'h', ?, ?)");
+      add.run("op_user", now.toISOString(), "11111111-1111-4111-8111-111111111111");
+      add.run("real_user", now.toISOString(), "22222222-2222-4222-8222-222222222222");
+    } finally {
+      reg.close();
+    }
+    recordAccountCreated("16.0", now, "11111111-1111-4111-8111-111111111111", "op_user");
+    recordAccountCreated("0.7.0", now, "22222222-2222-4222-8222-222222222222", "real_user");
+    noteInstall("11111111-1111-4111-8111-111111111111", "16.0", "26.6", now);
+    noteInstall("22222222-2222-4222-8222-222222222222", "0.7.0", "15.1", now);
+    noteActive("op_user", "16.0", now);
+    noteActive("real_user", "0.7.0", now);
+
+    const all = usageSummary(now);
+    const real = usageSummary(now, new Set(["op_user"]));
+    expect(all.installs.new7 - real.installs.new7).toBe(1);
+    expect(real.installs.byApp.map((a) => a.version)).not.toContain("16.0");
+    expect(real.installs.byApp.map((a) => a.version)).toContain("0.7.0");
+    expect(all.active.today - real.active.today).toBe(1);
+    expect(real.accountsCreated.byVersion.map((v) => v.version)).not.toContain("16.0");
+    expect(real.active.byVersion.map((v) => v.version)).not.toContain("16.0");
   });
 });

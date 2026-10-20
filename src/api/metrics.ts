@@ -366,38 +366,47 @@ export interface UsageSummary {
   active: { today: number; last7: number; last30: number; byVersion: { version: string; users: number }[] };
 }
 
-/** Accounts created and active installs by version (UTC days). */
-export function usageSummary(now: Date = new Date()): UsageSummary {
+/**
+ * Accounts created and active installs by version (UTC days). `excluded` is the operator/test
+ * accounts (revenue.ts `excludedUserIds`): their activity, and the Macs they created accounts on,
+ * are left out so the founder's own dev machine isn't counted as a customer install.
+ */
+export function usageSummary(now: Date = new Date(), excluded: ReadonlySet<string> = new Set()): UsageSummary {
   const db = openMetrics();
   try {
+    const ids = [...excluded].filter((id) => /^[A-Za-z0-9_-]+$/.test(id)); // validated, so safe to inline
+    const idList = ids.map((i) => `'${i}'`).join(",");
+    const notUser = ids.length ? ` AND user_id NOT IN (${idList})` : "";
+    const ownInstalls = `SELECT install_id FROM users WHERE install_id IS NOT NULL AND id IN (${idList})`;
+    const notOwnInstall = ids.length ? ` AND (install_id IS NULL OR install_id NOT IN (${ownInstalls}))` : "";
     const day = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString().slice(0, 10);
     const ago = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString();
     const n = (sql: string, ...a: unknown[]) => (db.query(sql).get(...(a as never[])) as { n: number }).n;
-    const created = (since: string) => n("SELECT COUNT(*) AS n FROM account_created WHERE created_at >= ?", since);
-    const active = (from: string) => n("SELECT COUNT(DISTINCT user_id) AS n FROM active_days WHERE day >= ?", from);
+    const created = (since: string) => n(`SELECT COUNT(*) AS n FROM account_created WHERE created_at >= ?${notOwnInstall}`, since);
+    const active = (from: string) => n(`SELECT COUNT(DISTINCT user_id) AS n FROM active_days WHERE day >= ?${notUser}`, from);
     const major = (os: string | null) => (os ? `macOS ${os.split(".").slice(0, 2).join(".")}` : "unknown");
-    const activeInstalls = db.query("SELECT app_version, os_version FROM installs WHERE last_seen >= ?").all(ago(7)) as { app_version: string | null; os_version: string | null }[];
+    const activeInstalls = db.query(`SELECT app_version, os_version FROM installs WHERE last_seen >= ?${notOwnInstall}`).all(ago(7)) as { app_version: string | null; os_version: string | null }[];
     const tally = <T extends string>(xs: T[]) => [...xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0) + 1), new Map<T, number>())].sort((a, b) => b[1] - a[1]).slice(0, 12);
     return {
       installs: {
-        total: n("SELECT COUNT(*) AS n FROM installs"),
-        newToday: n("SELECT COUNT(*) AS n FROM installs WHERE first_seen >= ?", day(0)),
-        new7: n("SELECT COUNT(*) AS n FROM installs WHERE first_seen >= ?", ago(7)),
-        new30: n("SELECT COUNT(*) AS n FROM installs WHERE first_seen >= ?", ago(30)),
+        total: n(`SELECT COUNT(*) AS n FROM installs WHERE 1=1${notOwnInstall}`),
+        newToday: n(`SELECT COUNT(*) AS n FROM installs WHERE first_seen >= ?${notOwnInstall}`, day(0)),
+        new7: n(`SELECT COUNT(*) AS n FROM installs WHERE first_seen >= ?${notOwnInstall}`, ago(7)),
+        new30: n(`SELECT COUNT(*) AS n FROM installs WHERE first_seen >= ?${notOwnInstall}`, ago(30)),
         active7: activeInstalls.length,
         byOs: tally(activeInstalls.map((i) => major(i.os_version))).map(([os, installs]) => ({ os, installs })),
         byApp: tally(activeInstalls.map((i) => i.app_version ?? "unknown")).map(([version, installs]) => ({ version, installs })),
       },
       accountsCreated: {
-        total: n("SELECT COUNT(*) AS n FROM account_created"),
+        total: n(`SELECT COUNT(*) AS n FROM account_created WHERE 1=1${notOwnInstall}`),
         today: created(day(0)),
         last7: created(ago(7)),
         last30: created(ago(30)),
         byDay: db
-          .query("SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count FROM account_created WHERE created_at >= ? GROUP BY day ORDER BY day ASC")
+          .query(`SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count FROM account_created WHERE created_at >= ?${notOwnInstall} GROUP BY day ORDER BY day ASC`)
           .all(ago(30)) as { day: string; count: number }[],
         byVersion: (db
-          .query("SELECT COALESCE(version, 'unknown') AS version, COUNT(*) AS count FROM account_created GROUP BY version ORDER BY count DESC LIMIT 12")
+          .query(`SELECT COALESCE(version, 'unknown') AS version, COUNT(*) AS count FROM account_created WHERE 1=1${notOwnInstall} GROUP BY version ORDER BY count DESC LIMIT 12`)
           .all() as { version: string; count: number }[]),
       },
       active: {
@@ -408,7 +417,7 @@ export function usageSummary(now: Date = new Date()): UsageSummary {
         byVersion: db
           .query(
             `SELECT COALESCE(version, 'unknown') AS version, COUNT(*) AS users FROM (
-               SELECT user_id, version, MAX(day) FROM active_days WHERE day >= ? GROUP BY user_id
+               SELECT user_id, version, MAX(day) FROM active_days WHERE day >= ?${notUser} GROUP BY user_id
              ) GROUP BY version ORDER BY users DESC LIMIT 12`,
           )
           .all(day(6)) as { version: string; users: number }[],
