@@ -423,7 +423,7 @@ describe("a script's burst of clicks is not people", () => {
 describe("the audit behind the numbers", () => {
   beforeEach(() => {
     process.env.THREAD_ANALYTICS_START = "2026-10-14T00:00:00.000Z";
-    process.env.THREAD_METRICS_EXCLUDE_USERS = "aud_operator";
+    process.env.THREAD_METRICS_EXCLUDE_USERS = "aud_operator,aud_operator_mac";
   });
   afterEach(() => {
     delete process.env.THREAD_ANALYTICS_START;
@@ -457,5 +457,31 @@ describe("the audit behind the numbers", () => {
     expect(mine.map((l) => l.reason)).toEqual(["unverified", "bot"]);
     expect(s.leftOut.every((l, i, all) => i === 0 || all[i - 1]!.at >= l.at)).toBe(true);
     expect(JSON.stringify(s.leftOut)).not.toContain("visitor");
+  });
+
+  test("an account made on the founder's Mac is the founder's, wherever it shows up", () => {
+    const OP_MAC = "88888888-8888-4888-8888-888888888888";
+    const REAL_MAC = "99999999-9999-4999-8999-999999999999";
+    const now = new Date("2026-10-22T12:00:00Z");
+    const before = accountsAudit().totals;
+    const b = growthSummary(30, now);
+    addUser("aud_operator_mac", "2026-10-21T08:00:00Z"); // the named operator, with a Mac
+    addUser("aud_fresh_on_op_mac", "2026-10-21T09:00:00Z"); // later: a new anonymous account on that same Mac
+    addUser("aud_customer", "2026-10-21T10:00:00Z");
+    const reg = openRegistry();
+    try {
+      const link = reg.prepare("UPDATE users SET install_id = ? WHERE id = ?");
+      link.run(OP_MAC, "aud_operator_mac");
+      link.run(OP_MAC, "aud_fresh_on_op_mac");
+      link.run(REAL_MAC, "aud_customer");
+    } finally {
+      reg.close();
+    }
+    const a = accountsAudit();
+    expect(a.totals.counted - before.counted).toBe(1); // only the customer
+    expect(a.totals.onOperatorMacs - before.onOperatorMacs).toBe(1);
+    const g = growthSummary(30, now);
+    expect(g.funnel.opened - b.funnel.opened).toBe(1);
+    expect(g.cohorts.reduce((n, c) => n + c.size, 0) - b.cohorts.reduce((n, c) => n + c.size, 0)).toBe(1);
   });
 });
