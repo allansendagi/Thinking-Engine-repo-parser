@@ -9,6 +9,7 @@ import {
   setCredentials,
   setPairingState,
 } from "../lib/storage";
+import { escapeHtml } from "../lib/escape";
 import { parsePairingString } from "../lib/pairing";
 import { historyErrorText } from "../lib/historyText";
 import type { AccountInfo, CaptureHealth, ExtensionStatus, PairingState, Source, SourceHealth } from "../lib/types";
@@ -94,7 +95,7 @@ function renderCapture(health: CaptureHealth, paired: boolean, queued: number): 
       <div class="srow">
         <span class="sdot ${cls}"></span>
         <span class="sname">${SOURCE_LABEL[src]}</span>
-        <span class="sdetail ${h && (h.state === "degraded" || h.state === "error") ? "warn" : ""}">${line}</span>
+        <span class="sdetail ${h && (h.state === "degraded" || h.state === "error") ? "warn" : ""}">${escapeHtml(line)}</span>
       </div>`;
   }).join("");
 

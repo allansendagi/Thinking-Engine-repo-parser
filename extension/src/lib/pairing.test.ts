@@ -1,3 +1,4 @@
+import { DEFAULT_API_BASE_URL } from "./apiOrigin";
 import { afterEach, describe, expect, test } from "bun:test";
 import { fetchDesktopPairing, parsePairingString, PAIRING_URL, probeDesktop } from "./pairing";
 
@@ -46,19 +47,21 @@ describe("fetchDesktopPairing", () => {
     expect(await fetchDesktopPairing()).toBeNull();
   });
 
-  test("adopts credentials and apiBaseUrl from a valid response", async () => {
-    globalThis.fetch = (async (url: string) => {
-      expect(url).toBe(PAIRING_URL);
-      return new Response(
-        JSON.stringify({ userId: VALID_ID, token: VALID_TOKEN, apiBaseUrl: "http://localhost:8787" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }) as unknown as typeof fetch;
+  test("adopts the credentials from a valid response, but never the server address it names", async () => {
+    for (const named of ["http://localhost:8787", "https://attacker.example", undefined]) {
+      globalThis.fetch = (async (url: string) => {
+        expect(url).toBe(PAIRING_URL);
+        return new Response(JSON.stringify({ userId: VALID_ID, token: VALID_TOKEN, apiBaseUrl: named }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
 
-    expect(await fetchDesktopPairing()).toEqual({
-      credentials: { userId: VALID_ID, token: VALID_TOKEN },
-      apiBaseUrl: "http://localhost:8787",
-    });
+      expect(await fetchDesktopPairing()).toEqual({
+        credentials: { userId: VALID_ID, token: VALID_TOKEN },
+        apiBaseUrl: DEFAULT_API_BASE_URL,
+      });
+    }
   });
 
   test("throws on a malformed response from the app", async () => {

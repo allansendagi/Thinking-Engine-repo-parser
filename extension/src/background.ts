@@ -1,3 +1,4 @@
+import { senderAllowed } from "./lib/senderPolicy";
 import {
   retryDecision,
   retryDelayMs,
@@ -311,7 +312,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   await drainQueue(); // retry any captures parked by a transient failure
 });
 
-chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
+  // Only our own pages and content scripts in the AI tabs may talk to the worker, and each only
+  // about what it is for (see senderPolicy.ts).
+  const type = (message as { type?: unknown } | null)?.type;
+  if (!senderAllowed(type, sender, chrome.runtime.id)) return false;
+
   if (isPairNowMessage(message)) {
     // The popup button is an explicit user act -- force a fresh pull from the Mac.
     ensurePaired("popup", { force: true })

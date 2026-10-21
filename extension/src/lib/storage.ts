@@ -11,20 +11,23 @@ import type {
   SourceHealth,
 } from "./types";
 
-export const DEFAULT_API_BASE_URL = "https://thinking-engine-repo-parser-production.up.railway.app";
+import { DEFAULT_API_BASE_URL, trustedApiBase } from "./apiOrigin";
+
+export { DEFAULT_API_BASE_URL };
 
 /** Thin wrapper over chrome.storage.local so the rest of the code isn't littered with string keys. */
 
 export async function getSettings(): Promise<Settings> {
   const result = await chrome.storage.local.get(["apiBaseUrl", "credentials"]);
   return {
-    apiBaseUrl: (result.apiBaseUrl as string | undefined) ?? DEFAULT_API_BASE_URL,
+    // Whatever is stored, only Thread's own server is ever used (see apiOrigin.ts).
+    apiBaseUrl: trustedApiBase(result.apiBaseUrl),
     credentials: (result.credentials as Credentials | undefined) ?? null,
   };
 }
 
 export async function setApiBaseUrl(apiBaseUrl: string): Promise<void> {
-  await chrome.storage.local.set({ apiBaseUrl });
+  await chrome.storage.local.set({ apiBaseUrl: trustedApiBase(apiBaseUrl) });
 }
 
 export async function setCredentials(credentials: Credentials): Promise<void> {

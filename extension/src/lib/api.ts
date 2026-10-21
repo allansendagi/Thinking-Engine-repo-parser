@@ -1,3 +1,4 @@
+import { trustedApiBase } from "./apiOrigin";
 import { getSettings } from "./storage";
 import type { CapturedMessage, Source } from "./types";
 import { redactDeep, redactSecrets } from "./redact";
@@ -53,7 +54,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export async function createUser(apiBaseUrl: string): Promise<{ userId: string; token: string }> {
-  const res = await fetch(`${apiBaseUrl}/v1/users`, { method: "POST" });
+  const res = await fetch(`${trustedApiBase(apiBaseUrl)}/v1/users`, { method: "POST" });
   const body = (await res.json()) as { userId: string; token: string; error?: string };
   if (!res.ok) throw new ApiError(res.status, body.error ?? "Failed to create user");
   return body;
