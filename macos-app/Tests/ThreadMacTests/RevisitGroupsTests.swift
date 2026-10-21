@@ -57,4 +57,16 @@ final class RevisitGroupsTests: XCTestCase {
         XCTAssertTrue(grouped[0].rows[0].meta.contains("Back on it via SOC 2"))
         XCTAssertFalse(grouped[0].rows[1].meta.contains("Back on it"))
     }
+
+    func testShowsAtMostThreeIdeasKeepingTheirQuestions() throws {
+        let input = [
+            try item("l1", idea: "a", "A", "q1"), try item("l2", idea: "b", "B", "q2"),
+            try item("l3", idea: "c", "C", "q3"), try item("l4", idea: "d", "D", "q4"),
+            try item("l5", idea: "a", "A", "q5"),
+        ]
+        let groups = revisitGroups(input)
+        XCTAssertEqual(groups.map(\.label), ["A", "B", "C"])
+        XCTAssertEqual(groups.flatMap(\.rows).count, 4, "idea A keeps both of its questions; D is left for Open loops")
+        XCTAssertEqual(revisitGroups(Array(input.prefix(3))).first?.rows.count, 3, "three ideas with one question each stay flat")
+    }
 }
