@@ -136,7 +136,7 @@ export function loadVoyageBenchVectors(): { model: string; byText: Map<string, n
   if (!existsSync(path)) return null;
   const raw = JSON.parse(readFileSync(path, "utf-8")) as { model: string; seeds?: number[]; vectors: Record<string, number[]> };
   const byText = new Map(Object.entries(raw.vectors));
-  const needed = [...new Set(standardSuite(raw.seeds ?? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]).flatMap((s) => s.thoughts.map((t) => t.said)))];
+  const needed = [...new Set(standardSuite(raw.seeds ?? ALL_SEEDS).flatMap((s) => s.thoughts.map((t) => t.said)))];
   const missing = needed.filter((t) => !byText.has(t)).length;
   if (missing > 0) {
     console.warn(`vectors.voyage.json is stale (${missing}/${needed.length} texts missing) -- re-run makeVoyageVectors.ts.`);
@@ -144,6 +144,9 @@ export function loadVoyageBenchVectors(): { model: string; byText: Map<string, n
   }
   return { model: raw.model, byText };
 }
+
+/** Every seed the bench uses: the tuned ones (1-3) and the held-out ones (4-11). */
+export const ALL_SEEDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 /** Answer-key thoughts in the shape the v2 miner consumes (same as what the server extracts). */
 export function oracleMiningThoughts(s: Scenario, withRoles = true): MiningThought[] {
@@ -168,7 +171,7 @@ export function oracleMiningThoughts(s: Scenario, withRoles = true): MiningThoug
 export function v2Miner(
   name: string,
   vectors: Map<string, number[]> | null,
-  opts: { roles?: boolean; meaningWeight?: number; anchorThreshold?: number; anchorLinkage?: number } = {},
+  opts: { roles?: boolean; meaningWeight?: number; anchorThreshold?: number } = {},
 ): Miner {
   return {
     name,
@@ -183,7 +186,6 @@ export function v2Miner(
         vectors: vectors ? byThought : undefined,
         meaningWeight: opts.meaningWeight,
         anchorThreshold: opts.anchorThreshold,
-        anchorLinkage: opts.anchorLinkage,
       });
       const msgOfThought = new Map(thoughts.map((t) => [t.id, t.sourceEventId]));
       const mined = ideas.filter((i) => !i.isSpark).map((i) => {

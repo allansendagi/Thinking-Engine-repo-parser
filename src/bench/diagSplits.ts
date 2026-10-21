@@ -1,5 +1,9 @@
 #!/usr/bin/env bun
-// Why do ideas split? For each gold idea the miner scattered, show the groups it landed in.
+// Why do ideas split? For each gold idea the miner scattered, show the groups it landed in, how
+// close the split came to being a merge (best cross-group cosine), and whether the leftover
+// thoughts share a conversation with the rest of their idea.
+//   bun src/bench/diagSplits.ts           held-out seeds (4-11)
+//   bun src/bench/diagSplits.ts --tuned   tuned seeds (1-3)
 import { consolidate } from "../mining/consolidate";
 import { standardSuite } from "./generate";
 import { loadVoyageBenchVectors, oracleMiningThoughts } from "./miners";

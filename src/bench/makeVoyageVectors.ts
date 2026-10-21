@@ -12,9 +12,10 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { VoyageEmbeddingProvider, voyageConfigured } from "../providers/voyage";
 import { standardSuite } from "./generate";
+import { ALL_SEEDS } from "./miners";
 
 if (!voyageConfigured()) throw new Error("VOYAGE_API_KEY is not set");
-const seeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+const seeds = ALL_SEEDS;
 const texts = [...new Set(standardSuite(seeds).flatMap((s) => s.thoughts.map((t) => t.said)))];
 const voyage = new VoyageEmbeddingProvider();
 const vectors: Record<string, number[]> = {};

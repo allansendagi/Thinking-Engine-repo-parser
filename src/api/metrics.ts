@@ -434,25 +434,37 @@ export function launchedSince(p: Population, col: string): string {
   return ` AND ${col} >= '${safeIso(p.since)}'`;
 }
 
-/** `AND <col> NOT IN (...)` for a column holding a user id. */
-export function notCountedUser(p: Population, col: string): string {
-  const ids = safeIds(p.excluded);
-  return ` AND ${col} NOT IN (SELECT id FROM users WHERE created_at < '${safeIso(p.since)}')` +
-    (ids.length ? ` AND ${col} NOT IN (${ids.map((i) => `'${i}'`).join(",")})` : "");
-}
-
 /**
- * `AND (<col> IS NULL OR <col> NOT IN (...))` for a column holding an install id: Macs an uncounted
- * account was made on (`users.install_id`, set at creation) or has been seen using (`installs.user_id`,
- * set on every request -- covers accounts created before builds sent an install id).
+ * Install ids that belong to the founder or to pre-launch development: a Mac an uncounted account was
+ * made on (`users.install_id`, set at creation), has been seen using (`installs.user_id`, set on every
+ * request -- covers accounts made before builds sent an install id), or that was first seen before
+ * launch. Used as a subquery.
  */
-export function notCountedInstall(p: Population, col = "install_id"): string {
+function devInstalls(p: Population): string {
   const ids = safeIds(p.excluded);
   const list = ids.map((i) => `'${i}'`).join(",");
   const old = `created_at < '${safeIso(p.since)}'`;
   const madeOn = `SELECT install_id FROM users WHERE install_id IS NOT NULL AND (${old}${ids.length ? ` OR id IN (${list})` : ""})`;
   const usedBy = `SELECT install_id FROM installs WHERE user_id IS NOT NULL AND (user_id IN (SELECT id FROM users WHERE ${old})${ids.length ? ` OR user_id IN (${list})` : ""})`;
-  return ` AND (${col} IS NULL OR (${col} NOT IN (${madeOn}) AND ${col} NOT IN (${usedBy})))`;
+  const early = `SELECT install_id FROM installs WHERE first_seen < '${safeIso(p.since)}'`;
+  return `${madeOn} UNION ${usedBy} UNION ${early}`;
+}
+
+/**
+ * `AND <col> NOT IN (...)` for a column holding a user id. An account is uncounted if it is an
+ * operator, was made before launch, or lives on a Mac that belongs to either: the founder's dev Mac
+ * makes a fresh account whenever it loses its sign-in, and that account is the founder's too.
+ */
+export function notCountedUser(p: Population, col: string): string {
+  const ids = safeIds(p.excluded);
+  return ` AND ${col} NOT IN (SELECT id FROM users WHERE created_at < '${safeIso(p.since)}')` +
+    (ids.length ? ` AND ${col} NOT IN (${ids.map((i) => `'${i}'`).join(",")})` : "") +
+    ` AND ${col} NOT IN (SELECT id FROM users WHERE install_id IN (${devInstalls(p)}))`;
+}
+
+/** `AND (<col> IS NULL OR <col> NOT IN (...))` for a column holding an install id: the founder's and pre-launch Macs are not installs. */
+export function notCountedInstall(p: Population, col = "install_id"): string {
+  return ` AND (${col} IS NULL OR ${col} NOT IN (${devInstalls(p)}))`;
 }
 
 export interface UsageSummary {

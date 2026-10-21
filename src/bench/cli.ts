@@ -7,7 +7,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createExtractionProvider, createReasoningProvider } from "../providers/anthropic";
 import { standardSuite } from "./generate";
-import { loadBenchVectors, loadVoyageBenchVectors, v1Miner, v1Offline, v2Miner, type Miner } from "./miners";
+import { ALL_SEEDS, loadBenchVectors, loadVoyageBenchVectors, v1Miner, v1Offline, v2Miner, type Miner } from "./miners";
 import { formatTable, runBench } from "./run";
 import { meaningWeightFor } from "../mining/consolidate";
 import { VoyageEmbeddingProvider, voyageConfigured } from "../providers/voyage";
@@ -26,15 +26,16 @@ if (apple) {
   miners.push(v2Miner(`v2 + Apple on-device meaning (${apple.model})`, apple.byText, { meaningWeight: meaningWeightFor(apple.model) }));
 }
 // The cloud model, measured the same way: from the stored vectors (offline, free, identical every
-// run), or -- if there are none -- live when a key is present (a few hundred short texts, ~free).
+// run), or -- if there are none -- live when a key is present. Either way it covers EVERY seed the
+// bench can score, so a thought is never silently scored as words-only.
 const voyageCached = loadVoyageBenchVectors();
 if (voyageCached) {
   miners.push(v2Miner(`v2 + Voyage (${voyageCached.model})`, voyageCached.byText));
 } else if (voyageConfigured()) {
-  const texts = [...new Set(standardSuite().flatMap((s) => s.thoughts.map((t) => t.said)))];
+  const texts = [...new Set(standardSuite(ALL_SEEDS).flatMap((s) => s.thoughts.map((t) => t.said)))];
   const voyage = new VoyageEmbeddingProvider();
   const vectors = await voyage.embedMany(texts);
-  miners.push(v2Miner(`v2 + Voyage fallback (${voyage.modelId})`, new Map(texts.map((t, i) => [t, vectors[i]!]))));
+  miners.push(v2Miner(`v2 + Voyage (${voyage.modelId})`, new Map(texts.map((t, i) => [t, vectors[i]!]))));
 }
 if (live) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("--live needs ANTHROPIC_API_KEY");

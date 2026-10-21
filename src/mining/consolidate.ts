@@ -55,9 +55,6 @@ export interface ConsolidateOptions {
   previousIdeaOf?: Map<string, string>;
   /** Anchor grouping threshold on the combined similarity. */
   anchorThreshold?: number;
-  /** How two anchor groups are compared: the weight on their AVERAGE pairwise similarity; the rest
-   *  goes to their strongest single pair (1 = pure average linkage, 0 = single linkage). */
-  anchorLinkage?: number;
   /** Below this, a satellite becomes its own idea instead of attaching. */
   attachFloor?: number;
   /** How much meaning counts against words (0..1). Set per vector model by how well it
@@ -250,7 +247,7 @@ class UnionFind {
  * merge; must-link pairs start out merged. Order-independent: the result doesn't depend on which
  * conversation arrived first.
  */
-function groupAnchors(anchors: string[], sim: Similarity, threshold: number, constraints: Constraints, mix = 1): string[][] {
+function groupAnchors(anchors: string[], sim: Similarity, threshold: number, constraints: Constraints): string[][] {
   const uf = new UnionFind();
   const anchorSet = new Set(anchors);
   for (const [a, b] of constraints.mustLink ?? []) if (anchorSet.has(a) && anchorSet.has(b)) uf.union(a, b);
@@ -261,33 +258,27 @@ function groupAnchors(anchors: string[], sim: Similarity, threshold: number, con
     const r = uf.find(a);
     seed.set(r, [...(seed.get(r) ?? []), a]);
   }
-  return agglomerate([...seed.values()], sim, threshold, cannot, mix);
+  return agglomerate([...seed.values()], sim, threshold, cannot);
 }
 
 /** Average-linkage merging of seed groups until no pair's average similarity clears `threshold`. */
-function agglomerate(seeds: string[][], sim: Similarity, threshold: number, cannot: Set<string>, mix = 1): string[][] {
+function agglomerate(seeds: string[][], sim: Similarity, threshold: number, cannot: Set<string>): string[][] {
   const groups: (string[] | null)[] = seeds.map((g) => [...g]);
   const n = groups.length;
   // Pairwise similarity SUMS between groups, updated in place on each merge (Lance-Williams for
   // average linkage): the average is sum / (|g| * |h|). O(n^2) memory and per-merge work instead
   // of recomputing every pair of members on every iteration.
   const sum: Float64Array[] = Array.from({ length: n }, () => new Float64Array(n));
-  // The strongest single pair between two groups (single-linkage, Lance-Williams: max on merge).
-  const mx: Float64Array[] = Array.from({ length: n }, () => new Float64Array(n));
   const veto: Uint8Array[] = Array.from({ length: n }, () => new Uint8Array(n));
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       let s = 0;
       let v = 0;
-      let m = 0;
       for (const x of groups[i]!) for (const y of groups[j]!) {
-        const b = sim.between(x, y);
-        s += b;
-        if (b > m) m = b;
+        s += sim.between(x, y);
         if (cannot.has(x < y ? `${x}|${y}` : `${y}|${x}`)) v = 1;
       }
       sum[i]![j] = sum[j]![i] = s;
-      mx[i]![j] = mx[j]![i] = m;
       veto[i]![j] = veto[j]![i] = v;
     }
   }
@@ -295,8 +286,6 @@ function agglomerate(seeds: string[][], sim: Similarity, threshold: number, cann
   // Each live row's best partner to its right (highest average; ties -> the later partner), so a
   // merge rescans only the rows it affected instead of every pair: O(n^2) overall, not O(n^3).
   // Picks exactly the pair the full scan would (the last maximal pair in row-major order).
-  const score = (i: number, j: number, sizeI: number, sizeJ: number) =>
-    mix * (sum[i]![j]! / (sizeI * sizeJ)) + (1 - mix) * mx[i]![j]!;
   const bestAvg = new Float64Array(n).fill(-Infinity);
   const bestJ = new Int32Array(n).fill(-1);
   const rescan = (i: number) => {
@@ -307,7 +296,7 @@ function agglomerate(seeds: string[][], sim: Similarity, threshold: number, cann
     for (let j = i + 1; j < n; j++) {
       const gj = groups[j];
       if (!gj || veto[i]![j]) continue;
-      const avg = score(i, j, gi.length, gj.length);
+      const avg = sum[i]![j]! / (gi.length * gj.length);
       if (avg >= bestAvg[i]!) {
         bestAvg[i] = avg;
         bestJ[i] = j;
@@ -331,7 +320,6 @@ function agglomerate(seeds: string[][], sim: Similarity, threshold: number, cann
     for (let k = 0; k < n; k++) {
       if (k === bi || !groups[k]) continue;
       sum[bi]![k] = sum[k]![bi] = sum[bi]![k]! + sum[bj]![k]!;
-      mx[bi]![k] = mx[k]![bi] = Math.max(mx[bi]![k]!, mx[bj]![k]!);
       veto[bi]![k] = veto[k]![bi] = veto[bi]![k]! | veto[bj]![k]!;
     }
     rescan(bi);
@@ -343,7 +331,7 @@ function agglomerate(seeds: string[][], sim: Similarity, threshold: number, cann
       if (bestJ[k] === bi || bestJ[k] === bj) {
         rescan(k); // its best partner changed size or vanished
       } else if (k < bi && !veto[k]![bi]) {
-        const avg = score(k, bi, groups[k]!.length, gbi.length);
+        const avg = sum[k]![bi]! / (groups[k]!.length * gbi.length);
         if (avg > bestAvg[k]! || (avg === bestAvg[k]! && bi > bestJ[k]!)) {
           bestAvg[k] = avg;
           bestJ[k] = bi;
@@ -410,7 +398,7 @@ export function consolidate(thoughts: MiningThought[], options: ConsolidateOptio
   const time = (id: string) => byId.get(id)!.createdAt;
 
   const anchors = thoughts.filter((t) => ANCHOR_TYPES.has(t.type)).map((t) => t.id);
-  const groups = groupAnchors(anchors, sim, anchorThreshold, constraints, options.anchorLinkage ?? 1);
+  const groups = groupAnchors(anchors, sim, anchorThreshold, constraints);
 
   // Satellites attach to the group they're most about. Answers prefer the group holding the
   // question they answer, so a resolution lands where its question is.
