@@ -571,7 +571,10 @@ function buildIdea(ids: string[], byId: Map<string, MiningThought>, sim: Similar
           pick = l;
         }
       }
-      if (pick) pick.resolved = true;
+      if (pick) {
+        pick.resolved = true;
+        pick.resolvedBy = t.id;
+      }
     } else if (t.type === "resolution") {
       const open = loops.filter((l) => !l.resolved);
       if (open.length === 0) continue;
@@ -585,6 +588,7 @@ function buildIdea(ids: string[], byId: Map<string, MiningThought>, sim: Similar
         }
       }
       pick.resolved = true;
+      pick.resolvedBy = t.id;
     }
   }
 

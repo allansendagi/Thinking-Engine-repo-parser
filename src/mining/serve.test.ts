@@ -216,5 +216,56 @@ describe("who decides whether a question is closed", () => {
     expect(hasV1Backup(db)).toBe(false);
     expect((db.query("SELECT COUNT(*) AS n FROM idea_nodes").get() as { n: number }).n).toBeGreaterThan(0);
   });
+
+  const loopOf = (db: ReturnType<typeof seed>) => loadIdeas(db).flatMap((i) => i.openLoops).find((l) => l.id === "loop_cog_m2_0")!;
+
+  test("a question Thread closed says which answer closed it", () => {
+    const db = answered();
+    regroup(db);
+    const loop = loopOf(db);
+    expect(loop.resolved).toBe(true);
+    expect(loop.answeredBy).toBe("Guests count after the first five.");
+  });
+
+  test("an answer labelled resolution, with no link, is named too", () => {
+    process.env.THREAD_V2_SERVING_USERS = "*";
+    const db = seed();
+    db.prepare("UPDATE open_loops SET resolved = 0").run();
+    db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx) VALUES ('m3', 'c1', 'chatgpt', 'user', 'Guests count after the first five.', '2026-09-01T00:02:00Z', 2)").run();
+    db.prepare("INSERT INTO cognitive_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote) VALUES ('cog_m3_0', 'resolution', 'Guests count after the first five.', 0.9, 'high', 'm3', 'Guests count')").run();
+    regroup(db);
+    expect(loopOf(db).answeredBy).toBe("Guests count after the first five.");
+  });
+
+  test("a question the person closed or reopened has no 'answered by' -- it is their word, not Thread's", () => {
+    const db = answered();
+    regroup(db);
+    setOpenLoopResolved(db, "loop_cog_m2_0", false);
+    regroup(db);
+    expect(loopOf(db).resolved).toBe(false);
+    expect(loopOf(db).answeredBy).toBeUndefined();
+    setOpenLoopResolved(db, "loop_cog_m2_0", true);
+    regroup(db);
+    expect(loopOf(db).resolved).toBe(true);
+    expect(loopOf(db).answeredBy).toBeUndefined();
+  });
+
+  test("a question closed before this was recorded just shows as answered, with no invented reason", () => {
+    process.env.THREAD_V2_SERVING_USERS = "*";
+    const db = seed(); // its question is already resolved, origin unknown
+    regroup(db);
+    const loop = loopOf(db);
+    expect(loop.resolved).toBe(true);
+    expect(loop.answeredBy).toBeUndefined();
+  });
+
+  test("if the answer later disappears, the note goes with it", () => {
+    const db = answered();
+    regroup(db);
+    db.prepare("UPDATE cognitive_events SET answers_event_id = NULL WHERE id = 'cog_m3_0'").run();
+    regroup(db);
+    expect(loopOf(db).resolved).toBe(false);
+    expect(loopOf(db).answeredBy).toBeUndefined();
+  });
 });
 

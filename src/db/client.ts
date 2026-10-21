@@ -28,6 +28,8 @@ const ADD_COLUMNS: [table: string, column: string][] = [
   // analysis closed/left it open). NULL = from before this was recorded. A person's word wins and
   // is never overwritten; Thread's follows the evidence, so it can reverse itself.
   ["open_loops", "set_by TEXT"],
+  // The thought that closed it when Thread closed it (for "Answered by: ...").
+  ["open_loops", "resolved_by TEXT"],
   ["idea_verdicts", "origin TEXT"],
   ["idea_corrections", "origin TEXT"],
 ];

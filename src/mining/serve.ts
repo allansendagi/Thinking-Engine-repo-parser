@@ -146,7 +146,7 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
     const putStep = db.prepare(
       "INSERT OR REPLACE INTO evolution_steps (idea_id, cognitive_event_id, formulation, created_at, source_event_id) VALUES (?, ?, ?, ?, ?)",
     );
-    const putLoop = db.prepare("INSERT OR REPLACE INTO open_loops (id, idea_id, statement, created_at, resolved, set_by) VALUES (?, ?, ?, ?, ?, ?)");
+    const putLoop = db.prepare("INSERT OR REPLACE INTO open_loops (id, idea_id, statement, created_at, resolved, set_by, resolved_by) VALUES (?, ?, ?, ?, ?, ?, ?)");
     const putDecision = db.prepare("INSERT OR REPLACE INTO decisions (id, idea_id, statement, decided_at, source_event_id) VALUES (?, ?, ?, ?, ?)");
     const putRelated = db.prepare("INSERT OR IGNORE INTO related_ideas (idea_id, related_idea_id) VALUES (?, ?)");
 
@@ -160,7 +160,8 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
       for (const s of node.evolution) putStep.run(node.id, s.cognitiveEventId, s.formulation, s.createdAt, s.sourceEventId);
       for (const l of node.openLoops) {
         const theirs = personsWord(l.id);
-        putLoop.run(l.id, node.id, l.statement, l.createdAt, (theirs ? theirs.resolved : l.resolved) ? 1 : 0, theirs ? "user" : "thread");
+        const closed = theirs ? theirs.resolved : l.resolved;
+        putLoop.run(l.id, node.id, l.statement, l.createdAt, closed ? 1 : 0, theirs ? "user" : "thread", !theirs && closed ? l.resolvedBy ?? null : null);
       }
       for (const d of node.decisions) putDecision.run(d.id, node.id, d.statement, d.decidedAt, d.sourceEventId);
     });
