@@ -32,3 +32,15 @@ on real hand-labelled conversations (`eval/`).
 On-device extraction: `bun run bench --held-out --live --on-device` adds the Mac's own model
 (produced on a Mac by BenchExtractionTests) next to the cloud pipeline. How to run it, and the
 pass/fail rule written before the data, are in `ON_DEVICE.md`.
+
+
+## Voyage vectors (offline)
+
+`vectors.voyage.json` holds Voyage's vectors for every text the scenarios contain (seeds 1-11), so the
+Voyage row of `bun run bench` runs offline, free and identically every time, and `voyage.test.ts` can
+guard grouping quality in CI. Regenerate after the corpus changes (the loader refuses stale vectors):
+
+    railway run -- sh -c 'cd <checkout> && bun src/bench/makeVoyageVectors.ts'
+
+`bun src/bench/diagSplits.ts` shows why ideas split: the groups a scattered idea landed in, how close the
+split came to a merge, and whether the leftover thoughts share a conversation with the rest.
