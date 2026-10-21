@@ -23,11 +23,8 @@ private func flipInk(light a: Double, dark b: Double) -> Color {
 /// Palette from the "Premium macOS Panel v2" design (Claude Design cf5ae711). Every value is the
 /// design's literal in light mode; dark mode follows the system appearance with its counterpart.
 enum Theme {
-    /// #0A6FFF — the design's default accent (options: #8944AB, #3A8D3F, #C0453B). User-adjustable
-    /// via Settings ▸ Appearance; AppState pushes the choice into `accentOverride` so every view
-    /// that reads `Theme.accent` in its body picks it up on the next render.
-    static var accentOverride: Color?
-    static var accent: Color { accentOverride ?? AccentChoice.blue.color }
+    /// The system accent colour, as chosen in System Settings -- not an app-specific colour.
+    static var accent: Color { .accentColor }
 
     // rgba(0,0,0,a) on light, rgba(255,255,255,a) on dark: text and icons on the panel.
     static func ink(_ a: Double) -> Color { flipInk(light: a, dark: a) }
@@ -138,21 +135,6 @@ struct StatePill: View {
 }
 
 // MARK: - User appearance preferences (Settings ▸ Appearance)
-
-/// Accent colour options from the design mock. `.blue` is the default #0A6FFF.
-enum AccentChoice: String, CaseIterable, Identifiable {
-    case blue, purple, green, red
-    var id: String { rawValue }
-    var label: String { rawValue.capitalized }
-    var color: Color {
-        switch self {
-        case .blue:   return Color(red: 10 / 255,  green: 111 / 255, blue: 255 / 255) // #0A6FFF
-        case .purple: return Color(red: 137 / 255, green: 68 / 255,  blue: 171 / 255) // #8944AB
-        case .green:  return Color(red: 58 / 255,  green: 141 / 255, blue: 63 / 255)  // #3A8D3F
-        case .red:    return Color(red: 192 / 255, green: 69 / 255,  blue: 59 / 255)  // #C0453B
-        }
-    }
-}
 
 /// Row density. Drives IdeaRowView's paddings and type sizes.
 enum Density: String, CaseIterable, Identifiable {

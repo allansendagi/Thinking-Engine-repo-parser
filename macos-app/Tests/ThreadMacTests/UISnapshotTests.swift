@@ -24,17 +24,17 @@ final class UISnapshotTests: XCTestCase {
     /// (offscreen) window so native AppKit-backed controls -- checkboxes, buttons -- render as they do
     /// in the app; SwiftUI's ImageRenderer can't draw those.
     @discardableResult
-    private func snap<V: View>(_ name: String, width: CGFloat, @ViewBuilder _ content: () -> V) throws -> [URL] {
+    private func snap<V: View>(_ name: String, width: CGFloat, height: CGFloat? = nil, @ViewBuilder _ content: () -> V) throws -> [URL] {
         var written: [URL] = []
         for scheme in [ColorScheme.light, .dark] {
             let appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)!
             let framed = content()
                 .padding(20)
-                .frame(width: width)
+                .frame(width: width, height: height)
                 .background(Color(nsColor: .windowBackgroundColor))
                 .environment(\.controlActiveState, .key) // as in the frontmost window: accent-colored defaults
             let host = NSHostingView(rootView: framed)
-            let size = NSSize(width: width, height: host.fittingSize.height)
+            let size = NSSize(width: width, height: height ?? host.fittingSize.height)
             // A real window, parked far off screen and made key, so controls draw as they do in the
             // frontmost window (accent-colored default buttons) without anything appearing on screen.
             let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: size.width, height: size.height), styleMask: [.titled], backing: .buffered, defer: false)
@@ -110,5 +110,31 @@ final class UISnapshotTests: XCTestCase {
         let state = AppState()
         state.captureHealth = CaptureHealth(healthy: false, unresolvedConversations: 0, sensors: [.init(sensor: "browser_extension", observations: 12, failed: 7, degraded: true)])
         try snap("capture-health-banner", width: 420) { CaptureHealthBanner().environmentObject(state) }
+    }
+
+    // MARK: Settings
+
+    private func account(plan: String, email: String?) throws -> AccountStatus {
+        let pro = plan == "pro"
+        let e = email.map { "\"\($0)\"" } ?? "null"
+        return try JSONDecoder().decode(AccountStatus.self, from: Data(#"{"plan":"\#(plan)","status":"\#(pro ? "active" : "free")","isPro":\#(pro),"isAdmin":false,"canCapture":true,"ideaCount":18,"ideaCap":25,"currentPeriodEnd":null,"email":\#(e),"billingEnabled":true}"#.utf8))
+    }
+
+    func testSettingsSignedInFree() throws {
+        let state = AppState()
+        state.account = try account(plan: "free", email: "allan@example.com")
+        try snap("settings-signed-in", width: 520, height: 2100) { SettingsView(embedded: true).environmentObject(state) }
+    }
+
+    func testSettingsAnonymous() throws {
+        let state = AppState()
+        state.account = try account(plan: "free", email: nil)
+        try snap("settings-anonymous", width: 520, height: 900) { SettingsView(embedded: true).environmentObject(state) }
+    }
+
+    func testSettingsAsSheet() throws {
+        let state = AppState()
+        state.account = try account(plan: "pro", email: "allan@example.com")
+        try snap("settings-sheet", width: 460, height: 640) { SettingsView().environmentObject(state) }
     }
 }

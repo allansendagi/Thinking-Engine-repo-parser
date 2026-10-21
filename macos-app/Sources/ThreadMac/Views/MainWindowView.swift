@@ -31,8 +31,7 @@ struct MainWindowView: View {
                 case .ideas: IdeaListColumn()
                 case .loops: LoopListColumn()
                 case .settings:
-                    SettingsView().padding(24)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    SettingsView(embedded: true)
                 }
             }
             .navigationSplitViewColumnWidth(min: 320, ideal: 384, max: 560)
