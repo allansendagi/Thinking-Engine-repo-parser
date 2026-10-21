@@ -8,7 +8,7 @@ struct MainWindowView: View {
     @EnvironmentObject var appState: AppState
 
     enum Tab: String, CaseIterable, Identifiable {
-        case ideas = "Ideas", loops = "Open Loops", settings = "Settings"
+        case ideas = "Ideas", loops = "Open Questions", settings = "Settings"
         var id: String { rawValue }
         var icon: String {
             switch self {
@@ -31,8 +31,7 @@ struct MainWindowView: View {
                 case .ideas: IdeaListColumn()
                 case .loops: LoopListColumn()
                 case .settings:
-                    SettingsView().padding(24)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    SettingsView(embedded: true)
                 }
             }
             .navigationSplitViewColumnWidth(min: 320, ideal: 384, max: 560)
@@ -226,7 +225,7 @@ private struct LoopListColumn: View {
     @EnvironmentObject var appState: AppState
 
     private var groups: [IdeaRowGroup] {
-        openLoopGroups(appState.thinkingState?.openLoops ?? [], flatLabel: "Unresolved")
+        openLoopGroups(appState.thinkingState?.openLoops ?? [], flatLabel: "Open questions")
     }
 
     var body: some View {

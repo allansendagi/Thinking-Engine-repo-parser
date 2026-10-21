@@ -80,7 +80,7 @@ struct MenuBarListView: View {
         let ideas = (appState.thinkingState?.currentIdeas ?? []).filter { !appState.maybeIdeaIds.contains($0.id) }
         switch tab {
         case .loops:
-            return openLoopGroups(openLoops, flatLabel: "Open loops",
+            return openLoopGroups(openLoops, flatLabel: "Open questions",
                                   sourceLabelFor: { ideaSourceLabel[$0] },
                                   whenFor: { lastTouched[$0] })
         case .recent, .all:
@@ -101,18 +101,12 @@ struct MenuBarListView: View {
             // "You never answered this": questions from a while ago, on a subject you're back on
             // now. Leads Recent; those loops aren't repeated in the date buckets below.
             let revisit = tab == .recent ? (appState.thinkingState?.revisit ?? []) : []
-            let revisitGroup: [IdeaRowGroup] = revisit.isEmpty ? [] : [
-                IdeaRowGroup(id: "revisit", label: "Still unanswered", rows: revisit.map { r in
-                    IdeaRow(id: "loop:" + r.loopId, title: deNarrate(r.statement.trimmingCharacters(in: .whitespaces)),
-                            snippet: nil, meta: metaLine(r.via.map { "Back on it via \(cleanIdeaTitle($0, fallback: $0))" } ?? cleanIdeaTitle(r.ideaTitle, fallback: r.ideaTitle), r.raisedAt),
-                            isLoop: true, ideaId: r.ideaId, when: r.raisedAt)
-                })
-            ]
+            let revisitGroup = revisitGroups(revisit)
 
             // Recent is your ideas, one row each -- an idea with an open question carries the
             // open-loop mark instead of being replaced by its questions (that turned Recent into
-            // a list of questions). The questions themselves live in Open loops and, when you're
-            // back on the subject, in "Still unanswered" above.
+            // a list of questions). The questions themselves live in Open questions and, when you're
+            // back on the subject, in the "Open questions" section above.
             // Pinned ideas lead both lists (Recent and All -> Ideas), then the rest by date.
             return pendingGroup + revisitGroup + pinnedThenDated(ideas.map(ideaRow), isPinned: appState.isPinned)
         }
@@ -247,7 +241,14 @@ struct MenuBarListView: View {
                                     }
                             }
                         } header: {
-                            IdeaRowSectionHeader(label: g.label)
+                            VStack(spacing: 0) {
+                                if let section = g.section {
+                                    if g.leadsSection { IdeaRowSectionHeader(label: section) }
+                                    IdeaGroupHeading(label: g.label, count: g.rows.count)
+                                } else {
+                                    IdeaRowSectionHeader(label: g.label)
+                                }
+                            }
                         }
                     }
                     if tab != .loops, !searching {
