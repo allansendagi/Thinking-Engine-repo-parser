@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openRegistry } from "./auth";
 import { gaReport } from "./ga";
-import { activityFeed, classifyDownloads, settleHistory, forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, weekOf } from "./growth";
+import { accountsAudit, activityFeed, classifyDownloads, settleHistory, forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, weekOf } from "./growth";
 import { BURST_CLICKS, downloadSummary, excludedReason, findBursts, noteActive, noteInstall, recordAccountCreated, recordDownload } from "./metrics";
 
 let dir = "";
@@ -408,5 +408,45 @@ describe("a script's burst of clicks is not people", () => {
     const s = downloadSummary(30, new Date("2026-10-29T00:00:00Z"));
     expect(s.excluded.burst).toBeGreaterThanOrEqual(13);
     expect(s.bots).toBe(s.excluded.bot + s.excluded.internal + s.excluded.unverified + s.excluded.burst);
+  });
+});
+
+describe("the audit behind the numbers", () => {
+  beforeEach(() => {
+    process.env.THREAD_ANALYTICS_START = "2026-10-14T00:00:00.000Z";
+    process.env.THREAD_METRICS_EXCLUDE_USERS = "aud_operator";
+  });
+  afterEach(() => {
+    delete process.env.THREAD_ANALYTICS_START;
+    delete process.env.THREAD_METRICS_EXCLUDE_USERS;
+  });
+
+  test("every counted account, anonymously, plus how the base splits into counted / operator / before launch", () => {
+    const before = accountsAudit().totals;
+    addUser("aud_operator", "2026-10-20T09:00:00Z");
+    addUser("aud_predev", "2026-09-04T09:00:00Z");
+    addUser("aud_real", "2026-10-21T09:00:00Z", "pro");
+    noteMilestone("aud_real", "first_capture", new Date("2026-10-21T10:00:00Z"));
+    noteMilestone("aud_real", "first_idea", new Date("2026-10-21T10:05:00Z"));
+    noteActive("aud_real", "0.7.0", new Date("2026-10-21T10:00:00Z"));
+    const a = accountsAudit();
+    expect(a.totals.counted - before.counted).toBe(1);
+    expect(a.totals.operators - before.operators).toBe(1);
+    expect(a.totals.beforeLaunch - before.beforeLaunch).toBe(1);
+    const mine = a.counted.find((c) => c.createdDay === "2026-10-21" && c.plan === "pro");
+    expect(mine).toEqual({ createdDay: "2026-10-21", plan: "pro", macLinked: false, activeDays: 1, lastActiveDay: "2026-10-21", reached: ["first_capture", "first_idea"] });
+    expect(JSON.stringify(a)).not.toMatch(/aud_|user_|@/); // no ids, no emails
+    expect(a.counted.some((c) => c.createdDay === "2026-10-20")).toBe(false); // the operator isn't listed
+  });
+
+  test("the summary lists clicks that were left out, newest first, with the reason", () => {
+    const at = new Date("2026-10-30T10:00:00Z");
+    recordDownload({ userAgent: "Googlebot/2.1", country: "US", uaFamily: "Unknown device" }, at);
+    recordDownload({ uaFamily: "Chrome on Linux" }, new Date(at.getTime() + 60_000)); // no country
+    const s = downloadSummary(30, new Date("2026-10-31T00:00:00Z"));
+    const mine = s.leftOut.filter((l) => l.at >= at.toISOString());
+    expect(mine.map((l) => l.reason)).toEqual(["unverified", "bot"]);
+    expect(s.leftOut.every((l, i, all) => i === 0 || all[i - 1]!.at >= l.at)).toBe(true);
+    expect(JSON.stringify(s.leftOut)).not.toContain("visitor");
   });
 });
