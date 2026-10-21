@@ -248,6 +248,20 @@ final class APIClient {
         return try await request("/v1/ideas/\(Self.pathSegment(id))", method: "PATCH", body: body)
     }
 
+    struct CorrectionRecorded: Decodable { let recorded: Bool? }
+
+    /// "These two are one idea": the server remembers it and regroups. Every later pass respects it.
+    func mergeIdea(id: String, into otherId: String) async throws {
+        let body = try JSONEncoder().encode(["intoIdeaId": otherId])
+        let _: CorrectionRecorded = try await request("/v1/ideas/\(Self.pathSegment(id))/merge", method: "POST", body: body)
+    }
+
+    /// "These thoughts are a different idea": some, not all, of the idea's thoughts.
+    func splitIdea(id: String, thoughtIds: [String]) async throws {
+        let body = try JSONEncoder().encode(["thoughtIds": thoughtIds])
+        let _: CorrectionRecorded = try await request("/v1/ideas/\(Self.pathSegment(id))/split", method: "POST", body: body)
+    }
+
     /// "Keep": the person confirms an idea is worth having (`DELETE` is "not an idea").
     func keepIdea(id: String) async throws {
         let body = try JSONEncoder().encode(["verdict": "keep"])

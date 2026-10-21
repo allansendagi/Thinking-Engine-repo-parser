@@ -155,7 +155,9 @@ struct OpenLoop: Codable, Identifiable {
 struct EvolutionStep: Codable, Identifiable {
     let formulation: String
     let createdAt: String
-    var id: String { formulation + createdAt }
+    /// The thought this step is. Needed to split an idea; absent on an older server.
+    var cognitiveEventId: String? = nil
+    var id: String { cognitiveEventId ?? formulation + createdAt }
 }
 
 /// A decision as it appears *inside an idea* (GET /v1/ideas/:id or /trace). Distinct from

@@ -59,6 +59,51 @@ final class APIClientTests: XCTestCase {
         }
     }
 
+    func testMergeSendsPostWithTheTargetIdea() async throws {
+        MockURLProtocol.stubs["POST /v1/ideas/idea_1/merge"] = .init(status: 200, body: Data(#"{"recorded":true}"#.utf8))
+        let client = APIClient(baseURL: "http://x", credentials: ("user_abc", "tok"), session: MockURLProtocol.makeSession())
+        try await client.mergeIdea(id: "idea_1", into: "idea_2")
+        let sent = try XCTUnwrap(MockURLProtocol.capturedRequests.first)
+        XCTAssertEqual(sent.httpMethod, "POST")
+        let body = try XCTUnwrap(sent.httpBody ?? sent.httpBodyStream.map { s -> Data in
+            s.open(); defer { s.close() }
+            var d = Data(); var buf = [UInt8](repeating: 0, count: 1024)
+            while s.hasBytesAvailable { let n = s.read(&buf, maxLength: buf.count); if n <= 0 { break }; d.append(buf, count: n) }
+            return d
+        })
+        XCTAssertEqual(try JSONDecoder().decode([String: String].self, from: body), ["intoIdeaId": "idea_2"])
+    }
+
+    func testSplitSendsPostWithTheThoughtIds() async throws {
+        MockURLProtocol.stubs["POST /v1/ideas/idea_1/split"] = .init(status: 200, body: Data(#"{"recorded":true}"#.utf8))
+        let client = APIClient(baseURL: "http://x", credentials: ("user_abc", "tok"), session: MockURLProtocol.makeSession())
+        try await client.splitIdea(id: "idea_1", thoughtIds: ["cog_a_0", "cog_b_1"])
+        let sent = try XCTUnwrap(MockURLProtocol.capturedRequests.first)
+        XCTAssertEqual(sent.httpMethod, "POST")
+        XCTAssertEqual(sent.url?.path, "/v1/ideas/idea_1/split")
+    }
+
+    func testAnIdeaIdWithSlashesIsEncodedInTheCorrectionPath() async throws {
+        // The mock matches on the decoded path; what matters is that the id went out escaped.
+        MockURLProtocol.stubs["POST /v1/ideas/idea/odd/merge"] = .init(status: 200, body: Data(#"{"recorded":true}"#.utf8))
+        let client = APIClient(baseURL: "http://x", credentials: ("user_abc", "tok"), session: MockURLProtocol.makeSession())
+        try await client.mergeIdea(id: "idea/odd", into: "idea_2")
+        let sent = try XCTUnwrap(MockURLProtocol.capturedRequests.first)
+        XCTAssertTrue(sent.url?.absoluteString.contains("idea%2Fodd") == true, "the id must be percent-encoded, got \(sent.url?.absoluteString ?? "nil")")
+    }
+
+    func testTheServerRefusingACorrectionSurfacesItsReason() async throws {
+        MockURLProtocol.stubs["POST /v1/ideas/idea_1/split"] = .init(status: 400, body: Data(#"{"error":"thoughtIds must be some, not all, of this idea's thoughts"}"#.utf8))
+        let client = APIClient(baseURL: "http://x", credentials: ("user_abc", "tok"), session: MockURLProtocol.makeSession())
+        do {
+            try await client.splitIdea(id: "idea_1", thoughtIds: ["a", "b"])
+            XCTFail("expected a 400")
+        } catch let APIError.http(status, message) {
+            XCTAssertEqual(status, 400)
+            XCTAssertTrue(message.contains("some, not all"))
+        }
+    }
+
     func testSearchQueryIsPercentEncoded() async throws {
         MockURLProtocol.stubs["GET /v1/ideas?q=authority%20boundaries"] = .init(status: 200, body: Data("[]".utf8))
         let client = APIClient(baseURL: "http://x", credentials: ("user_abc", "tok"), session: MockURLProtocol.makeSession())

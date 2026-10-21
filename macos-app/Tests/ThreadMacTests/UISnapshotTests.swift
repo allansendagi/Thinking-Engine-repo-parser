@@ -145,4 +145,68 @@ final class UISnapshotTests: XCTestCase {
         let state = try settingsState(plan: "pro", email: "allan@example.com")
         try snap("settings-sheet", width: 460, height: 640) { SettingsView().environmentObject(state) }
     }
+
+    // MARK: "Still unanswered": today's rows vs two ways of not repeating the idea's title
+
+    private let ideaTitle = "A continuity layer for thinking should reconstruct the…"
+    private let questions = [
+        "How to distinguish between two statements made weeks apart that represent the same evolving idea versus coincidence?",
+        "What is the minimum context a continuity layer must hand back for resuming thinking to feel seamless?",
+        "What is a continuity layer for human thinking?",
+        "What is the user's opinion on the mind-stream-continuity project?",
+        "What is the NOMOS paper about?",
+    ]
+
+    private static func qrow(_ i: Int, _ text: String, meta: String) -> IdeaRow {
+        IdeaRow(id: "loop:\(i)", title: text, snippet: nil, meta: meta, isLoop: true, ideaId: "idea_a", when: "")
+    }
+
+    func testStillUnansweredToday() throws {
+        let state = AppState(); let ideaTitle = self.ideaTitle; let questions = self.questions
+        try snap("unanswered-today", width: 420) {
+            VStack(spacing: 0) {
+                ForEach(Array(questions.enumerated()), id: \.offset) { i, q in
+                    IdeaRowView(row: Self.qrow(i, q, meta: "\(ideaTitle) · Sep 1"), selected: i == 0)
+                }
+                IdeaRowView(row: Self.qrow(9, "Do guest collaborators count toward the bill?", meta: "Per-seat pricing · Sep 3"), selected: false)
+            }.environmentObject(state)
+        }
+    }
+
+    /// Minimal: the idea's name is shown once, on the first of a run of questions from that idea.
+    func testStillUnansweredNameOnce() throws {
+        let state = AppState(); let ideaTitle = self.ideaTitle; let questions = self.questions
+        try snap("unanswered-name-once", width: 420) {
+            VStack(spacing: 0) {
+                ForEach(Array(questions.enumerated()), id: \.offset) { i, q in
+                    IdeaRowView(row: Self.qrow(i, q, meta: i == 0 ? "\(ideaTitle) · Sep 1" : "Sep 1"), selected: i == 0)
+                }
+                IdeaRowView(row: Self.qrow(9, "Do guest collaborators count toward the bill?", meta: "Per-seat pricing · Sep 3"), selected: false)
+            }.environmentObject(state)
+        }
+    }
+
+    /// Grouped: one quiet heading per idea, with its questions beneath it.
+    func testStillUnansweredGrouped() throws {
+        let state = AppState(); let ideaTitle = self.ideaTitle; let questions = self.questions
+        func heading(_ title: String, _ count: Int) -> some View {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.subheadline.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+                if count > 1 { Text("\(count) questions").font(.footnote).foregroundStyle(.tertiary) }
+            }
+            .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 2)
+        }
+        try snap("unanswered-grouped", width: 420) {
+            VStack(alignment: .leading, spacing: 0) {
+                heading(ideaTitle, questions.count)
+                ForEach(Array(questions.enumerated()), id: \.offset) { i, q in
+                    IdeaRowView(row: Self.qrow(i, q, meta: "Sep 1"), selected: i == 0)
+                }
+                heading("Per-seat pricing", 1)
+                IdeaRowView(row: Self.qrow(9, "Do guest collaborators count toward the bill?", meta: "Sep 3"), selected: false)
+            }.environmentObject(state)
+        }
+    }
 }
+
