@@ -1,3 +1,4 @@
+import { trustedApiBase } from "./apiOrigin";
 import type { Credentials } from "./types";
 
 /**
@@ -56,10 +57,9 @@ export async function fetchDesktopPairing(timeoutMs = 1500): Promise<DesktopPair
   if (!body || !isValidUserId(body.userId) || !isValidToken(body.token)) {
     throw new Error("Thread for Mac sent a malformed pairing response");
   }
-  const apiBaseUrl =
-    typeof body.apiBaseUrl === "string" && body.apiBaseUrl.startsWith("http")
-      ? body.apiBaseUrl
-      : "https://thinking-engine-repo-parser-production.up.railway.app";
+  // The Mac app's answer never decides where conversations go: anything that can answer on this
+  // port could otherwise name its own server. Only a server we trust is ever used.
+  const apiBaseUrl = trustedApiBase(body.apiBaseUrl);
 
   return { credentials: { userId: body.userId, token: body.token }, apiBaseUrl };
 }

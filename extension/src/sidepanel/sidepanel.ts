@@ -12,17 +12,13 @@ import {
   ApiError,
   type IdeaTrace,
 } from "../lib/api";
+import { escapeHtml } from "../lib/escape";
 import { getSettings } from "../lib/storage";
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
   if (!el) throw new Error(`Missing element #${id}`);
   return el;
-}
-function escapeHtml(s: string): string {
-  const div = document.createElement("div");
-  div.textContent = s;
-  return div.innerHTML;
 }
 
 async function renderList(query: string): Promise<void> {
@@ -55,7 +51,7 @@ async function renderList(query: string): Promise<void> {
           : openLoops
               .map(
                 (l) =>
-                  `<div class="open-loop" data-idea-id="${l.ideaId}"><span>${escapeHtml(l.statement)}</span><span class="badge">${escapeHtml(l.ideaTitle)}</span></div>`,
+                  `<div class="open-loop" data-idea-id="${escapeHtml(l.ideaId)}"><span>${escapeHtml(l.statement)}</span><span class="badge">${escapeHtml(l.ideaTitle)}</span></div>`,
               )
               .join("");
 
@@ -78,7 +74,7 @@ async function renderList(query: string): Promise<void> {
 }
 
 function ideaRowHtml(id: string, title: string, state: string): string {
-  return `<div class="card"><span class="idea-title" data-idea-id="${id}">${escapeHtml(title)}</span> <span class="badge">${escapeHtml(state)}</span></div>`;
+  return `<div class="card"><span class="idea-title" data-idea-id="${escapeHtml(id)}">${escapeHtml(title)}</span> <span class="badge">${escapeHtml(state)}</span></div>`;
 }
 
 async function openDetail(ideaId: string): Promise<void> {
@@ -107,7 +103,7 @@ async function openDetail(ideaId: string): Promise<void> {
       <p class="muted">${escapeHtml(idea.currentFormulation)}</p>
       <div class="row">
         <select id="stateSelect">
-          ${["developing", "established", "rejected", "dormant"].map((s) => `<option value="${s}" ${s === idea.state ? "selected" : ""}>${s}</option>`).join("")}
+          ${["developing", "established", "rejected", "dormant"].map((s) => `<option value="${escapeHtml(s)}" ${s === idea.state ? "selected" : ""}>${escapeHtml(s)}</option>`).join("")}
         </select>
         <button id="continueBtn">Continue thinking</button>
         <button id="deleteBtn" class="danger">Delete</button>
@@ -129,7 +125,7 @@ async function openDetail(ideaId: string): Promise<void> {
         : idea.openLoops
             .map(
               (l) =>
-                `<div class="open-loop ${l.resolved ? "resolved" : ""}"><span>${escapeHtml(l.statement)}</span><input type="checkbox" data-loop-id="${l.id}" ${l.resolved ? "checked" : ""} /></div>`,
+                `<div class="open-loop ${l.resolved ? "resolved" : ""}"><span>${escapeHtml(l.statement)}</span><input type="checkbox" data-loop-id="${escapeHtml(l.id)}" ${l.resolved ? "checked" : ""} /></div>`,
             )
             .join("")
     }

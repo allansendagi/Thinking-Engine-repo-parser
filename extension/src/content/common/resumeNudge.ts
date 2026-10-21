@@ -81,7 +81,9 @@ export function attachResumeNudge(adapter: SiteAdapter, doc: Document): () => vo
     if (doc.getElementById(HOST_ID)) return;
     const host = doc.createElement("div");
     host.id = HOST_ID;
-    const root = host.attachShadow({ mode: "open" });
+    // Closed: the host page (ChatGPT, Claude, ...) and any script on it must not be able to read
+    // the idea title shown inside.
+    const root = host.attachShadow({ mode: "closed" });
 
     const ageText = s.daysAgo <= 1 ? "1 day ago" : `${s.daysAgo} days ago`;
     root.innerHTML = `
