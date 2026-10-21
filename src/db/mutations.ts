@@ -76,16 +76,30 @@ export function renameIdea(
   return result.changes > 0;
 }
 
+/** A person ticking or unticking a question. Recorded as theirs: no later pass overrules it. */
 export function setOpenLoopResolved(
   db: Database,
   loopId: string,
   resolved: boolean,
 ): boolean {
   const result = db
-    .prepare("UPDATE open_loops SET resolved = ? WHERE id = ?")
+    .prepare("UPDATE open_loops SET resolved = ?, set_by = 'user' WHERE id = ?")
     .run(resolved ? 1 : 0, loopId);
   return result.changes > 0;
 }
+
+/**
+ * Write a question the analysis produced (idea_id, wording, resolved) WITHOUT overwriting what a
+ * person decided: a row they ticked or unticked keeps its state; only the rest follows the analysis.
+ * (INSERT OR REPLACE would have deleted the row and with it the person's word.)
+ */
+export const UPSERT_OPEN_LOOP_SQL = `INSERT INTO open_loops (id, idea_id, statement, created_at, resolved, set_by)
+  VALUES (?, ?, ?, ?, ?, NULL)
+  ON CONFLICT(id) DO UPDATE SET
+    idea_id = excluded.idea_id,
+    statement = excluded.statement,
+    created_at = excluded.created_at,
+    resolved = CASE WHEN open_loops.set_by = 'user' THEN open_loops.resolved ELSE excluded.resolved END`;
 
 /** Removes discarded_events rows the replay pass has since promoted into real ideas. */
 export function deleteDiscardedEvents(db: Database, ids: string[]): void {

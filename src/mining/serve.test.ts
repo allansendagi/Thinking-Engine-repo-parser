@@ -5,7 +5,8 @@ import { loadIdeas } from "../db/queries";
 import { tasteReport } from "../taste/taste";
 import { consolidate, type MiningThought } from "./consolidate";
 import { loadTasteLabels, recordThoughtReviews } from "./corrections";
-import { hasV1Backup, headlineThoughtIds } from "./serve";
+import { setOpenLoopResolved, UPSERT_OPEN_LOOP_SQL } from "../db/mutations";
+import { hasV1Backup, headlineThoughtIds, restoreV1 } from "./serve";
 import { runShadowMining, syncServing } from "./shadow";
 
 const USER = "user_test";
@@ -135,3 +136,85 @@ describe("thought reviews", () => {
     expect(runShadowMining(db).ideas.flatMap((i) => i.thoughtIds)).toEqual(["cog_m1_0"]);
   });
 });
+
+describe("who decides whether a question is closed", () => {
+  const loopState = (db: ReturnType<typeof seed>) => (db.query("SELECT resolved FROM open_loops WHERE id = 'loop_cog_m2_0'").get() as { resolved: number } | null)?.resolved;
+
+  /** The seed's question, plus an answer that names it, served by v2. Starts with the loop open. */
+  function answered() {
+    process.env.THREAD_V2_SERVING_USERS = "*";
+    const db = seed();
+    db.prepare("UPDATE open_loops SET resolved = 0").run();
+    db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx) VALUES ('m3', 'c1', 'chatgpt', 'user', 'Guests count after the first five.', '2026-09-01T00:02:00Z', 2)").run();
+    db.prepare(
+      "INSERT INTO cognitive_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote, answers_event_id) VALUES ('cog_m3_0', 'decision', 'Guests count after the first five.', 0.9, 'high', 'm3', 'Guests count', 'm2')",
+    ).run();
+    return db;
+  }
+  const regroup = (db: ReturnType<typeof seed>) => syncServing(USER, db, runShadowMining(db).ideas);
+
+  test("Thread closes the question the answer names", () => {
+    const db = answered();
+    regroup(db);
+    expect(loopState(db)).toBe(1);
+  });
+
+  test("a question the person reopens stays open through the next regroup", () => {
+    const db = answered();
+    regroup(db);
+    expect(loopState(db)).toBe(1);
+    setOpenLoopResolved(db, "loop_cog_m2_0", false); // the person says: that is not answered
+    regroup(db); // every capture triggers one of these
+    expect(loopState(db)).toBe(0);
+  });
+
+  test("a question the person closes stays closed even if the analysis never would", () => {
+    process.env.THREAD_V2_SERVING_USERS = "*";
+    const db = seed();
+    db.prepare("UPDATE open_loops SET resolved = 0").run();
+    regroup(db);
+    expect(loopState(db)).toBe(0);
+    setOpenLoopResolved(db, "loop_cog_m2_0", true);
+    regroup(db);
+    expect(loopState(db)).toBe(1);
+  });
+
+  test("a closure Thread made heals when the evidence for it goes away", () => {
+    const db = answered();
+    regroup(db);
+    expect(loopState(db)).toBe(1);
+    // Re-extraction decides that "answer" never was one: the link is gone, so the evidence is too.
+    db.prepare("UPDATE cognitive_events SET answers_event_id = NULL WHERE id = 'cog_m3_0'").run();
+    regroup(db);
+    expect(loopState(db)).toBe(0);
+  });
+
+  test("the older v1 write never overwrites a question the person decided", () => {
+    const db = seed();
+    const write = (resolved: number) => db.prepare(UPSERT_OPEN_LOOP_SQL).run("loop_cog_m2_0", "idea_cog_m2_0", "Do guests count?", "2026-09-01T00:01:00Z", resolved);
+    const row = () => db.query("SELECT resolved, set_by FROM open_loops WHERE id = 'loop_cog_m2_0'").get() as { resolved: number; set_by: string | null };
+    setOpenLoopResolved(db, "loop_cog_m2_0", false); // the person: still open
+    write(1); // v1's analysis says answered
+    expect(row()).toEqual({ resolved: 0, set_by: "user" });
+    setOpenLoopResolved(db, "loop_cog_m2_0", true); // the person: answered
+    write(0);
+    expect(row()).toEqual({ resolved: 1, set_by: "user" });
+    db.prepare("UPDATE open_loops SET set_by = NULL, resolved = 0").run(); // nobody has decided: the analysis rules
+    write(1);
+    expect(row().resolved).toBe(1);
+  });
+
+  test("rolling back to v1 still works for an account whose backup was made before set_by existed", () => {
+    process.env.THREAD_V2_SERVING_USERS = "*";
+    const db = seed();
+    syncServing(USER, db, runShadowMining(db).ideas); // v2 takes over; v1 is saved
+    expect(hasV1Backup(db)).toBe(true);
+    // Make the saved copy look like one taken by an older build: no set_by column.
+    db.exec("DROP TABLE v1_backup_open_loops");
+    db.exec("CREATE TABLE v1_backup_open_loops AS SELECT id, idea_id, statement, created_at, resolved FROM open_loops");
+    expect(() => restoreV1(db)).not.toThrow(); // a positional copy would fail on the extra column
+    expect(hasV1Backup(db)).toBe(false);
+    expect((db.query("SELECT COUNT(*) AS n FROM idea_nodes").get() as { n: number }).n).toBeGreaterThan(0);
+  });
+});
+
