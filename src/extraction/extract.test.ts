@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { FakeProvider } from "../providers/fake";
 import type { CanonicalEvent } from "../types";
 import { extractCognitiveEvents } from "./extract";
+import { EXTRACTION_SYSTEM_PROMPT } from "./prompt";
 
 const ev = (index: number, role: "user" | "assistant", text: string, conversationId = "c1"): CanonicalEvent => ({
   id: `${conversationId}_m${index}`,
@@ -157,6 +158,14 @@ describe("answers_event_id", () => {
   test("absent or null is fine", async () => {
     expect((await run(event({}))).events[0]!.answersEventId).toBeUndefined();
     expect((await run(answer({ answers_event_id: null }))).events[0]!.answersEventId).toBeUndefined();
+  });
+});
+
+describe("the extraction prompt asks for the link", () => {
+  test("it names the field in the rule and in the reply shape, and says when to leave it out", () => {
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain("- ANSWERS.");
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('"answers_event_id": "... (answers only, optional)"');
+    expect(EXTRACTION_SYSTEM_PROMPT).toMatch(/If the AI asked it, or you are not sure which question it answers, omit it/);
   });
 });
 

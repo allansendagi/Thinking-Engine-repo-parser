@@ -85,11 +85,12 @@ class MeteredProvider implements CompletionProvider {
         ? system.replace("Respond with JSON matching this shape exactly", `${SELF_CONTAINED}Respond with JSON matching this shape exactly`)
         : variant === "resolve"
           ? system.replace(RESOLUTION_OLD, RESOLUTION_NEW)
-          : variant === "link"
+          : variant === "link" && !system.includes("answers_event_id")
             ? system.replace("Respond with JSON matching this shape exactly", `${LINK_RULE}Respond with JSON matching this shape exactly`).replace(SHAPE_OLD, SHAPE_NEW)
             : system;
     if (variant === "link" && !sys.includes("answers_event_id\": \"... (answers only")) throw new Error("could not add the answers_event_id field to the prompt shape");
-    if (variant !== "baseline" && sys === system) throw new Error(`could not place the ${variant} change in the prompt`);
+    // (once the production prompt carries the link rule, "link" is the same as "baseline")
+    if (variant !== "baseline" && variant !== "link" && sys === system) throw new Error(`could not place the ${variant} change in the prompt`);
     const n = options?.cachePrefixChars ?? 0;
     const content =
       n > 0 && n < user.length
