@@ -123,6 +123,8 @@ export interface CognitiveEvent {
   /** The person explicitly accepted this proposal from the AI's previous message. Grounded on
    *  both sides: `evidenceQuote` in the person's message, `quote` in the AI's. */
   adoptedFrom?: { sourceEventId: string; quote: string };
+  /** The message where the person asked the question this event answers (validated at extraction). */
+  answersEventId?: string;
 }
 
 /**

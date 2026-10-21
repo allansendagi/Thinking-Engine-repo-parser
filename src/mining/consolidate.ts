@@ -38,6 +38,8 @@ export interface MiningThought {
   role?: "position" | "option" | "reason";
   /** Adopted from an AI suggestion (grounded at extraction) -- kept, even when said once. */
   adopted?: boolean;
+  /** The message where the person asked the question this thought answers (validated at extraction). */
+  answersEventId?: string;
 }
 
 export interface Constraints {
@@ -397,16 +399,35 @@ export function consolidate(thoughts: MiningThought[], options: ConsolidateOptio
   const attachFloor = options.attachFloor ?? 0.2;
   const time = (id: string) => byId.get(id)!.createdAt;
 
-  const anchors = thoughts.filter((t) => ANCHOR_TYPES.has(t.type)).map((t) => t.id);
+  // A thought that names a question we have (whatever it was labelled -- an answer often reads as a
+  // decision) is placed with that question, not grouped by how it sounds: it is a satellite of it.
+  const questionMessages = new Set(thoughts.filter((t) => t.type === "question" || t.type === "open_loop").map((t) => t.sourceEventId));
+  const answersAKnownQuestion = (t: MiningThought) => !!t.answersEventId && questionMessages.has(t.answersEventId);
+  const isAnchor = (t: MiningThought) => ANCHOR_TYPES.has(t.type) && !answersAKnownQuestion(t);
+  const anchors = thoughts.filter(isAnchor).map((t) => t.id);
   const groups = groupAnchors(anchors, sim, anchorThreshold, constraints);
 
   // Satellites attach to the group they're most about. Answers prefer the group holding the
   // question they answer, so a resolution lands where its question is.
-  const satellites = thoughts.filter((t) => !ANCHOR_TYPES.has(t.type)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const satellites = thoughts.filter((t) => !isAnchor(t)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const groupOf = new Map<string, number>();
   groups.forEach((g, i) => g.forEach((id) => groupOf.set(id, i)));
   const cannot = new Set((constraints.cannotLink ?? []).map(([a, b]) => (a < b ? `${a}|${b}` : `${b}|${a}`)));
   for (const s of satellites) {
+    // An answer that names its question belongs with that question -- no guessing from similarity.
+    if (s.answersEventId) {
+      const home = groups.findIndex((g) =>
+        g.some((x) => {
+          const q = byId.get(x)!;
+          return (q.type === "question" || q.type === "open_loop") && q.sourceEventId === s.answersEventId;
+        }),
+      );
+      if (home >= 0 && !groups[home]!.some((x) => cannot.has(x < s.id ? `${x}|${s.id}` : `${s.id}|${x}`))) {
+        groups[home]!.push(s.id);
+        groupOf.set(s.id, home);
+        continue;
+      }
+    }
     let best = -1;
     let bestScore = 0;
     groups.forEach((g, i) => {
@@ -535,6 +556,22 @@ function buildIdea(ids: string[], byId: Map<string, MiningThought>, sim: Similar
       loops.push({ id: `loop_${t.id}`, statement: t.statement, createdAt: t.createdAt, resolved: false });
     } else if (t.type === "contradiction") {
       loops.push({ id: `loop_${t.id}`, statement: `Unresolved contradiction: ${t.statement}`, createdAt: t.createdAt, resolved: false });
+    } else if (t.answersEventId) {
+      // It names the question it answers (validated at extraction): close exactly that one, whatever
+      // type the answer was labelled -- and nothing else. If that question isn't open in this idea
+      // (the AI asked it, or it was never captured), this answers nothing here: guessing would close
+      // an unrelated question, and losing track of a real open question is the worse mistake.
+      const asked = loops.filter((l) => !l.resolved && byId.get(l.id.slice("loop_".length))?.sourceEventId === t.answersEventId);
+      let pick = asked.at(-1);
+      let bestScore = -1;
+      for (const l of asked) {
+        const sc = sim.between(t.id, l.id.slice("loop_".length));
+        if (sc > bestScore) {
+          bestScore = sc;
+          pick = l;
+        }
+      }
+      if (pick) pick.resolved = true;
     } else if (t.type === "resolution") {
       const open = loops.filter((l) => !l.resolved);
       if (open.length === 0) continue;

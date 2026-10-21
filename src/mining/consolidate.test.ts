@@ -158,3 +158,56 @@ describe("a person's merge holds whatever kind of thought it names", () => {
     expect(home.thoughtIds).toContain("q2xx");
   });
 });
+
+describe("an answer that names its question", () => {
+  const idea = () => th("We should charge per seat rather than a flat monthly fee.", "new_idea", "c1", 0);
+
+  test("closes that question whatever type the answer was labelled", () => {
+    const i = idea();
+    const q = th("Do guest collaborators count toward the bill?", "question", "c1", 1);
+    const answer = th("Five free guests per account, then they are billed like members.", "decision", "c1", 3, 1, { answersEventId: q.sourceEventId });
+    const out = consolidate([i, q, answer]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.node.openLoops.map((l) => l.resolved)).toEqual([true]);
+  });
+
+  test("closes the question it names, not the one it merely resembles more", () => {
+    const i = idea();
+    const guests = th("Do guest collaborators count toward the bill?", "question", "c1", 1);
+    const discount = th("Should we offer a yearly discount on the bill?", "question", "c1", 2);
+    // Reads like the discount answer, but names the guests question.
+    const answer = th("A yearly discount of two months free on the bill.", "resolution", "c1", 4, 1, { answersEventId: guests.sourceEventId });
+    const loops = consolidate([i, guests, discount, answer])[0]!.node.openLoops;
+    expect(loops.find((l) => l.statement.startsWith("Do guest"))!.resolved).toBe(true);
+    expect(loops.find((l) => l.statement.startsWith("Should we offer"))!.resolved).toBe(false);
+  });
+
+  test("an answer to a question that is not here (the AI asked it, or it was never captured) closes nothing", () => {
+    const i = idea();
+    const q = th("Do guest collaborators count toward the bill?", "question", "c1", 1);
+    const answer = th("Yes, guests count after the first five.", "resolution", "c1", 3, 1, { answersEventId: "an-ai-message" });
+    const loops = consolidate([i, q, answer])[0]!.node.openLoops;
+    expect(loops.map((l) => l.resolved)).toEqual([false]); // without the link it would have closed this one
+  });
+
+  test("an answer with no link behaves as before: a resolution closes the closest open question", () => {
+    const i = idea();
+    const q = th("Do guest collaborators count toward the bill?", "question", "c1", 1);
+    const answer = th("Guests count after the first five.", "resolution", "c1", 3);
+    expect(consolidate([i, q, answer])[0]!.node.openLoops.map((l) => l.resolved)).toEqual([true]);
+  });
+
+  test("an answer joins the idea that holds its question, not the one it sounds like", () => {
+    const pricing = th("Charge per seat for team billing.", "new_idea", "c1", 0, 1);
+    const onboarding = th("Show imported history on the very first screen.", "new_idea", "c2", 0, 2);
+    const q = th("Can we pull history without waiting for the export email?", "question", "c2", 1, 2);
+    // Sounds like pricing; names the onboarding question.
+    const answer = th("Charge per seat for team billing: no, the extension reads it directly.", "resolution", "c3", 0, 9, { answersEventId: q.sourceEventId });
+    const out = consolidate([pricing, onboarding, q, answer]);
+    const home = out.find((o) => o.thoughtIds.includes(answer.id))!;
+    expect(home.thoughtIds).toContain(q.id);
+    expect(home.thoughtIds).not.toContain(pricing.id);
+    expect(home.node.openLoops.map((l) => l.resolved)).toEqual([true]);
+  });
+});
+

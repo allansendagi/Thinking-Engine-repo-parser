@@ -128,3 +128,35 @@ describe("narration and duplicate hygiene", () => {
     expect(out.events).toHaveLength(2);
   });
 });
+
+describe("answers_event_id", () => {
+  // c1_m0 is the person's question; c1_m1 is the AI's; c1_m2 and c1_m5 are the person's later turns.
+  const answer = (over: Record<string, unknown>) => event({ type: "resolution", statement: "Bill per active member.", answers_event_id: "c1_m0", ...over });
+
+  test("keeps a link to the person's own earlier message", async () => {
+    const out = await run(answer({}));
+    expect(out.events[0]!.answersEventId).toBe("c1_m0");
+  });
+
+  test("whatever the answer was labelled, the link is kept", async () => {
+    const out = await run(answer({ type: "decision" }));
+    expect(out.events[0]!.type).toBe("decision");
+    expect(out.events[0]!.answersEventId).toBe("c1_m0");
+  });
+
+  test("drops a link to the AI's message, a later message, itself, an invented id, or from a question -- the event itself stays", async () => {
+    for (const bad of ["c1_m1", "c1_m5", "c1_m2", "c1_m99", "not-an-id"]) {
+      const out = await run(answer({ answers_event_id: bad }));
+      expect(out.events).toHaveLength(1);
+      expect(out.events[0]!.answersEventId).toBeUndefined();
+    }
+    const q = await run(answer({ type: "question", statement: "How should we price this?", answers_event_id: "c1_m0", source_event_id: "c1_m2", evidence_quote: "per active member it is" }));
+    expect(q.events[0]!.answersEventId).toBeUndefined();
+  });
+
+  test("absent or null is fine", async () => {
+    expect((await run(event({}))).events[0]!.answersEventId).toBeUndefined();
+    expect((await run(answer({ answers_event_id: null }))).events[0]!.answersEventId).toBeUndefined();
+  });
+});
+

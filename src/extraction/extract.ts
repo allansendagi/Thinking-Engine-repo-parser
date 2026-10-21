@@ -59,6 +59,20 @@ function checkGrounding(
   return { grounded: true };
 }
 
+/**
+ * The question an event says it answers, if the link holds up: an EARLIER message of the person's
+ * own, in the same conversation. A link that doesn't hold (invented id, the AI's message, a later
+ * message, another conversation) is dropped -- the event is still good, it just closes nothing. A
+ * question event is never itself an answer.
+ */
+function validAnswerLink(event: ExtractedEvent, eventsById: Map<string, CanonicalEvent>): string | undefined {
+  const target = event.answers_event_id ? eventsById.get(event.answers_event_id) : undefined;
+  const source = eventsById.get(event.source_event_id);
+  if (!target || !source || event.type === "question" || event.type === "open_loop") return undefined;
+  if (target.role !== "user" || target.conversationId !== source.conversationId || target.index >= source.index) return undefined;
+  return target.id;
+}
+
 export interface ExtractionOutcome {
   events: CognitiveEvent[];
   /** Events the model returned but that failed the grounding check -- kept for eval visibility. */
@@ -257,6 +271,7 @@ async function extractOnce(
         candidate.adopted_from_event_id && candidate.adopted_quote
           ? { sourceEventId: candidate.adopted_from_event_id, quote: candidate.adopted_quote }
           : undefined,
+      answersEventId: validAnswerLink(candidate, eventsById),
     });
   }
 

@@ -23,17 +23,19 @@ export interface ThoughtRow {
   role: "position" | "option" | "reason" | null;
   /** Set when the thought adopts something the AI suggested (grounded at extraction). */
   adoptedSourceEventId: string | null;
+  /** The message where the person asked the question this thought answers (validated at extraction). */
+  answersEventId: string | null;
 }
 
 export function listThoughts(db: Database): ThoughtRow[] {
   const rows = db
     .query(
-      `SELECT t.id, t.type, t.statement, t.persistence, t.source_event_id, t.evidence_quote, t.promoted, t.role, t.adopted_source_event_id,
+      `SELECT t.id, t.type, t.statement, t.persistence, t.source_event_id, t.evidence_quote, t.promoted, t.role, t.adopted_source_event_id, t.answers_event_id,
               c.created_at, c.conversation_id, c.source
          FROM (
-           SELECT id, type, statement, persistence, source_event_id, evidence_quote, 1 AS promoted, role, adopted_source_event_id FROM cognitive_events
+           SELECT id, type, statement, persistence, source_event_id, evidence_quote, 1 AS promoted, role, adopted_source_event_id, answers_event_id FROM cognitive_events
            UNION ALL
-           SELECT id, type, statement, persistence, source_event_id, evidence_quote, 0 AS promoted, role, adopted_source_event_id FROM discarded_events
+           SELECT id, type, statement, persistence, source_event_id, evidence_quote, 0 AS promoted, role, adopted_source_event_id, answers_event_id FROM discarded_events
             WHERE id NOT IN (SELECT id FROM cognitive_events)
          ) t
          JOIN canonical_events c ON c.id = t.source_event_id
@@ -41,7 +43,7 @@ export function listThoughts(db: Database): ThoughtRow[] {
     )
     .all() as {
     id: string; type: string; statement: string; persistence: string; source_event_id: string;
-    evidence_quote: string; promoted: number; role: string | null; adopted_source_event_id: string | null; created_at: string; conversation_id: string; source: string;
+    evidence_quote: string; promoted: number; role: string | null; adopted_source_event_id: string | null; answers_event_id: string | null; created_at: string; conversation_id: string; source: string;
   }[];
   return rows.map((r) => ({
     id: r.id,
@@ -56,6 +58,7 @@ export function listThoughts(db: Database): ThoughtRow[] {
     promoted: r.promoted === 1,
     role: r.role === "position" || r.role === "option" || r.role === "reason" ? r.role : null,
     adoptedSourceEventId: r.adopted_source_event_id,
+    answersEventId: r.answers_event_id,
   }));
 }
 

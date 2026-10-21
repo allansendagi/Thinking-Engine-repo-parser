@@ -171,12 +171,18 @@ export function oracleMiningThoughts(s: Scenario, withRoles = true): MiningThoug
 export function v2Miner(
   name: string,
   vectors: Map<string, number[]> | null,
-  opts: { roles?: boolean; meaningWeight?: number; anchorThreshold?: number } = {},
+  opts: {
+    roles?: boolean;
+    meaningWeight?: number;
+    anchorThreshold?: number;
+    /** The thoughts to group; the answer key's by default, or what a real extraction produced. */
+    thoughts?: (s: Scenario) => MiningThought[];
+  } = {},
 ): Miner {
   return {
     name,
     async mine(s) {
-      const thoughts = oracleMiningThoughts(s, opts.roles ?? true);
+      const thoughts = opts.thoughts ? opts.thoughts(s) : oracleMiningThoughts(s, opts.roles ?? true);
       const byThought = new Map<string, number[]>();
       if (vectors) for (const t of thoughts) {
         const v = vectors.get(t.statement);

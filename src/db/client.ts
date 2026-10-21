@@ -19,9 +19,11 @@ const ADD_COLUMNS: [table: string, column: string][] = [
   ["cognitive_events", "role TEXT"],
   ["cognitive_events", "adopted_source_event_id TEXT"],
   ["cognitive_events", "adopted_quote TEXT"],
+  ["cognitive_events", "answers_event_id TEXT"],
   ["discarded_events", "role TEXT"],
   ["discarded_events", "adopted_source_event_id TEXT"],
   ["discarded_events", "adopted_quote TEXT"],
+  ["discarded_events", "answers_event_id TEXT"],
   ["idea_verdicts", "origin TEXT"],
   ["idea_corrections", "origin TEXT"],
 ];
