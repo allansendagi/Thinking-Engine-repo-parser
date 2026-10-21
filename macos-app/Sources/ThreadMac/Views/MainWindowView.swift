@@ -43,6 +43,7 @@ struct MainWindowView: View {
         .navigationTitle("")
         .frame(minWidth: 900, minHeight: 560)
         .background { VisualEffectBackground() }
+        .ideaCorrectionSheets()
         .sheet(item: $appState.transcript) { t in
             ConversationView(transcript: t).environmentObject(appState)
         }

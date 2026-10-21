@@ -67,6 +67,7 @@ struct RootView: View {
                 .stroke(Theme.edgeHairline, lineWidth: 0.5)   // edge hairline
         )
         .task { if !appState.needsReconnect { await appState.refresh() } }
+        .ideaCorrectionSheets()
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPaste) { PasteView() }
         .sheet(item: $appState.transcript) { t in

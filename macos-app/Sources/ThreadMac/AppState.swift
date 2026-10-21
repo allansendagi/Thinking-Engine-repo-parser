@@ -1656,6 +1656,68 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Merge / Split sheet currently shown (one at a time), for a given idea.
+    @Published var correction: IdeaCorrection?
+
+    /// The sheets read the open idea's thoughts, so make sure this idea is the open one first
+    /// (a list row's menu can name an idea that isn't).
+    func beginCorrection(_ c: IdeaCorrection) async {
+        let id: String
+        switch c { case .merge(let i), .split(let i): id = i }
+        if selectedTrace?.idea.id != id { await openIdea(id) }
+        correction = c
+    }
+
+    /// "These two are one idea." Online only: the server regroups, then we re-read. Closes the
+    /// page if this idea was folded away.
+    func mergeIdea(_ id: String, into otherId: String) async -> Bool {
+        guard isPaired, !isOffline else {
+            errorMessage = "Merging needs a connection. Try again when you're back online."
+            return false
+        }
+        do {
+            try await client.mergeIdea(id: id, into: otherId)
+            await settleAfterCorrection(openingIdea: otherId)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    /// "Some of these thoughts are a different idea." Online only.
+    func splitIdea(_ id: String, thoughtIds: [String]) async -> Bool {
+        guard isPaired, !isOffline else {
+            errorMessage = "Splitting needs a connection. Try again when you're back online."
+            return false
+        }
+        do {
+            try await client.splitIdea(id: id, thoughtIds: thoughtIds)
+            await settleAfterCorrection(openingIdea: id)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    /// The server regroups in the background; read again now and a little later so the lists catch up.
+    private func settleAfterCorrection(openingIdea id: String) async {
+        selectedTrace = nil
+        await refresh()
+        await openIdea(id)
+        for delay in [1.2, 2.5] {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            await refresh()
+        }
+        if selectedTrace?.idea.id != id { await openIdea(id) }
+    }
+
+    /// Other ideas this one could be merged into, by title (this idea excluded).
+    func mergeCandidates(for id: String) -> [IdeaSummary] {
+        (thinkingState?.currentIdeas ?? []).filter { $0.id != id }
+    }
+
     func closeIdea() {
         selectedIdeaId = nil
         selectedTrace = nil
