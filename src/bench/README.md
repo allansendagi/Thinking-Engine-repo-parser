@@ -44,3 +44,38 @@ guard grouping quality in CI. Regenerate after the corpus changes (the loader re
 
 `bun src/bench/diagSplits.ts` shows why ideas split: the groups a scattered idea landed in, how close the
 split came to a merge, and whether the leftover thoughts share a conversation with the rest.
+
+
+## Live extraction (spend-capped)
+
+`bun src/bench/liveExtract.ts` runs production's own extraction path (`extractCognitiveEvents`, one call per
+conversation, the real extraction model) over the bench scenarios, groups the extracted statements with
+Voyage exactly as the server does, and scores them next to the answer-key ceiling. Use it to test a prompt
+change on real model output before shipping it:
+
+    railway run -- sh -c 'cd <checkout> && LIVE_BUDGET_USD=2 bun src/bench/liveExtract.ts --seeds tuned --variant baseline --label A1'
+
+- **Cost guard:** every call is metered from the API's real token usage at conservative prices into
+  `eval/out/live-spend.json`, which is checked before each call; the run stops at `LIVE_BUDGET_USD`
+  (default 4.00). Results are cached per conversation, so rerunning a label is free and a stopped run resumes.
+- A prompt variant is a string transform in `MeteredProvider.complete`; add one, run `baseline` and the
+  variant on the same seeds, and compare. One run of each is noisy on this small suite -- treat gaps under a
+  few points on a 15-20 item metric as noise, and confirm on `--seeds held` before changing the prompt.
+
+### What it found (2026-10-21, Haiku 4.5 extraction, tuned seeds, one run each)
+
+| | answer-key thoughts | live extraction | + "self-contained statements" rule | + sharper `resolution` definition |
+|---|---|---|---|---|
+| Grouping F1 | 86.1% | 86.9% | 87.0% | 85.8% |
+| Ideas split into duplicates | 38.1% | 31.7% | 31.7% | 33.3% |
+| Answered questions closed | 77.8% | 22.2% | 16.7% | 72.2% |
+| Open questions still open | 100% | 83.3% | 88.9% | 61.1% |
+| Open questions wrongly closed | 0 | 1 | 0 | 4 |
+
+- Real extraction already groups as well as the answer key (its statements are rewritten, so the bench's rougher
+  gold sentences understate it). Asking for self-contained statements changes nothing.
+- The model labels most answers as `decision`/`new_idea`/`claim`, not `resolution` (5 vs 18 in the key), so
+  answered questions stay open. A sharper definition fixes the labels (19 resolutions) but then closes questions the
+  key leaves open. Letting a decision close a question in code (similarity floor 0.2-0.7), and requiring a minimum
+  match for a resolution to close one, were tried offline on the cached output: the same trade-off, no free win.
+  None shipped: deciding where that line sits needs labels from real use, not this synthetic key.
