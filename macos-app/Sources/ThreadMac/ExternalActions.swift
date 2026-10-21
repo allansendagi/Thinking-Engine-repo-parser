@@ -20,7 +20,7 @@ enum ThreadAction: Equatable {
     case recall(String)
     /// Open the panel on this idea's detail.
     case openIdea(String)
-    /// Open the panel on the Open questions tab.
+    /// Open the panel on the Open loops tab.
     case openLoops
     /// Build + copy the continuation packet for this idea (opens the panel on its detail).
     case continueIdea(String)

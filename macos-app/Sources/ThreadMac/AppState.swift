@@ -6,7 +6,7 @@ import SwiftUI
 /// `@State` so an external surface (the `thread://` scheme, Services) can switch to it, and so
 /// it survives the list⇄detail swap — same reasoning as `listSelection`.
 enum ListTab: String, CaseIterable, Identifiable {
-    case recent = "Recent", loops = "Open questions", all = "All"
+    case recent = "Recent", loops = "Open loops", all = "All"
     var id: String { rawValue }
 }
 
@@ -20,6 +20,8 @@ enum AllMode: String, CaseIterable, Identifiable {
 @MainActor
 final class AppState: ObservableObject {
     init() {
+        Theme.accentOverride = accent.color   // seed from the persisted choice at launch
+
         // Local-first: hydrate the panel from the last synced snapshot before any network call,
         // so recall renders instantly and works offline. `refresh()` keeps the snapshot current.
         if let snap = LocalStore.load(userId: CredentialStore.userId) {
@@ -294,6 +296,14 @@ final class AppState: ObservableObject {
 
     // MARK: - Appearance preferences (Settings ▸ Appearance)
 
+    @Published var accent: AccentChoice =
+        AccentChoice(rawValue: UserDefaults.standard.string(forKey: "thread.accent") ?? "") ?? .blue
+    {
+        didSet {
+            UserDefaults.standard.set(accent.rawValue, forKey: "thread.accent")
+            Theme.accentOverride = accent.color
+        }
+    }
     @Published var density: Density =
         Density(rawValue: UserDefaults.standard.string(forKey: "thread.density") ?? "") ?? .regular
     {

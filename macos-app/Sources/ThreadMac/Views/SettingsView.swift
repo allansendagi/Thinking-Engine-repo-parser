@@ -29,7 +29,7 @@ struct SettingsView: View {
                 Text("Settings").font(.headline).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28).padding(.top, 16)
             }
             Form { settingsContent }
-                .formStyle(.grouped)
+                .formStyle(.grouped).tint(Theme.accent)
             if !embedded {
                 Divider()
                 footer.padding(12)
@@ -326,11 +326,43 @@ private struct AppearanceSection: View {
 
     var body: some View {
         Section("Appearance") {
+            LabeledContent("Accent") {
+                HStack(spacing: 10) {
+                    ForEach(AccentChoice.allCases) { choice in
+                        Button { appState.accent = choice } label: {
+                            AccentSwatch(choice: choice, selected: appState.accent == choice)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(choice.label) accent")
+                        .accessibilityAddTraits(appState.accent == choice ? .isSelected : [])
+                    }
+                }
+            }
             Picker("Density", selection: $appState.density) {
                 ForEach(Density.allCases) { Text($0.label).tag($0) }
             }
             Toggle("Show snippet lines", isOn: $appState.showSnippets)
         }
+    }
+}
+
+/// One accent colour option: a filled circle, ringed with a checkmark when chosen.
+private struct AccentSwatch: View {
+    let choice: AccentChoice
+    let selected: Bool
+
+    var body: some View {
+        Circle()
+            .fill(choice.color)
+            .frame(width: 20, height: 20)
+            .overlay {
+                if selected {
+                    Image(systemName: "checkmark").font(.caption2.weight(.bold)).foregroundStyle(.white)
+                }
+            }
+            .overlay(Circle().stroke(Color.primary.opacity(selected ? 0.85 : 0), lineWidth: 1.5).padding(-2.5))
+            .contentShape(Circle())
+            .help(choice.label)
     }
 }
 

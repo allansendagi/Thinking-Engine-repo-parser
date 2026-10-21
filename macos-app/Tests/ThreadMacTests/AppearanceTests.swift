@@ -115,7 +115,7 @@ final class AppearanceTests: XCTestCase {
     func testRenderEveryScreen() throws {
         let w = Theme.panelWidth, h = Theme.panelHeight
 
-        // The panel: Recent (with the lesson invitation), Open questions, All -> Ideas.
+        // The panel: Recent (with the lesson invitation), Open loops, All -> Ideas.
         let lesson = try JSONDecoder().decode(Lesson.self, from: Data(Self.lessonJSON.utf8))
         let recent = try sample { $0.lesson = lesson }
         try render("panel-recent", width: w, height: h, state: recent) { RootView() }
@@ -127,7 +127,7 @@ final class AppearanceTests: XCTestCase {
         // One idea, collapsed and with its history open.
         let idea = try sample { $0.selectedIdeaId = "i1"; $0.selectedTrace = try Self.trace() }
         try render("idea-collapsed", width: w, height: h, state: idea) { RootView() }
-        DisclosureDefaults.startOpen = ["How your thinking changed", "Sources"]
+        DisclosureDefaults.startOpen = ["How your thinking changed", "Open loops", "Sources"]
         let open = try sample { $0.selectedIdeaId = "i1"; $0.selectedTrace = try Self.trace() }
         try render("idea-open", width: w, height: h, state: open) { RootView() }
         DisclosureDefaults.startOpen = []
