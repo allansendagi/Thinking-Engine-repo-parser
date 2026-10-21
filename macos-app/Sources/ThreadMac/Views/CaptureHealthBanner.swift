@@ -9,34 +9,12 @@ struct CaptureHealthBanner: View {
 
     var body: some View {
         if let notice = appState.captureHealthNotice {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11)).foregroundStyle(Theme.ink(0.55))
-                    Text(notice.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 8)
-                    Button {
-                        appState.dismissCaptureHealthNotice()
-                    } label: {
-                        Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
-                    }
-                    .buttonStyle(.plain).foregroundStyle(Theme.ink(0.4))
-                    .help("Dismiss until next launch")
-                    .accessibilityLabel("Dismiss")
-                    .accessibilityHint("Hides this until the next launch")
-                }
-                if let detail = notice.detail {
-                    Text(detail)
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.ink(0.04), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.ink(0.08)))
+            NoticeBox(
+                symbol: "exclamationmark.triangle.fill",
+                title: notice.title,
+                detail: notice.detail,
+                dismiss: { appState.dismissCaptureHealthNotice() }
+            )
             .padding(.horizontal, 12)
             .padding(.top, 8)
         }

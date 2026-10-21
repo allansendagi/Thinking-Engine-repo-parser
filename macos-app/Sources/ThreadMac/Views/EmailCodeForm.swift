@@ -21,42 +21,54 @@ struct EmailCodeForm: View {
     enum Step { case email, code }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.subheadline).fontWeight(.medium)
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.subheadline.weight(.medium))
 
             if step == .email {
                 TextField("you@example.com", text: $email)
                     .textFieldStyle(.roundedBorder)
                     .textContentType(.emailAddress)
-                Button(appState.authBusy ? "Sending…" : "Send code") {
-                    Task { if await sendCode(email.trimmingCharacters(in: .whitespaces)) { step = .code } }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(appState.authBusy || !email.contains("@"))
+                    .onSubmit(sendEmailCode)
+                Button(appState.authBusy ? "Sending…" : "Send Code", action: sendEmailCode)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSend)
             } else {
-                Text("Code sent to \(email)").font(.caption).foregroundColor(.secondary)
+                Text("Code sent to \(email)").font(.subheadline).foregroundStyle(.secondary)
                 TextField("123456", text: $code)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: code) { code = String(code.filter(\.isNumber).prefix(6)) }
+                    .onSubmit(verifyCode)
                 HStack {
-                    Button(appState.authBusy ? "Verifying…" : "Verify") {
-                        Task {
-                            if await verify(email.trimmingCharacters(in: .whitespaces), code) {
-                                step = .email; email = ""; code = ""; onDone()
-                            }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(appState.authBusy || code.count != 6)
                     Button("Back") { step = .email; code = ""; appState.authError = nil }
-                        .controlSize(.small)
+                    Spacer()
+                    Button(appState.authBusy ? "Verifying…" : "Verify", action: verifyCode)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canVerify)
                 }
             }
 
             if let e = appState.authError {
-                Text(e).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                Text(e).font(.subheadline).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
         }
         .onAppear { if email.isEmpty { email = prefillEmail } }
+    }
+
+    // Return in a field does what the button does, under the same conditions.
+    private var canSend: Bool { !appState.authBusy && email.contains("@") }
+    private var canVerify: Bool { !appState.authBusy && code.count == 6 }
+
+    private func sendEmailCode() {
+        guard canSend else { return }
+        Task { if await sendCode(email.trimmingCharacters(in: .whitespaces)) { step = .code } }
+    }
+
+    private func verifyCode() {
+        guard canVerify else { return }
+        Task {
+            if await verify(email.trimmingCharacters(in: .whitespaces), code) {
+                step = .email; email = ""; code = ""; onDone()
+            }
+        }
     }
 }
