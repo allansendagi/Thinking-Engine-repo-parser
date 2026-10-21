@@ -80,7 +80,7 @@ struct MenuBarListView: View {
         let ideas = (appState.thinkingState?.currentIdeas ?? []).filter { !appState.maybeIdeaIds.contains($0.id) }
         switch tab {
         case .loops:
-            return openLoopGroups(openLoops, flatLabel: "Open loops",
+            return openLoopGroups(openLoops, flatLabel: "Open questions",
                                   sourceLabelFor: { ideaSourceLabel[$0] },
                                   whenFor: { lastTouched[$0] })
         case .recent, .all:
@@ -105,8 +105,8 @@ struct MenuBarListView: View {
 
             // Recent is your ideas, one row each -- an idea with an open question carries the
             // open-loop mark instead of being replaced by its questions (that turned Recent into
-            // a list of questions). The questions themselves live in Open loops and, when you're
-            // back on the subject, in "Still unanswered" above.
+            // a list of questions). The questions themselves live in Open questions and, when you're
+            // back on the subject, in the "Open questions" section above.
             // Pinned ideas lead both lists (Recent and All -> Ideas), then the rest by date.
             return pendingGroup + revisitGroup + pinnedThenDated(ideas.map(ideaRow), isPinned: appState.isPinned)
         }

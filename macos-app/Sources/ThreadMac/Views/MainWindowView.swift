@@ -8,7 +8,7 @@ struct MainWindowView: View {
     @EnvironmentObject var appState: AppState
 
     enum Tab: String, CaseIterable, Identifiable {
-        case ideas = "Ideas", loops = "Open Loops", settings = "Settings"
+        case ideas = "Ideas", loops = "Open Questions", settings = "Settings"
         var id: String { rawValue }
         var icon: String {
             switch self {
@@ -225,7 +225,7 @@ private struct LoopListColumn: View {
     @EnvironmentObject var appState: AppState
 
     private var groups: [IdeaRowGroup] {
-        openLoopGroups(appState.thinkingState?.openLoops ?? [], flatLabel: "Unresolved")
+        openLoopGroups(appState.thinkingState?.openLoops ?? [], flatLabel: "Open questions")
     }
 
     var body: some View {

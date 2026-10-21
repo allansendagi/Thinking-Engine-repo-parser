@@ -135,18 +135,18 @@ struct IdeaRowGroup: Identifiable {
     let id: String
     let label: String
     let rows: [IdeaRow]
-    /// Set when this group is one idea's questions inside a named section (e.g. "Still unanswered"):
+    /// Set when this group is one idea's questions inside a named section (e.g. "Open questions"):
     /// the section's heading shows once, above the first such group, and `label` is the idea's name.
     var section: String? = nil
     var leadsSection = false
 }
 
-/// "Still unanswered" on the Recent tab. The same rule the Open loops tab uses: while every idea
+/// The "Open questions" section on the Recent tab. The same rule the Open loops tab uses: while every idea
 /// has at most one question the list stays flat (each row names its idea); once any idea has two or
 /// more, the questions are grouped under that idea's name, shown once, so the same title isn't
 /// printed under every question and several questions from one idea read as a set.
 /// Order is the server's (it ranks what to resurface); ideas appear where their first question does.
-func revisitGroups(_ revisit: [ThinkingStateResponse.Revisit], section: String = "Still unanswered") -> [IdeaRowGroup] {
+func revisitGroups(_ revisit: [ThinkingStateResponse.Revisit], section: String = "Open questions") -> [IdeaRowGroup] {
     guard !revisit.isEmpty else { return [] }
 
     func row(_ r: ThinkingStateResponse.Revisit, showIdea: Bool) -> IdeaRow {

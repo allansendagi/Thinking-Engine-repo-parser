@@ -171,7 +171,7 @@ struct IdeaDetailView: View {
         return trace.idea.currentFormulation
     }
 
-    // MARK: the unified card — Structure/Related, Evolution, Still unresolved, Sources
+    // MARK: the unified card — Structure/Related, Evolution, Open questions, Sources
 
     private func structureCard(_ trace: IdeaTrace) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -285,13 +285,13 @@ struct IdeaDetailView: View {
 
     // MARK: still unresolved
 
-    /// Count only the still-open loops ("Still unresolved" shouldn't count a resolved one) but
+    /// Count only the still-open loops ("Open questions" shouldn't count an answered one) but
     /// the expanded content keeps every loop, resolved included with its strikethrough — no
     /// capability lost, just collapsed by default.
     private func unresolvedRow(_ trace: IdeaTrace) -> some View {
         let open = trace.idea.openLoops.filter { !$0.resolved }
-        return AccordionRow(title: "Still unresolved", showDivider: true) { _ in
-            countLabel(open.count, singular: "question", plural: "questions", zero: "All resolved")
+        return AccordionRow(title: "Open questions", showDivider: true) { _ in
+            countLabel(open.count, singular: "question", plural: "questions", zero: "All answered")
         } content: {
             QuestionList(loops: trace.idea.openLoops) { loop in
                 Task { await appState.toggleLoop(loop.id, resolved: !loop.resolved) }
