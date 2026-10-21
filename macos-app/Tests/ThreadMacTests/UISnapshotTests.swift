@@ -32,11 +32,17 @@ final class UISnapshotTests: XCTestCase {
                 .padding(20)
                 .frame(width: width)
                 .background(Color(nsColor: .windowBackgroundColor))
+                .environment(\.controlActiveState, .key) // as in the frontmost window: accent-colored defaults
             let host = NSHostingView(rootView: framed)
             let size = NSSize(width: width, height: host.fittingSize.height)
-            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+            // A real window, parked far off screen and made key, so controls draw as they do in the
+            // frontmost window (accent-colored default buttons) without anything appearing on screen.
+            let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: size.width, height: size.height), styleMask: [.titled], backing: .buffered, defer: false)
             window.appearance = appearance
             window.contentView = host
+            window.orderFrontRegardless()
+            window.makeKey()
+            defer { window.orderOut(nil) }
             host.frame = NSRect(origin: .zero, size: size)
             host.layoutSubtreeIfNeeded()
             let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
@@ -50,8 +56,16 @@ final class UISnapshotTests: XCTestCase {
         return written
     }
 
+    func testWelcomeReady() throws {
+        try snap("welcome-ready", width: 360) { WelcomeView(forcedMode: .ready).environmentObject(AppState()) }
+    }
+
+    func testWelcomeSignedOut() throws {
+        try snap("welcome-signed-out", width: 360) { WelcomeView(forcedMode: .signedOut).environmentObject(AppState()) }
+    }
+
     func testWelcomeSettingUp() throws {
-        try snap("welcome-setting-up", width: 360) { WelcomeView().environmentObject(AppState()) }
+        try snap("welcome-setting-up", width: 360) { WelcomeView(forcedMode: .settingUp).environmentObject(AppState()) }
     }
 
     func testQuestionList() throws {
@@ -62,5 +76,39 @@ final class UISnapshotTests: XCTestCase {
             OpenLoop(id: "3", statement: "Is a SOC 2 report a must-have ahead of landing enterprise customer number one?", createdAt: "2026-10-20T10:09:00Z", resolved: true),
         ]
         try snap("question-list", width: 380) { QuestionList(loops: loops) { _ in } }
+    }
+
+    // MARK: the small screens -- the states a person can actually land in
+
+    func testReconnectKnownEmail() throws {
+        let state = AppState()
+        state.reconnect = .init(knownEmail: "allan@example.com", cachedIdeaCount: 3, cachedTitles: ["Per-seat pricing", "Security review", "First hire"], mismatch: false)
+        try snap("reconnect-known", width: 360) { ReconnectView().environmentObject(state) }
+    }
+
+    func testReconnectMismatch() throws {
+        let state = AppState()
+        state.reconnect = .init(knownEmail: nil, cachedIdeaCount: 12, cachedTitles: ["Per-seat pricing", "Security review"], mismatch: true)
+        try snap("reconnect-mismatch", width: 360) { ReconnectView().environmentObject(state) }
+    }
+
+    func testEmailCodeForm() throws {
+        let state = AppState()
+        try snap("email-code-form", width: 320) {
+            EmailCodeForm(title: "Sign in to your Thread account", sendCode: { _ in true }, verify: { _, _ in true }, prefillEmail: "allan@example.com")
+                .environmentObject(state)
+        }
+    }
+
+    func testPaywallBanner() throws {
+        let state = AppState()
+        state.account = try JSONDecoder().decode(AccountStatus.self, from: Data(#"{"plan":"free","status":"free","isPro":false,"isAdmin":false,"canCapture":false,"ideaCount":25,"ideaCap":25,"currentPeriodEnd":null,"email":"allan@example.com","billingEnabled":true}"#.utf8))
+        try snap("paywall-banner", width: 420) { PaywallBanner().environmentObject(state) }
+    }
+
+    func testCaptureHealthBanner() throws {
+        let state = AppState()
+        state.captureHealth = CaptureHealth(healthy: false, unresolvedConversations: 0, sensors: [.init(sensor: "browser_extension", observations: 12, failed: 7, degraded: true)])
+        try snap("capture-health-banner", width: 420) { CaptureHealthBanner().environmentObject(state) }
     }
 }

@@ -16,28 +16,28 @@ struct ReconnectView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(info.mismatch ? "That's a different account" : "Reconnect to sync")
-                    .font(.headline)
+                    .font(.title3.weight(.semibold))
                 Text(explainer)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             if info.cachedIdeaCount > 0 {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("\(info.cachedIdeaCount) idea\(info.cachedIdeaCount == 1 ? "" : "s") cached on this Mac")
-                        .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                    ForEach(info.cachedTitles, id: \.self) { title in
-                        Text("· \(title)")
-                            .font(.caption).foregroundColor(.secondary).lineLimit(1)
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(info.cachedIdeaCount) idea\(info.cachedIdeaCount == 1 ? "" : "s") cached on this Mac")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        ForEach(info.cachedTitles, id: \.self) { title in
+                            Text(title).font(.callout).lineLimit(1)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
             }
 
             if let email = info.knownEmail, !info.mismatch {
@@ -51,14 +51,13 @@ struct ReconnectView: View {
             }
 
             if let e = appState.authError {
-                Text(e).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                Text(e).font(.subheadline).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()
 
-            Button("Start fresh instead") { confirmingStartFresh = true }
-                .controlSize(.small)
-                .foregroundColor(.secondary)
+            Button("Start Fresh Instead…") { confirmingStartFresh = true }
+                .buttonStyle(.link)
         }
         .padding(16)
         .frame(width: 320)
@@ -81,29 +80,38 @@ struct ReconnectView: View {
     @ViewBuilder
     private func knownEmailFlow(_ email: String) -> some View {
         if !codeStep {
-            Button(appState.authBusy ? "Sending…" : "Send a code to \(maskedEmail(email))") {
-                Task { if await appState.sendSignInCode(email: email) { codeStep = true } }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(appState.authBusy)
-
-            Button("Use a different email") { appState.useAnotherEmailForReconnect() }
-                .controlSize(.small)
-        } else {
-            Text("Code sent to \(maskedEmail(email))").font(.caption).foregroundColor(.secondary)
-            TextField("123456", text: $code)
-                .textFieldStyle(.roundedBorder)
-                .onChange(of: code) { code = String(code.filter(\.isNumber).prefix(6)) }
-            HStack {
-                Button(appState.authBusy ? "Reconnecting…" : "Reconnect") {
-                    Task { _ = await appState.signIn(email: email, code: code) }
+            VStack(alignment: .leading, spacing: 10) {
+                Button(appState.authBusy ? "Sending…" : "Send a Code to \(maskedEmail(email))") {
+                    Task { if await appState.sendSignInCode(email: email) { codeStep = true } }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(appState.authBusy || code.count != 6)
-                Button("Back") { codeStep = false; code = ""; appState.authError = nil }
-                    .controlSize(.small)
+                .controlSize(.large)
+                .disabled(appState.authBusy)
+
+                Button("Use a Different Email") { appState.useAnotherEmailForReconnect() }
+                    .buttonStyle(.link)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Code sent to \(maskedEmail(email))").font(.subheadline).foregroundStyle(.secondary)
+                TextField("123456", text: $code)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: code) { code = String(code.filter(\.isNumber).prefix(6)) }
+                    .onSubmit { reconnect(email) }
+                HStack {
+                    Button("Back") { codeStep = false; code = ""; appState.authError = nil }
+                    Spacer()
+                    Button(appState.authBusy ? "Reconnecting…" : "Reconnect") { reconnect(email) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(appState.authBusy || code.count != 6)
+                }
             }
         }
+    }
+
+    private func reconnect(_ email: String) {
+        guard !appState.authBusy, code.count == 6 else { return }
+        Task { _ = await appState.signIn(email: email, code: code) }
     }
 
     private var explainer: String {
