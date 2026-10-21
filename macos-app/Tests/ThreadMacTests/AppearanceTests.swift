@@ -127,7 +127,7 @@ final class AppearanceTests: XCTestCase {
         // One idea, collapsed and with its history open.
         let idea = try sample { $0.selectedIdeaId = "i1"; $0.selectedTrace = try Self.trace() }
         try render("idea-collapsed", width: w, height: h, state: idea) { RootView() }
-        DisclosureDefaults.startOpen = ["How your thinking changed", "Sources"]
+        DisclosureDefaults.startOpen = ["How your thinking changed", "Open questions", "Sources"]
         let open = try sample { $0.selectedIdeaId = "i1"; $0.selectedTrace = try Self.trace() }
         try render("idea-open", width: w, height: h, state: open) { RootView() }
         DisclosureDefaults.startOpen = []
