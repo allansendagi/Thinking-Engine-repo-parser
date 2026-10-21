@@ -1,3 +1,4 @@
+import { ANCHOR_TYPES } from "../mining/consolidate";
 import type { CognitiveEvent, IdeaNode, ThinkingState } from "../types";
 
 export interface ThinkingStateOptions {
@@ -20,6 +21,22 @@ function matchesTopic(idea: IdeaNode, topic: string): boolean {
   if (idea.title.toLowerCase().includes(needle)) return true;
   if (idea.currentFormulation.toLowerCase().includes(needle)) return true;
   return idea.evolution.some((s) => s.formulation.toLowerCase().includes(needle));
+}
+
+/**
+ * A group made only of questions (and other things ABOUT an idea) with nothing the person stated
+ * is not an idea yet: it is questions waiting for one. Its questions still count (Open loops,
+ * "Still unanswered", search); it just isn't listed among the ideas. Computed from the thoughts'
+ * types, never stored, so the moment a position, decision or answer joins the group (the nightly
+ * regrouping does that) it becomes a real idea with no migration. When the thoughts aren't loaded
+ * the idea is treated as real: never hide on missing information.
+ */
+export function isQuestionsOnly(idea: IdeaNode, eventsById: Map<string, CognitiveEvent>): boolean {
+  if (idea.evolution.length === 0 || idea.decisions.length > 0) return false;
+  return idea.evolution.every((s) => {
+    const type = eventsById.get(s.cognitiveEventId)?.type;
+    return type !== undefined && !ANCHOR_TYPES.has(type);
+  });
 }
 
 /**
@@ -161,7 +178,7 @@ export function buildThinkingState(
 
   return {
     topic: options.topic ?? null,
-    currentIdeas: relevant.map((i) => ({
+    currentIdeas: relevant.filter((i) => !isQuestionsOnly(i, cognitiveEventsById)).map((i) => ({
       id: i.id,
       title: i.title,
       state: i.state,

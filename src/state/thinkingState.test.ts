@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildThinkingState } from "./thinkingState";
+import { buildThinkingState, isQuestionsOnly } from "./thinkingState";
 import type { CognitiveEvent, IdeaNode } from "../types";
 
 const now = new Date().toISOString();
@@ -113,5 +113,45 @@ describe("buildThinkingState", () => {
     const state = buildThinkingState([idea()], cognitiveEvents());
     expect(state.currentIdeas[0]?.latestSource).toBeNull();
     expect(state.openLoops[0]?.latestSource).toBeNull();
+  });
+
+  describe("ideas made only of questions", () => {
+    const ev = (id: string, type: CognitiveEvent["type"]): CognitiveEvent => ({
+      id, type, statement: id, confidence: 0.9, persistence: "high", sourceEventId: "s", evidenceQuote: id, additionalSourceEventIds: [],
+    });
+    const qOnly = (over: Partial<IdeaNode> = {}) =>
+      idea({
+        id: "idea_q", title: "What is the user's opinion?", decisions: [],
+        evolution: [
+          { cognitiveEventId: "q1", formulation: "What is it?", createdAt: now, sourceEventId: "s1" },
+          { cognitiveEventId: "q2", formulation: "Why?", createdAt: now, sourceEventId: "s2" },
+        ],
+        openLoops: [{ id: "loop_q1", statement: "What is it?", createdAt: now, resolved: false }],
+        ...over,
+      });
+    const questions = [ev("q1", "question"), ev("q2", "open_loop")];
+    const byId = (evs: CognitiveEvent[]) => new Map(evs.map((e) => [e.id, e]));
+
+    test("is not listed as an idea, but its questions still are", () => {
+      const state = buildThinkingState([qOnly(), idea()], [...cognitiveEvents(), ...questions]);
+      expect(state.currentIdeas.map((i) => i.id)).toEqual(["idea_1"]);
+      expect(state.openLoops.map((l) => l.loopId)).toContain("loop_q1");
+    });
+
+    test("becomes an idea the moment something stated joins it", () => {
+      const withPosition = qOnly({ evolution: [...qOnly().evolution, { cognitiveEventId: "c3", formulation: "Say it.", createdAt: now, sourceEventId: "s3" }] });
+      expect(isQuestionsOnly(withPosition, byId([...questions, ev("c3", "claim")]))).toBe(false);
+      // an answer (labelled a decision or claim) is something stated too
+      expect(isQuestionsOnly(withPosition, byId([...questions, ev("c3", "decision")]))).toBe(false);
+    });
+
+    test("an idea with a recorded decision is always an idea", () => {
+      expect(isQuestionsOnly(qOnly({ decisions: idea().decisions }), byId(questions))).toBe(false);
+    });
+
+    test("never hides on missing information", () => {
+      expect(isQuestionsOnly(qOnly(), new Map())).toBe(false);
+      expect(isQuestionsOnly(qOnly({ evolution: [] }), byId(questions))).toBe(false);
+    });
   });
 });

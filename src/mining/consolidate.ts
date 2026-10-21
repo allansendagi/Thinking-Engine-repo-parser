@@ -79,7 +79,7 @@ export interface ConsolidatedIdea {
   theme?: number;
 }
 
-const ANCHOR_TYPES: ReadonlySet<CognitiveEventType> = new Set(["new_idea", "claim", "refinement", "contradiction", "decision"]);
+export const ANCHOR_TYPES: ReadonlySet<CognitiveEventType> = new Set(["new_idea", "claim", "refinement", "contradiction", "decision"]);
 /** Does this thought state where the idea stands? Options and reasons are about it, not it. */
 function isPositional(t: MiningThought): boolean {
   return ANCHOR_TYPES.has(t.type) && !(t.type === "claim" && (t.role === "option" || t.role === "reason"));
