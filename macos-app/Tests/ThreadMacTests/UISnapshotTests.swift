@@ -208,5 +208,58 @@ final class UISnapshotTests: XCTestCase {
             }.environmentObject(state)
         }
     }
+
+    // MARK: the main app, drawn with example data (never the person's own)
+
+    private func exampleState() throws -> AppState {
+        let state = AppState()
+        let json = #"""
+        {"topic":null,
+         "currentIdeas":[
+           {"id":"i1","title":"Per-seat pricing","state":"developing","currentFormulation":"Charge per seat, with five free guests per account, billed yearly.","latestSource":"chatgpt"},
+           {"id":"i2","title":"SOC 2 before enterprise","state":"established","currentFormulation":"Start the Type I audit now and use the answer pack while it runs.","latestSource":"claude"},
+           {"id":"i3","title":"First hire","state":"contested","currentFormulation":"A generalist who owns the backend, in the office three days a week.","latestSource":"cursor"},
+           {"id":"i4","title":"Import without the export email","state":"developing","currentFormulation":"Read history directly from the site while people are signed in.","latestSource":"chatgpt"}],
+         "recentChanges":[],"decisions":[],
+         "openLoops":[
+           {"ideaId":"i1","ideaTitle":"Per-seat pricing","loopId":"l1","statement":"Do guest collaborators count toward the bill?","resolved":false,"createdAt":"2026-10-19T09:00:00Z"},
+           {"ideaId":"i1","ideaTitle":"Per-seat pricing","loopId":"l2","statement":"Should there be a yearly discount?","resolved":false,"createdAt":"2026-10-19T09:30:00Z"},
+           {"ideaId":"i3","ideaTitle":"First hire","loopId":"l3","statement":"Do we need this hire in the office every day?","resolved":false,"createdAt":"2026-10-20T08:00:00Z"}],
+         "contradictions":[],"relatedIdeas":[],
+         "revisit":[
+           {"ideaId":"i1","ideaTitle":"Per-seat pricing","loopId":"l1","statement":"Do guest collaborators count toward the bill?","raisedAt":"2026-10-19T09:00:00Z","backOnTopicAt":"2026-10-21T09:00:00Z","via":null},
+           {"ideaId":"i1","ideaTitle":"Per-seat pricing","loopId":"l2","statement":"Should there be a yearly discount?","raisedAt":"2026-10-19T09:30:00Z","backOnTopicAt":"2026-10-21T09:00:00Z","via":null},
+           {"ideaId":"i3","ideaTitle":"First hire","loopId":"l3","statement":"Do we need this hire in the office every day?","raisedAt":"2026-10-20T08:00:00Z","backOnTopicAt":"2026-10-21T09:00:00Z","via":null}]}
+        """#
+        state.thinkingState = try JSONDecoder().decode(ThinkingStateResponse.self, from: Data(json.utf8))
+        return state
+    }
+
+    func testPanelList() throws {
+        let state = try exampleState()
+        try snap("panel-list", width: 420, height: 760) { MenuBarListView().environmentObject(state) }
+    }
+
+    func testIdeaPage() throws {
+        let state = try exampleState()
+        let json = #"""
+        {"idea":{"id":"i1","title":"Per-seat pricing","state":"developing","currentFormulation":"Charge per seat, with five free guests per account, billed yearly.",
+          "evolution":[
+            {"formulation":"Gut says every user on the account should cost something.","createdAt":"2026-10-18T09:00:00Z","cognitiveEventId":"c1"},
+            {"formulation":"Bill per workspace instead of per person?","createdAt":"2026-10-18T09:20:00Z","cognitiveEventId":"c2"},
+            {"formulation":"Charge per seat, with five free guests per account, billed yearly.","createdAt":"2026-10-20T10:00:00Z","cognitiveEventId":"c3"}],
+          "openLoops":[
+            {"id":"l1","statement":"Do guest collaborators count toward the bill?","createdAt":"2026-10-19T09:00:00Z","resolved":true,"answeredBy":"Five free guests per account, then they are billed like members."},
+            {"id":"l2","statement":"Should there be a yearly discount?","createdAt":"2026-10-19T09:30:00Z","resolved":false}],
+          "decisions":[{"id":"d1","statement":"Going with yearly terms, charging only for people who actually use it.","decidedAt":"2026-10-20T10:05:00Z"}],
+          "relatedIdeaIds":[],"createdAt":"2026-10-18T09:00:00Z","updatedAt":"2026-10-20T10:05:00Z"},
+         "provenance":[
+           {"formulation":"Gut says every user on the account should cost something.","createdAt":"2026-10-18T09:00:00Z","sourceText":"I think every user on the account should cost something, rather than a flat monthly fee for everyone.","sourceRole":"user","source":"chatgpt","sourceUrl":null,"conversationId":"conv1"},
+           {"formulation":"Charge per seat, with five free guests per account, billed yearly.","createdAt":"2026-10-20T10:00:00Z","sourceText":"Settled: five free guests per account, the rest are billed like members. Yearly terms.","sourceRole":"user","source":"claude","sourceUrl":null,"conversationId":"conv2"}]}
+        """#
+        state.selectedTrace = try JSONDecoder().decode(IdeaTrace.self, from: Data(json.utf8))
+        state.selectedIdeaId = "i1"
+        try snap("idea-page", width: 420, height: 900) { IdeaDetailView().environmentObject(state) }
+    }
 }
 
