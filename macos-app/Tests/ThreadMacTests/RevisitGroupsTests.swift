@@ -18,7 +18,7 @@ final class RevisitGroupsTests: XCTestCase {
             try item("l2", idea: "b", "First hire", "In the office daily?"),
         ])
         XCTAssertEqual(groups.count, 1)
-        XCTAssertEqual(groups[0].label, "Open loops")
+        XCTAssertEqual(groups[0].label, "Still unanswered")
         XCTAssertNil(groups[0].section)
         XCTAssertEqual(groups[0].rows.count, 2)
         XCTAssertTrue(groups[0].rows[0].meta.contains("Per-seat pricing"), "flat rows say which idea they belong to")
@@ -32,7 +32,7 @@ final class RevisitGroupsTests: XCTestCase {
         ])
         XCTAssertEqual(groups.map(\.label), ["Per-seat pricing", "First hire"], "ideas in the order their first question appears")
         XCTAssertEqual(groups.map(\.rows.count), [2, 1])
-        XCTAssertTrue(groups.allSatisfy { $0.section == "Open loops" })
+        XCTAssertTrue(groups.allSatisfy { $0.section == "Still unanswered" })
         XCTAssertEqual(groups.map(\.leadsSection), [true, false], "the section heading shows once")
         XCTAssertFalse(groups[0].rows[0].meta.contains("Per-seat pricing"), "the idea's name is not repeated under each question")
     }

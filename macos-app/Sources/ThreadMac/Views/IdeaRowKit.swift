@@ -135,7 +135,7 @@ struct IdeaRowGroup: Identifiable {
     let id: String
     let label: String
     let rows: [IdeaRow]
-    /// Set when this group is one idea's questions inside a named section (e.g. "Open loops"):
+    /// Set when this group is one idea's questions inside a named section (e.g. "Still unanswered"):
     /// the section's heading shows once, above the first such group, and `label` is the idea's name.
     var section: String? = nil
     var leadsSection = false
@@ -146,7 +146,7 @@ struct IdeaRowGroup: Identifiable {
 /// more, the questions are grouped under that idea's name, shown once, so the same title isn't
 /// printed under every question and several questions from one idea read as a set.
 /// Order is the server's (it ranks what to resurface); ideas appear where their first question does.
-func revisitGroups(_ revisit: [ThinkingStateResponse.Revisit], section: String = "Open loops") -> [IdeaRowGroup] {
+func revisitGroups(_ revisit: [ThinkingStateResponse.Revisit], section: String = "Still unanswered") -> [IdeaRowGroup] {
     guard !revisit.isEmpty else { return [] }
 
     func row(_ r: ThinkingStateResponse.Revisit, showIdea: Bool) -> IdeaRow {

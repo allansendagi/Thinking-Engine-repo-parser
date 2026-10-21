@@ -106,7 +106,7 @@ struct MenuBarListView: View {
             // Recent is your ideas, one row each -- an idea with an open question carries the
             // open-loop mark instead of being replaced by its questions (that turned Recent into
             // a list of questions). The questions themselves live in Open loops and, when you're
-            // back on the subject, in the "Open loops" section above.
+            // back on the subject, in the "Still unanswered" section above.
             // Pinned ideas lead both lists (Recent and All -> Ideas), then the rest by date.
             return pendingGroup + revisitGroup + pinnedThenDated(ideas.map(ideaRow), isPinned: appState.isPinned)
         }
