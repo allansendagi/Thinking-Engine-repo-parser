@@ -27,8 +27,8 @@ function matchesTopic(idea: IdeaNode, topic: string): boolean {
  * A group made only of questions (and other things ABOUT an idea) with nothing the person stated
  * is not an idea yet: it is questions waiting for one. Its questions still count (Open loops,
  * "Still unanswered", search); it just isn't listed among the ideas. Computed from the thoughts'
- * types, never stored, so the moment a position, decision or answer joins the group (the nightly
- * regrouping does that) it becomes a real idea with no migration. When the thoughts aren't loaded
+ * types, never stored, so the moment a position, decision or answer joins the group (the next
+ * regrouping, a couple of minutes after new thinking, does that) it becomes a real idea with no migration. When the thoughts aren't loaded
  * the idea is treated as real: never hide on missing information.
  */
 export function isQuestionsOnly(idea: IdeaNode, eventsById: Map<string, CognitiveEvent>): boolean {
