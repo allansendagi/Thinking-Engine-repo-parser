@@ -135,6 +135,50 @@ struct IdeaRowGroup: Identifiable {
     let id: String
     let label: String
     let rows: [IdeaRow]
+    /// Set when this group is one idea's questions inside a named section (e.g. "Still unanswered"):
+    /// the section's heading shows once, above the first such group, and `label` is the idea's name.
+    var section: String? = nil
+    var leadsSection = false
+}
+
+/// "Still unanswered" on the Recent tab. The same rule the Open loops tab uses: while every idea
+/// has at most one question the list stays flat (each row names its idea); once any idea has two or
+/// more, the questions are grouped under that idea's name, shown once, so the same title isn't
+/// printed under every question and several questions from one idea read as a set.
+/// Order is the server's (it ranks what to resurface); ideas appear where their first question does.
+func revisitGroups(_ revisit: [ThinkingStateResponse.Revisit], section: String = "Still unanswered") -> [IdeaRowGroup] {
+    guard !revisit.isEmpty else { return [] }
+
+    func row(_ r: ThinkingStateResponse.Revisit, showIdea: Bool) -> IdeaRow {
+        let why = r.via.map { "Back on it via \(cleanIdeaTitle($0, fallback: $0))" }
+        let source = why ?? (showIdea ? cleanIdeaTitle(r.ideaTitle, fallback: r.ideaTitle) : nil)
+        return IdeaRow(
+            id: "loop:" + r.loopId,
+            title: deNarrate(r.statement.trimmingCharacters(in: .whitespaces)),
+            snippet: nil, meta: metaLine(source, r.raisedAt),
+            isLoop: true, ideaId: r.ideaId, when: r.raisedAt
+        )
+    }
+
+    var order: [String] = []
+    var byIdea: [String: [ThinkingStateResponse.Revisit]] = [:]
+    for r in revisit {
+        if byIdea[r.ideaId] == nil { order.append(r.ideaId) }
+        byIdea[r.ideaId, default: []].append(r)
+    }
+
+    if !byIdea.values.contains(where: { $0.count >= 2 }) {
+        return [IdeaRowGroup(id: "revisit", label: section, rows: revisit.map { row($0, showIdea: true) })]
+    }
+    return order.enumerated().map { i, id in
+        let rs = byIdea[id] ?? []
+        return IdeaRowGroup(
+            id: "revisit:" + id,
+            label: cleanIdeaTitle(rs.first?.ideaTitle ?? "", fallback: rs.first?.ideaTitle ?? "Untitled"),
+            rows: rs.map { row($0, showIdea: false) },
+            section: section, leadsSection: i == 0
+        )
+    }
 }
 
 /// "ChatGPT · 24m ago" — source + relative time. Falls back to just one, or "".
@@ -296,6 +340,25 @@ struct IdeaRowView: View {
 }
 
 /// The sticky "Today" / "Yesterday" section header, one style for both surfaces.
+/// An idea's name above its questions, inside a named section: quieter than a section heading.
+struct IdeaGroupHeading: View {
+    let label: String
+    let count: Int
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label).font(.subheadline.weight(.medium)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 8)
+            if count > 1 { Text("\(count) questions").font(.footnote).foregroundStyle(.tertiary) }
+        }
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.stickyTint)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
 struct IdeaRowSectionHeader: View {
     let label: String
     var body: some View {
