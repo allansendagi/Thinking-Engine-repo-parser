@@ -158,6 +158,10 @@ export interface OpenLoop {
   statement: string;
   createdAt: string;
   resolved: boolean;
+  /** The thought that closed this question, when Thread (not the person) closed it. Internal. */
+  resolvedBy?: string;
+  /** The wording of that answer, for "Answered by: ..." -- only when Thread closed it. */
+  answeredBy?: string;
 }
 
 export interface Decision {

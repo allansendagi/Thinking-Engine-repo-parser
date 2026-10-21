@@ -49,6 +49,8 @@ interface OpenLoopRow {
   statement: string;
   created_at: string;
   resolved: number;
+  /** The wording of the thought that closed it, if Thread closed it and that thought still exists. */
+  answered_by: string | null;
 }
 interface DecisionRow {
   idea_id: string;
@@ -115,7 +117,7 @@ function loadIdeaGraph(db: Database, only?: string): IdeaNode[] {
     return m;
   };
   const steps = group(db.query(`SELECT * FROM evolution_steps${whereIdea} ORDER BY created_at ASC`).all(...args) as EvolutionRow[]);
-  const loops = group(db.query(`SELECT * FROM open_loops${whereIdea} ORDER BY created_at ASC`).all(...args) as OpenLoopRow[]);
+  const loops = group(db.query(`SELECT open_loops.*, (SELECT statement FROM cognitive_events WHERE id = open_loops.resolved_by) AS answered_by FROM open_loops${whereIdea} ORDER BY created_at ASC`).all(...args) as OpenLoopRow[]);
   const decisions = group(db.query(`SELECT * FROM decisions${whereIdea} ORDER BY decided_at ASC`).all(...args) as DecisionRow[]);
   const related = group(db.query(`SELECT idea_id, related_idea_id FROM related_ideas${whereIdea}`).all(...args) as (RelatedRow & { idea_id: string })[]);
 
@@ -131,7 +133,13 @@ function loadIdeaGraph(db: Database, only?: string): IdeaNode[] {
       createdAt: e.created_at,
       sourceEventId: e.source_event_id,
     })),
-    openLoops: (loops.get(row.id) ?? []).map((l) => ({ id: l.id, statement: l.statement, createdAt: l.created_at, resolved: l.resolved === 1 })),
+    openLoops: (loops.get(row.id) ?? []).map((l) => ({
+      id: l.id,
+      statement: l.statement,
+      createdAt: l.created_at,
+      resolved: l.resolved === 1,
+      ...(l.resolved === 1 && l.answered_by ? { answeredBy: l.answered_by } : {}),
+    })),
     decisions: (decisions.get(row.id) ?? []).map((d) => ({ id: d.id, statement: d.statement, decidedAt: d.decided_at, sourceEventId: d.source_event_id })),
     relatedIdeaIds: (related.get(row.id) ?? []).map((r) => r.related_idea_id),
     createdAt: row.created_at,

@@ -83,7 +83,7 @@ export function setOpenLoopResolved(
   resolved: boolean,
 ): boolean {
   const result = db
-    .prepare("UPDATE open_loops SET resolved = ?, set_by = 'user' WHERE id = ?")
+    .prepare("UPDATE open_loops SET resolved = ?, set_by = 'user', resolved_by = NULL WHERE id = ?")
     .run(resolved ? 1 : 0, loopId);
   return result.changes > 0;
 }
@@ -99,7 +99,8 @@ export const UPSERT_OPEN_LOOP_SQL = `INSERT INTO open_loops (id, idea_id, statem
     idea_id = excluded.idea_id,
     statement = excluded.statement,
     created_at = excluded.created_at,
-    resolved = CASE WHEN open_loops.set_by = 'user' THEN open_loops.resolved ELSE excluded.resolved END`;
+    resolved = CASE WHEN open_loops.set_by = 'user' THEN open_loops.resolved ELSE excluded.resolved END,
+    resolved_by = CASE WHEN open_loops.set_by = 'user' THEN open_loops.resolved_by ELSE NULL END`;
 
 /** Removes discarded_events rows the replay pass has since promoted into real ideas. */
 export function deleteDiscardedEvents(db: Database, ids: string[]): void {
