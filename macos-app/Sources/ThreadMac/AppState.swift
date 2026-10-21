@@ -6,7 +6,7 @@ import SwiftUI
 /// `@State` so an external surface (the `thread://` scheme, Services) can switch to it, and so
 /// it survives the list⇄detail swap — same reasoning as `listSelection`.
 enum ListTab: String, CaseIterable, Identifiable {
-    case recent = "Recent", loops = "Open questions", all = "All"
+    case recent = "Recent", loops = "Open loops", all = "All"
     var id: String { rawValue }
 }
 
