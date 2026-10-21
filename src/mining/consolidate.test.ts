@@ -211,3 +211,20 @@ describe("an answer that names its question", () => {
   });
 });
 
+
+describe("questions with no stated idea", () => {
+  test("several questions on a subject nobody stated stay together, then join the idea once one is stated", () => {
+    const qs = [
+      th("What should the pricing page say about guests?", "question", "cq", 0, 1),
+      th("Who pays when a guest becomes a member?", "question", "cq", 1, 1),
+    ];
+    const before = consolidate(qs);
+    const questionOnly = before.filter((i) => i.thoughtIds.every((id) => qs.some((q) => q.id === id)));
+    expect(questionOnly.length).toBeGreaterThan(0);
+    const position = th("Guests on the pricing page are free; members pay per seat.", "claim", "cq", 2, 2, { role: "position" });
+    const after = consolidate([...qs, position]);
+    const home = after.find((i) => i.thoughtIds.includes(position.id))!;
+    expect(home.node.openLoops.length).toBeGreaterThan(0);
+    expect(home.thoughtIds).toContain(position.id);
+  });
+});
