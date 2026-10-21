@@ -322,6 +322,8 @@ export interface DownloadSummary {
   byVersion: { version: string; count: number }[];
   byCountry: { country: string; count: number }[];
   byPlatform: { platform: string; count: number }[];
+  /** The most recent clicks that were left out, newest first (up to 100), with why -- so any exclusion can be audited. Anonymous. */
+  leftOut: { at: string; reason: ExcludedReason; country: string | null; uaFamily: string | null; source: string | null }[];
   /** Most recent hits, newest first (up to 40) -- for the admin "recent downloads" table. */
   recent: { at: string; platform: string; version: string | null; country: string | null; uaFamily: string | null; referrer: string | null }[];
 }
@@ -365,6 +367,13 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
         .all() as DownloadSummary["recent"]
     );
 
+    const leftOut = db
+      .query(
+        `SELECT created_at AS at, COALESCE(reason, 'bot') AS reason, country, ua_family AS uaFamily, source
+         FROM download_events WHERE bot = 1 AND created_at >= ? ORDER BY created_at DESC, id DESC LIMIT 100`,
+      )
+      .all(since) as DownloadSummary["leftOut"];
+
     const bots = count("SELECT COUNT(*) AS n FROM download_events WHERE bot = 1 AND created_at >= ?", since);
     const excluded = { bot: 0, internal: 0, unverified: 0, burst: 0 };
     for (const r of db
@@ -384,6 +393,7 @@ export function downloadSummary(windowDays = 30, now: Date = new Date()): Downlo
       people: { today: people(startOfToday), last7: people(ago(7)), last30: people(ago(30)) },
       bots,
       excluded,
+      leftOut,
       total,
       today,
       last7,

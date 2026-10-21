@@ -581,6 +581,56 @@ export function settleHistory(): { bursts: number; installs: number } {
   }
 }
 
+// ------------------------------------------------------------------------------ audit
+
+export interface AccountAudit {
+  /** How the account base splits, so the headline numbers can be reconciled by hand. */
+  totals: { counted: number; operators: number; beforeLaunch: number };
+  /** The accounts the funnel counts, newest first (up to 100). No ids, no emails: a day and what they did. */
+  counted: {
+    createdDay: string;
+    plan: string;
+    /** The account was made on a Mac that sent an install id (older builds didn't). */
+    macLinked: boolean;
+    activeDays: number;
+    lastActiveDay: string | null;
+    reached: Milestone[];
+  }[];
+}
+
+/** What stands behind "opened", "first capture" and the rest: every counted account, anonymously. */
+export function accountsAudit(): AccountAudit {
+  const db = openGrowth();
+  try {
+    const pop = population(db);
+    const since = pop.since;
+    const users = db.query("SELECT id, created_at, plan, install_id FROM users ORDER BY created_at DESC").all() as { id: string; created_at: string; plan: string | null; install_id: string | null }[];
+    const operator = (id: string) => pop.excluded.has(id);
+    const totals = {
+      counted: users.filter((u) => !operator(u.id) && u.created_at >= since).length,
+      operators: users.filter((u) => operator(u.id)).length,
+      beforeLaunch: users.filter((u) => !operator(u.id) && u.created_at < since).length,
+    };
+    const ms = db.query("SELECT user_id, kind FROM milestones").all() as { user_id: string; kind: Milestone }[];
+    const days = db.query("SELECT user_id, COUNT(*) AS n, MAX(day) AS last FROM active_days GROUP BY user_id").all() as { user_id: string; n: number; last: string | null }[];
+    const dayBy = new Map(days.map((d) => [d.user_id, d]));
+    const counted = users
+      .filter((u) => !operator(u.id) && u.created_at >= since)
+      .slice(0, 100)
+      .map((u) => ({
+        createdDay: u.created_at.slice(0, 10),
+        plan: u.plan ?? "free",
+        macLinked: !!u.install_id,
+        activeDays: dayBy.get(u.id)?.n ?? 0,
+        lastActiveDay: dayBy.get(u.id)?.last ?? null,
+        reached: ms.filter((m) => m.user_id === u.id).map((m) => m.kind),
+      }));
+    return { totals, counted };
+  } finally {
+    db.close();
+  }
+}
+
 // ------------------------------------------------------------------------------ what happened lately
 
 export type FeedKind = "download" | "account" | Milestone;
