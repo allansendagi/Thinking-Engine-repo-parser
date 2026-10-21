@@ -114,6 +114,17 @@ final class UISnapshotTests: XCTestCase {
 
     // MARK: Settings
 
+    /// A state for rendering Settings. The browser is shown as connected: the disconnected state prints
+    /// the pairing string, which is the account's real credential (read from the Keychain), and a
+    /// snapshot must never contain that.
+    private func settingsState(plan: String, email: String?) throws -> AppState {
+        let state = AppState()
+        state.account = try account(plan: plan, email: email)
+        state.lastExtensionPing = Date()
+        XCTAssertTrue(state.browserConnected, "the snapshot would show the pairing string")
+        return state
+    }
+
     private func account(plan: String, email: String?) throws -> AccountStatus {
         let pro = plan == "pro"
         let e = email.map { "\"\($0)\"" } ?? "null"
@@ -121,20 +132,17 @@ final class UISnapshotTests: XCTestCase {
     }
 
     func testSettingsSignedInFree() throws {
-        let state = AppState()
-        state.account = try account(plan: "free", email: "allan@example.com")
+        let state = try settingsState(plan: "free", email: "allan@example.com")
         try snap("settings-signed-in", width: 520, height: 2100) { SettingsView(embedded: true).environmentObject(state) }
     }
 
     func testSettingsAnonymous() throws {
-        let state = AppState()
-        state.account = try account(plan: "free", email: nil)
+        let state = try settingsState(plan: "free", email: nil)
         try snap("settings-anonymous", width: 520, height: 900) { SettingsView(embedded: true).environmentObject(state) }
     }
 
     func testSettingsAsSheet() throws {
-        let state = AppState()
-        state.account = try account(plan: "pro", email: "allan@example.com")
+        let state = try settingsState(plan: "pro", email: "allan@example.com")
         try snap("settings-sheet", width: 460, height: 640) { SettingsView().environmentObject(state) }
     }
 }

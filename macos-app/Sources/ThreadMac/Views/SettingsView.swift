@@ -26,7 +26,7 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             if !embedded {
-                Text("Settings").font(.headline).frame(maxWidth: .infinity, alignment: .leading).padding([.horizontal, .top], 16)
+                Text("Settings").font(.headline).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28).padding(.top, 16)
             }
             Form { settingsContent }
                 .formStyle(.grouped)
