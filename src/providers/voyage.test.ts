@@ -6,17 +6,11 @@ const ok = (n: number, dims = 8) =>
 const status = (code: number, headers: Record<string, string> = {}) => new Response(`{"detail":"nope"}`, { status: code, headers });
 
 /** A fetch that answers from a script and counts its calls. */
-function scripted(...answers: (Response | Error | "hang")[]) {
+function scripted(...answers: (Response | Error)[]) {
   const calls: { signal?: AbortSignal | null }[] = [];
   const fetcher = (async (_url: unknown, init?: RequestInit) => {
     calls.push({ signal: init?.signal });
     const next = answers[Math.min(calls.length - 1, answers.length - 1)]!;
-    if (next === "hang") {
-      return new Promise<Response>((_, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal!.reason ?? new Error("aborted")));
-        // With no signal this never settles -- exactly the production hazard.
-      });
-    }
     if (next instanceof Error) throw next;
     return next.clone();
   }) as unknown as typeof fetch;
@@ -28,10 +22,17 @@ const make = (fetcher: typeof fetch, opts: { timeoutMs?: number; retries?: numbe
 
 describe("Voyage embeddings are resilient", () => {
   test("a request that never answers is cut off, not left to wedge the caller", async () => {
-    const { fetcher } = scripted("hang");
-    const started = Date.now();
-    await expect(make(fetcher, { timeoutMs: 60, retries: 0 }).embedMany(["a"])).rejects.toThrow(/timed out/i);
-    expect(Date.now() - started).toBeLessThan(2000);
+    // A real server that accepts the connection and never replies, and the real fetch: this is the
+    // runtime behaviour production depends on (Railway pins Bun 1.1.43), not a fake that holds no socket.
+    const server = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) });
+    try {
+      const viaServer = ((_url: unknown, init?: RequestInit) => fetch(`http://localhost:${server.port}/`, init)) as unknown as typeof fetch;
+      const started = Date.now();
+      await expect(make(viaServer, { timeoutMs: 80, retries: 0 }).embedMany(["a"])).rejects.toThrow(/timed out/i);
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("a rate limit or a server error is retried, then succeeds", async () => {

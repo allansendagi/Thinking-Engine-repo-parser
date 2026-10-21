@@ -7,7 +7,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createExtractionProvider, createReasoningProvider } from "../providers/anthropic";
 import { standardSuite } from "./generate";
-import { loadBenchVectors, v1Miner, v1Offline, v2Miner, type Miner } from "./miners";
+import { loadBenchVectors, loadVoyageBenchVectors, v1Miner, v1Offline, v2Miner, type Miner } from "./miners";
 import { formatTable, runBench } from "./run";
 import { meaningWeightFor } from "../mining/consolidate";
 import { VoyageEmbeddingProvider, voyageConfigured } from "../providers/voyage";
@@ -25,8 +25,12 @@ const miners: Miner[] = [
 if (apple) {
   miners.push(v2Miner(`v2 + Apple on-device meaning (${apple.model})`, apple.byText, { meaningWeight: meaningWeightFor(apple.model) }));
 }
-// The cloud fallback, measured the same way when a key is present (a few hundred short texts, ~free).
-if (voyageConfigured()) {
+// The cloud model, measured the same way: from the stored vectors (offline, free, identical every
+// run), or -- if there are none -- live when a key is present (a few hundred short texts, ~free).
+const voyageCached = loadVoyageBenchVectors();
+if (voyageCached) {
+  miners.push(v2Miner(`v2 + Voyage (${voyageCached.model})`, voyageCached.byText));
+} else if (voyageConfigured()) {
   const texts = [...new Set(standardSuite().flatMap((s) => s.thoughts.map((t) => t.said)))];
   const voyage = new VoyageEmbeddingProvider();
   const vectors = await voyage.embedMany(texts);
