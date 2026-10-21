@@ -585,7 +585,7 @@ export function settleHistory(): { bursts: number; installs: number } {
 
 export interface AccountAudit {
   /** How the account base splits, so the headline numbers can be reconciled by hand. */
-  totals: { counted: number; operators: number; beforeLaunch: number };
+  totals: { counted: number; operators: number; beforeLaunch: number; onOperatorMacs: number };
   /** The accounts the funnel counts, newest first (up to 100). No ids, no emails: a day and what they did. */
   counted: {
     createdDay: string;
@@ -605,17 +605,22 @@ export function accountsAudit(): AccountAudit {
     const pop = population(db);
     const since = pop.since;
     const users = db.query("SELECT id, created_at, plan, install_id FROM users ORDER BY created_at DESC").all() as { id: string; created_at: string; plan: string | null; install_id: string | null }[];
+    const countedIds = new Set(
+      (db.query(`SELECT id FROM users WHERE created_at >= ?${notCounted(db, "id")}`).all(since) as { id: string }[]).map((r) => r.id),
+    );
     const operator = (id: string) => pop.excluded.has(id);
     const totals = {
-      counted: users.filter((u) => !operator(u.id) && u.created_at >= since).length,
+      counted: countedIds.size,
       operators: users.filter((u) => operator(u.id)).length,
       beforeLaunch: users.filter((u) => !operator(u.id) && u.created_at < since).length,
+      // Made after launch by someone who isn't a named operator, but on the founder's (or a pre-launch) Mac.
+      onOperatorMacs: users.filter((u) => !operator(u.id) && u.created_at >= since && !countedIds.has(u.id)).length,
     };
     const ms = db.query("SELECT user_id, kind FROM milestones").all() as { user_id: string; kind: Milestone }[];
     const days = db.query("SELECT user_id, COUNT(*) AS n, MAX(day) AS last FROM active_days GROUP BY user_id").all() as { user_id: string; n: number; last: string | null }[];
     const dayBy = new Map(days.map((d) => [d.user_id, d]));
     const counted = users
-      .filter((u) => !operator(u.id) && u.created_at >= since)
+      .filter((u) => countedIds.has(u.id))
       .slice(0, 100)
       .map((u) => ({
         createdDay: u.created_at.slice(0, 10),
