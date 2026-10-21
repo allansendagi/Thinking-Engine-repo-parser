@@ -97,8 +97,10 @@ Rules:
   copied VERBATIM from the AI message. Only for an explicit acceptance of a specific proposal --
   never for "thanks", "interesting", or a vague "ok". When unsure, omit.
 
+- ANSWERS. When an event answers a question the human asked earlier in this transcript -- whatever its type (an answer often reads as a decision or a claim: "Settled: five free guests per account", "Answer: the extension reads it directly") -- set "answers_event_id" to the id of the human's message where they asked that question, copied exactly from the ids shown below. Only the human's own question, and only from an earlier message. If the AI asked it, or you are not sure which question it answers, omit it. A question never has answers_event_id.
+
 Respond with JSON matching this shape exactly, and nothing else -- no commentary before or after:
-{"events": [{"type": "...", "statement": "...", "title": "... (new_idea only, optional)", "confidence": 0.0-1.0, "persistence": "high|medium|low", "persistence_reason": "...", "source_event_id": "...", "evidence_quote": "...", "why_it_matters": "... (optional)", "additional_source_event_ids": ["... (optional)"], "role": "position|option|reason (claims only, optional)", "adopted_from_event_id": "... (adoption only)", "adopted_quote": "... (adoption only)"}]}`;
+{"events": [{"type": "...", "statement": "...", "title": "... (new_idea only, optional)", "confidence": 0.0-1.0, "persistence": "high|medium|low", "persistence_reason": "...", "source_event_id": "...", "evidence_quote": "...", "why_it_matters": "... (optional)", "additional_source_event_ids": ["... (optional)"], "role": "position|option|reason (claims only, optional)", "adopted_from_event_id": "... (adoption only)", "adopted_quote": "... (adoption only)", "answers_event_id": "... (answers only, optional)"}]}`;
 
 /**
  * `newEventIds` marks which of `events` should actually be extracted from -- the rest are
