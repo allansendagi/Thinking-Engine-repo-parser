@@ -10,6 +10,14 @@ struct IdeaVerdictItems: View {
         if !appState.isConfirmed(ideaId) {
             Button { appState.keepIdea(ideaId) } label: { Label("Keep", systemImage: "checkmark") }
         }
+        Divider()
+        Button { Task { await appState.beginCorrection(.merge(ideaId: ideaId)) } } label: {
+            Label("Merge Into…", systemImage: "arrow.triangle.merge")
+        }
+        Button { Task { await appState.beginCorrection(.split(ideaId: ideaId)) } } label: {
+            Label("Split…", systemImage: "arrow.triangle.branch")
+        }
+        Divider()
         Button(role: .destructive) { appState.notAnIdea(ideaId) } label: {
             Label("Not an idea", systemImage: "xmark")
         }
