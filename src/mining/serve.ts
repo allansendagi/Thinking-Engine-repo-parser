@@ -55,7 +55,11 @@ export function restoreV1(db: Database): boolean {
       const where =
         t === "evolution_steps" ? " WHERE cognitive_event_id IN (SELECT id FROM cognitive_events)" :
         t === "decisions" ? " WHERE source_event_id IN (SELECT id FROM canonical_events)" : "";
-      db.exec(`INSERT OR IGNORE INTO ${t} SELECT * FROM ${backupOf(t)}${where}`);
+      // By column name, not position: a backup made before a column was added has fewer columns,
+      // and a positional copy would fail and strand the account on v2.
+      const have = new Set((db.query(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name));
+      const cols = (db.query(`PRAGMA table_info(${backupOf(t)})`).all() as { name: string }[]).map((c) => c.name).filter((c) => have.has(c));
+      db.exec(`INSERT OR IGNORE INTO ${t} (${cols.join(", ")}) SELECT ${cols.join(", ")} FROM ${backupOf(t)}${where}`);
     }
     db.exec(
       `UPDATE identity_resolutions SET matched_idea_id = (SELECT b.matched_idea_id FROM ${backupOf("identity_resolutions")} b
@@ -109,7 +113,17 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
       if (old && isNamingTitle(old) && !usedTitles.has(old.toLowerCase())) return pick(old);
       return pick(deriveTitle(statementOf.get(founderId) ?? node.currentFormulation));
     };
-    const resolvedLoops = new Set((db.query("SELECT id FROM open_loops WHERE resolved = 1").all() as { id: string }[]).map((r) => r.id));
+    // Who decided each question's state. A person's word wins, whichever way: ticked stays ticked,
+    // unticked stays open. So does a closure from before Thread recorded who made it (it may have
+    // been theirs -- never undo it). Thread's own closures follow the evidence, so they heal.
+    const loopBefore = new Map(
+      (db.query("SELECT id, resolved, set_by FROM open_loops").all() as { id: string; resolved: number; set_by: string | null }[]).map((r) => [r.id, r]),
+    );
+    const personsWord = (id: string): { resolved: boolean } | null => {
+      const b = loopBefore.get(id);
+      if (!b) return null;
+      return b.set_by === "user" || (b.set_by === null && b.resolved === 1) ? { resolved: b.resolved === 1 } : null;
+    };
     const why = new Map(
       (db.query("SELECT id, why_it_matters FROM cognitive_events WHERE why_it_matters IS NOT NULL").all() as { id: string; why_it_matters: string }[]).map(
         (r) => [r.id, r.why_it_matters],
@@ -132,7 +146,7 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
     const putStep = db.prepare(
       "INSERT OR REPLACE INTO evolution_steps (idea_id, cognitive_event_id, formulation, created_at, source_event_id) VALUES (?, ?, ?, ?, ?)",
     );
-    const putLoop = db.prepare("INSERT OR REPLACE INTO open_loops (id, idea_id, statement, created_at, resolved) VALUES (?, ?, ?, ?, ?)");
+    const putLoop = db.prepare("INSERT OR REPLACE INTO open_loops (id, idea_id, statement, created_at, resolved, set_by) VALUES (?, ?, ?, ?, ?, ?)");
     const putDecision = db.prepare("INSERT OR REPLACE INTO decisions (id, idea_id, statement, decided_at, source_event_id) VALUES (?, ?, ?, ?, ?)");
     const putRelated = db.prepare("INSERT OR IGNORE INTO related_ideas (idea_id, related_idea_id) VALUES (?, ?)");
 
@@ -144,7 +158,10 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
       const whyItMatters = prior?.why_it_matters ?? thoughtIds.map((t) => why.get(t)).find((w) => w) ?? null;
       putIdea.run(node.id, title, node.state, node.currentFormulation, whyItMatters, node.createdAt, node.updatedAt);
       for (const s of node.evolution) putStep.run(node.id, s.cognitiveEventId, s.formulation, s.createdAt, s.sourceEventId);
-      for (const l of node.openLoops) putLoop.run(l.id, node.id, l.statement, l.createdAt, l.resolved || resolvedLoops.has(l.id) ? 1 : 0);
+      for (const l of node.openLoops) {
+        const theirs = personsWord(l.id);
+        putLoop.run(l.id, node.id, l.statement, l.createdAt, (theirs ? theirs.resolved : l.resolved) ? 1 : 0, theirs ? "user" : "thread");
+      }
       for (const d of node.decisions) putDecision.run(d.id, node.id, d.statement, d.decidedAt, d.sourceEventId);
     });
     for (const { node } of served) {

@@ -8,6 +8,7 @@ import { rankCandidates, narrowCandidates } from "../identity/signals";
 import { quickGate, strongMatchScore } from "./signalGate";
 import { applyCognitiveEvent, isConfidentExistingMatch } from "./buildIdeaNode";
 import { messageFingerprint } from "./resolveConversationIdentity";
+import { UPSERT_OPEN_LOOP_SQL } from "../db/mutations";
 
 export interface PipelineResult {
   ideas: Map<string, IdeaNode>;
@@ -373,10 +374,7 @@ function persistPipelineResultUnchecked(
     `INSERT OR REPLACE INTO evolution_steps (idea_id, cognitive_event_id, formulation, created_at, source_event_id)
      VALUES (?, ?, ?, ?, ?)`,
   );
-  const insertLoop = db.prepare(
-    `INSERT OR REPLACE INTO open_loops (id, idea_id, statement, created_at, resolved)
-     VALUES (?, ?, ?, ?, ?)`,
-  );
+  const insertLoop = db.prepare(UPSERT_OPEN_LOOP_SQL); // never overwrites a question the person ticked or unticked
   const insertDecision = db.prepare(
     `INSERT OR REPLACE INTO decisions (id, idea_id, statement, decided_at, source_event_id)
      VALUES (?, ?, ?, ?, ?)`,
