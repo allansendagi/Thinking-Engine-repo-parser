@@ -120,8 +120,8 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
     // v2 re-decides what the signal gate set aside: a set-aside thought it groups into an idea is
     // promoted, exactly as the replay pass promotes one (the row is copied, never invented).
     const promote = db.prepare(
-      `INSERT OR IGNORE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, role, adopted_source_event_id, adopted_quote)
-       SELECT id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, role, adopted_source_event_id, adopted_quote
+      `INSERT OR IGNORE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, role, adopted_source_event_id, adopted_quote, answers_event_id)
+       SELECT id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, role, adopted_source_event_id, adopted_quote, answers_event_id
          FROM discarded_events WHERE id = ?`,
     );
     for (const { thoughtIds } of served) for (const t of thoughtIds) promote.run(t);

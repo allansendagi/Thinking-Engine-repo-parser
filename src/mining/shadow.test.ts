@@ -121,3 +121,19 @@ describe("chooseMeaningModel", () => {
     expect(chooseMeaningModel([], "voyage:voyage-4-large")).toBeNull();
   });
 });
+
+describe("answers_event_id is stored and reaches mining", () => {
+  test("a stored answer closes the question it names, and the link survives set-aside and promotion", () => {
+    const db = seed();
+    db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx) VALUES ('m4', 'c1', 'chatgpt', 'user', 'Five free guests per account.', '2026-09-01T00:03:00Z', 4)").run();
+    // The answer was labelled a decision and set aside by the gate; the link rides along either way.
+    db.prepare(
+      "INSERT INTO discarded_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote, gate_reason, gate_version, discarded_at, answers_event_id) VALUES ('cog_m4_0', 'decision', 'Five free guests per account.', 0.9, 'high', 'm4', 'Five free guests', 'test', 2, '2026-09-01', 'm2')",
+    ).run();
+    const { ideas } = runShadowMining(db);
+    const idea = ideas.find((i) => !i.isSpark)!;
+    expect(idea.thoughtIds).toContain("cog_m4_0");
+    expect(idea.node.openLoops.map((l) => l.resolved)).toEqual([true]);
+  });
+});
+

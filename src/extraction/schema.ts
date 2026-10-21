@@ -59,6 +59,13 @@ export const extractedEventSchema = z.object({
    */
   adopted_from_event_id: z.string().nullable().optional().catch(null),
   adopted_quote: z.string().nullable().optional().catch(null),
+  /**
+   * For an event that ANSWERS a question the person asked earlier in the transcript (whatever its
+   * type -- an answer often reads as a decision or a claim): the id of the message where they asked
+   * it. Checked afterwards (an earlier message of the person's, same conversation); a bad link is
+   * dropped, never the event.
+   */
+  answers_event_id: z.string().nullable().optional().catch(null),
 });
 
 /**
