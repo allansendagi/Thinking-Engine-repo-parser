@@ -147,6 +147,9 @@ struct OpenLoop: Codable, Identifiable {
     let statement: String
     let createdAt: String
     let resolved: Bool
+    /// The wording of the answer Thread used to close this question. Absent when the person
+    /// closed it themselves, when it closed before this was recorded, or on an older server.
+    var answeredBy: String? = nil
 }
 
 struct EvolutionStep: Codable, Identifiable {

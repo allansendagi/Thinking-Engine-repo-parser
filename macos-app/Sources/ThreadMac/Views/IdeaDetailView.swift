@@ -293,23 +293,10 @@ struct IdeaDetailView: View {
         return AccordionRow(title: "Still unresolved", showDivider: true) { _ in
             countLabel(open.count, singular: "question", plural: "questions", zero: "All resolved")
         } content: {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(trace.idea.openLoops) { loop in
-                    ItemRow {
-                        Task { await appState.toggleLoop(loop.id, resolved: !loop.resolved) }
-                    } content: {
-                        HStack(alignment: .top, spacing: 9) {
-                            Checkbox(checked: loop.resolved).padding(.top, 1)
-                            Text(loop.statement)
-                                .font(.system(size: 12.5)).lineSpacing(2)
-                                .foregroundStyle(Theme.ink(loop.resolved ? 0.4 : 0.75))
-                                .strikethrough(loop.resolved)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
+            QuestionList(loops: trace.idea.openLoops) { loop in
+                Task { await appState.toggleLoop(loop.id, resolved: !loop.resolved) }
             }
-            .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 12)
+            .padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 12)
         }
     }
 
@@ -560,24 +547,6 @@ private struct ItemRow<Content: View>: View {
 /// The custom checkbox from the mock — a 15×15 rounded square, ring border when unchecked,
 /// solid accent fill + a white check when checked. Deliberately not the native macOS checkbox
 /// (`.toggleStyle(.checkbox)`), which reads very differently from this design's flat style.
-private struct Checkbox: View {
-    let checked: Bool
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 4)
-            .fill(checked ? Theme.accent : Color.clear)
-            .frame(width: 15, height: 15)
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(checked ? Theme.accent : Theme.ink(0.28), lineWidth: 1.4))
-            .overlay {
-                if checked {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-            }
-    }
-}
-
 /// The page's one dominant action. A quiet brightness lift on hover (the mock's
 /// `filter:brightness(1.06)`) + pointing-hand cursor.
 private struct ContinueThinkingButton: View {
