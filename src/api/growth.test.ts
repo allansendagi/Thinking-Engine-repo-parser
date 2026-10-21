@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { openRegistry } from "./auth";
 import { gaReport } from "./ga";
 import { activityFeed, classifyDownloads, settleHistory, forgetMilestones, githubDownloads, growthSummary, noteMilestone, sendGaDownload, sourceBucket, weekOf } from "./growth";
-import { BURST_CLICKS, downloadSummary, excludedReason, findBursts, noteActive, noteInstall, recordAccountCreated, recordDownload } from "./metrics";
+import { BURST_CLICKS, downloadSummary, downloadWasBurst, excludedReason, findBursts, noteActive, noteInstall, recordAccountCreated, recordDownload } from "./metrics";
 
 let dir = "";
 const saved = { reg: process.env.THREAD_REGISTRY_PATH, data: process.env.THREAD_DATA_DIR };
@@ -336,7 +336,7 @@ describe("one definition of who counts", () => {
 describe("a script's burst of clicks is not people", () => {
   const T0 = Date.parse("2026-10-27T10:54:43.996Z");
   const click = (offsetMs: number, ua = "Chrome on Windows") =>
-    recordDownload({ uaFamily: ua, country: "US", visitor: `v${offsetMs}${ua}` }, new Date(T0 + offsetMs));
+    recordDownload({ uaFamily: ua, country: "US", visitor: `v${offsetMs}${ua}` }, new Date(T0 + offsetMs)).reason;
   const states = () => {
     const db = openRegistry();
     try {
@@ -366,6 +366,15 @@ describe("a script's burst of clicks is not people", () => {
     expect(rows.every((r) => r.bot === 0 && r.reason === null)).toBe(true);
   });
 
+  test("a click swept into a burst later can be told apart, so its Google Analytics event is never sent", () => {
+    const base = Date.parse("2026-10-31T09:00:00Z");
+    const recs = Array.from({ length: 8 }, (_, i) => recordDownload({ uaFamily: "Chrome on Windows", country: "US", visitor: `ga${i}` }, new Date(base + i * 200)));
+    expect(recs[0]!.reason).toBeNull(); // looked fine when it arrived
+    expect(downloadWasBurst(recs[0]!.id)).toBe(true); // and is known to be a burst once the sixth lands
+    const lone = recordDownload({ uaFamily: "Safari", country: "AE", visitor: "solo" }, new Date(base + 3_600_000));
+    expect(downloadWasBurst(lone.id)).toBe(false);
+  });
+
   test("findBursts applies the same rule to history", () => {
     const rows = Array.from({ length: 8 }, (_, i) => ({ id: i + 1, t: T0 + i * 800 }));
     expect([...findBursts(rows)].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -392,7 +401,7 @@ describe("a script's burst of clicks is not people", () => {
     expect(settleHistory()).toEqual({ bursts: 0, installs: 0 }); // once
     const db = openRegistry();
     try {
-      const rows = db.query("SELECT bot, reason FROM download_events WHERE created_at >= ? ORDER BY created_at").all(new Date(base).toISOString()) as { bot: number; reason: string | null }[];
+      const rows = db.query("SELECT bot, reason FROM download_events WHERE created_at >= ? AND created_at <= ? ORDER BY created_at").all(new Date(base).toISOString(), new Date(base + 2 * 3_600_000).toISOString()) as { bot: number; reason: string | null }[];
       expect(rows).toHaveLength(10); // nothing deleted
       expect(rows.slice(0, 9).every((r) => r.bot === 1 && r.reason === "burst")).toBe(true);
       expect(rows[9]).toEqual({ bot: 0, reason: null });

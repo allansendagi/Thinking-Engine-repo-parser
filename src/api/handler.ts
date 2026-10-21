@@ -38,7 +38,7 @@ import { dataDir, openUserDb, purgeUser } from "../db/tenancy";
 import { dataSummary, deleteConversation, exportAll } from "../db/privacy";
 import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary, scheduleRetentionSweep, setRetentionDays } from "../db/retention";
 import { storageMode } from "../db/durability";
-import { openMetrics, appVersionFrom, downloadSummary, forgetActivity, installIdFrom, isAdmin, isBotUserAgent, noteActive, noteInstall, osVersionFrom, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
+import { BURST_WINDOW_MS, downloadWasBurst, openMetrics, appVersionFrom, downloadSummary, forgetActivity, installIdFrom, isAdmin, isBotUserAgent, noteActive, noteInstall, osVersionFrom, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
 import { activityFeed, forgetMilestones, githubDownloads, growthSummary, noteMilestone, population, settleHistory, sendGaDownload, sourceBucket, visitorKey } from "./growth";
 import { gaReport } from "./ga";
 import { backfillBillingFromPaddle, revenueSummary } from "./revenue";
@@ -411,7 +411,7 @@ export function createRequestHandler(
         // The visitor's IP comes from the website's server (this request is the site's, not
         // theirs); it's only hashed into the daily key, never stored.
         const visitor = await visitorKey(str(body.ip), str(body.uaFamily) ?? req.headers.get("user-agent"));
-        const excludedAs = recordDownload({
+        const recorded = recordDownload({
           visitor,
           source,
           utmSource: body.utmSource,
@@ -428,8 +428,16 @@ export function createRequestHandler(
             (body.uaFamily as string) ?? req.headers.get("user-agent"),
           ),
         });
-        if (excludedAs !== "burst" && !isBotUserAgent(str(body.uaFamily) ?? req.headers.get("user-agent"))) {
-          sendGaDownload(str(body.gaClientId), { source, file_name: "Thread.dmg", platform: String(body.platform ?? "mac") });
+        if (recorded.reason !== "burst" && !isBotUserAgent(str(body.uaFamily) ?? req.headers.get("user-agent"))) {
+          // A burst is only known once its sixth click arrives, so hold the event for the burst
+          // window and send it only if the click was not swept into one. Best-effort: a restart
+          // inside that window drops the event, which is cheaper than counting a script in GA.
+          const gaClient = str(body.gaClientId);
+          const params = { source, file_name: "Thread.dmg", platform: String(body.platform ?? "mac") };
+          const timer = setTimeout(() => {
+            if (!downloadWasBurst(recorded.id)) sendGaDownload(gaClient, params);
+          }, BURST_WINDOW_MS + 1000);
+          timer.unref?.();
         }
       } catch (e) {
         console.error("[Thread] download event failed:", e);

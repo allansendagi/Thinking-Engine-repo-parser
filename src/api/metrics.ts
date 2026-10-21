@@ -211,12 +211,12 @@ export function excludedReason(hit: { userAgent?: unknown; uaFamily?: unknown; i
   return null;
 }
 
-export function recordDownload(hit: DownloadHit, now: Date = new Date()): ExcludedReason | null {
+export function recordDownload(hit: DownloadHit, now: Date = new Date()): { id: number; reason: ExcludedReason | null } {
   const platform = clip(hit.platform, 16)?.toLowerCase() ?? "mac";
   const reason = excludedReason(hit);
   const db = openMetrics();
   try {
-    db.prepare(
+    const { lastInsertRowid } = db.prepare(
       `INSERT INTO download_events (platform, version, referrer, country, ua_family, created_at, bot, source, utm_source, utm_medium, utm_campaign, visitor, reason)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
@@ -234,15 +234,26 @@ export function recordDownload(hit: DownloadHit, now: Date = new Date()): Exclud
       clip(hit.visitor, 32),
       reason,
     );
-    if (reason) return reason;
+    const id = Number(lastInsertRowid);
+    if (reason) return { id, reason };
     // A burst: with this click, the counted (or already burst) clicks of the last few seconds reach
     // the threshold. Mark them all, so the first five of a script's clicks don't stay counted.
     const peers = db
       .query("SELECT id FROM download_events WHERE created_at >= ? AND created_at <= ? AND (bot = 0 OR reason = 'burst')")
       .all(new Date(now.getTime() - BURST_WINDOW_MS).toISOString(), now.toISOString()) as { id: number }[];
-    if (peers.length < BURST_CLICKS) return null;
+    if (peers.length < BURST_CLICKS) return { id, reason: null };
     db.exec(`UPDATE download_events SET bot = 1, reason = 'burst' WHERE id IN (${peers.map((p) => p.id).join(",")})`);
-    return "burst";
+    return { id, reason: "burst" };
+  } finally {
+    db.close();
+  }
+}
+
+/** Was this click later recognised as part of a burst? (A burst is only known once its sixth click arrives.) */
+export function downloadWasBurst(id: number): boolean {
+  const db = openMetrics();
+  try {
+    return !!db.query("SELECT 1 FROM download_events WHERE id = ? AND reason = 'burst'").get(id);
   } finally {
     db.close();
   }
