@@ -41,6 +41,7 @@ export function loadMiningInput(db: Database): MiningInput {
     role: t.role ?? undefined,
     adopted: t.adoptedSourceEventId !== null,
     answersEventId: t.answersEventId ?? undefined,
+    title: t.title ?? undefined,
   }));
   // Low-persistence thoughts (requests for info, formatting asks) never seed or join ideas, and
   // thoughts from an idea the person deleted never come back as one.

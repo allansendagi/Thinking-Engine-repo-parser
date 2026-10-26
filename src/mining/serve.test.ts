@@ -269,3 +269,24 @@ describe("who decides whether a question is closed", () => {
   });
 });
 
+
+describe("how a served idea is named", () => {
+  const fresh = (statement: string, title: string | null) => {
+    process.env.THREAD_V2_SERVING_USERS = "*";
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx) VALUES ('n1', 'cn', 'chatgpt', 'user', ?, '2026-09-01T00:00:00Z', 0)").run(statement);
+    db.prepare(
+      "INSERT INTO cognitive_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote, title) VALUES ('cog_n1_0', 'new_idea', ?, 0.9, 'high', 'n1', ?, ?)",
+    ).run(statement, statement.slice(0, 12), title);
+    syncServing(USER, db, runShadowMining(db).ideas);
+    return loadIdeas(db)[0]!.title;
+  };
+
+  test("the extractor's short name is used instead of a sentence cut at eight words", () => {
+    expect(fresh("I think institutional authority should be independently verifiable by anyone who relies on it.", "Verifiable authority")).toBe("Verifiable authority");
+  });
+
+  test("without one, the title is carved from the statement, without narration", () => {
+    expect(fresh("They are naming 'computable Authority'", null)).toBe("Computable Authority");
+  });
+});

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
-import { deriveTitle, isNamingTitle } from "../state/buildIdeaNode";
-import type { ConsolidatedIdea } from "./consolidate";
+import { deriveTitle, isNamingTitle, isPersonTitle } from "../state/buildIdeaNode";
+import type { CognitiveEventType } from "../types";
+import { ANCHOR_TYPES, type ConsolidatedIdea } from "./consolidate";
 
 /**
  * Serving v2: for accounts switched over, the ideas the person sees ARE the v2 consolidation --
@@ -104,13 +105,39 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
      * the title the founding thought's old idea had (when it reads as a name and no other idea
      * took it), else one carved from the founding statement.
      */
+    // The extractor's own short name for a new idea ("Computable authority"), and each thought's
+    // type -- a name beats a sentence cut at eight words.
+    const named = db.query(
+      "SELECT id, type, title FROM cognitive_events UNION ALL SELECT id, type, title FROM discarded_events WHERE id NOT IN (SELECT id FROM cognitive_events)",
+    ).all() as { id: string; type: string; title: string | null }[];
+    const modelTitleOf = new Map(named.filter((r) => r.title).map((r) => [r.id, r.title!]));
+    const typeOf = new Map(named.map((r) => [r.id, r.type]));
     const usedTitles = new Set<string>();
-    const titleFor = (node: ConsolidatedIdea["node"], founderId: string): string => {
+    const free = (t: string) => !usedTitles.has(t.toLowerCase());
+    /**
+     * In order: the person's own rename; the extractor's name for the founding thought, then for
+     * any other new idea in the group; the old v1 title when it reads as a name; a title carved
+     * from the founding statement -- or, when that one only narrates the person ("They are
+     * naming..."), from the next thing the idea states.
+     */
+    const titleFor = (node: ConsolidatedIdea["node"], founderId: string, thoughtIds: string[]): string => {
       const pick = (t: string) => (usedTitles.add(t.toLowerCase()), t);
       if (renamed.has(node.id) && before.has(node.id)) return pick(before.get(node.id)!.title);
+      const modelNamed = [founderId, ...thoughtIds.filter((t) => t !== founderId && typeOf.get(t) === "new_idea")];
+      for (const id of modelNamed) {
+        const raw = modelTitleOf.get(id);
+        if (!raw) continue;
+        const t = deriveTitle(statementOf.get(id) ?? "", raw);
+        if (isNamingTitle(t) && free(t)) return pick(t);
+      }
       const v1 = v1IdeaOf.get(founderId);
       const old = v1 ? before.get(v1)?.title : undefined;
-      if (old && isNamingTitle(old) && !usedTitles.has(old.toLowerCase())) return pick(old);
+      if (old && isNamingTitle(old) && free(old)) return pick(old);
+      const stated = [founderId, ...thoughtIds.filter((t) => t !== founderId && ANCHOR_TYPES.has(typeOf.get(t) as CognitiveEventType))];
+      for (const id of stated) {
+        const t = deriveTitle(statementOf.get(id) ?? "");
+        if (t && !isPersonTitle(t) && free(t)) return pick(t);
+      }
       return pick(deriveTitle(statementOf.get(founderId) ?? node.currentFormulation));
     };
     // Who decided each question's state. A person's word wins, whichever way: ticked stays ticked,
@@ -134,8 +161,8 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
     // v2 re-decides what the signal gate set aside: a set-aside thought it groups into an idea is
     // promoted, exactly as the replay pass promotes one (the row is copied, never invented).
     const promote = db.prepare(
-      `INSERT OR IGNORE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, role, adopted_source_event_id, adopted_quote, answers_event_id)
-       SELECT id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, role, adopted_source_event_id, adopted_quote, answers_event_id
+      `INSERT OR IGNORE INTO cognitive_events (id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, role, adopted_source_event_id, adopted_quote, answers_event_id, title)
+       SELECT id, type, statement, confidence, persistence, persistence_reason, source_event_id, evidence_quote, role, adopted_source_event_id, adopted_quote, answers_event_id, title
          FROM discarded_events WHERE id = ?`,
     );
     for (const { thoughtIds } of served) for (const t of thoughtIds) promote.run(t);
@@ -154,7 +181,7 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
     const order = [...served].sort((a, b) => Number(renamed.has(b.node.id)) - Number(renamed.has(a.node.id)));
     order.forEach(({ node, thoughtIds, founderId }) => {
       const prior = before.get(node.id);
-      const title = titleFor(node, founderId);
+      const title = titleFor(node, founderId, thoughtIds);
       const whyItMatters = prior?.why_it_matters ?? thoughtIds.map((t) => why.get(t)).find((w) => w) ?? null;
       putIdea.run(node.id, title, node.state, node.currentFormulation, whyItMatters, node.createdAt, node.updatedAt);
       for (const s of node.evolution) putStep.run(node.id, s.cognitiveEventId, s.formulation, s.createdAt, s.sourceEventId);
