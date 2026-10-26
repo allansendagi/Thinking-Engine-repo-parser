@@ -29,6 +29,22 @@ function stripNarration(s: string): string {
   return cleaned.split(/\s+/).length >= 3 ? cleaned : s.trim();
 }
 
+/** "They are naming 'computable Authority'" / "call it “the Nanny Pattern”": the name itself. */
+const QUOTED_NAME = /\b(?:nam(?:e|es|ed|ing)|call(?:s|ed|ing)?|term(?:s|ed|ing)?|dub(?:s|bed|bing)?)\s+(?:it\s+|this\s+)?['"‘“]([^'"’”]{2,60})['"’”]/i;
+
+/**
+ * How the person opens a sentence about what they mean to do -- "I need to", "We should",
+ * "Let's", "I think" -- is not part of the idea's name. "I need to merge these two plans"
+ * names "Merge these two plans".
+ */
+const FIRST_PERSON_LEAD =
+  /^\s*(?:(?:i|we)\s+(?:really\s+|just\s+|still\s+)?(?:need|want|have|plan|intend|mean|would\s+like|'d\s+like|am\s+going|are\s+going|'m\s+going|'re\s+going)\s+to\s+|(?:i|we)\s+(?:should|must|will|shall|could|might|can)\s+|(?:i|we)'(?:ll|d)\s+|let'?s\s+|i\s+think\s+(?:that\s+)?(?=\S+\s+\S+\s+\S+))/i;
+
+/** A title that only narrates the person ("They are naming...", "The user claims...") -- never a name. */
+export function isPersonTitle(title: string): boolean {
+  return PERSON_SUBJECT.test(title);
+}
+
 /** A title that names an idea: short, whole (not a cut-off sentence), not about the person. */
 export function isNamingTitle(title: string): boolean {
   const words = title.trim().split(/\s+/);
@@ -48,7 +64,11 @@ export function deriveTitle(statement: string, modelTitle?: string): string {
     if (t.length >= 3 && t.length <= 80 && !PERSON_SUBJECT.test(t)) return cap(t);
   }
 
-  const s = cap(stripNarration(statement.trim()));
+  const quoted = statement.match(QUOTED_NAME)?.[1]?.trim();
+  if (quoted && quoted.split(/\s+/).length <= 6) return cap(quoted);
+
+  const unled = stripNarration(statement.trim()).replace(FIRST_PERSON_LEAD, "");
+  const s = cap(unled.split(/\s+/).length >= 2 ? unled : stripNarration(statement.trim()));
   const words = s.split(/\s+/);
   if (words.length <= 8) return s.replace(/[.?!]+$/, "");
   return `${words.slice(0, 8).join(" ").replace(/[,;:]+$/, "")}…`;
