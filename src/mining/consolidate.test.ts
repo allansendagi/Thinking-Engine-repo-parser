@@ -228,3 +228,29 @@ describe("questions with no stated idea", () => {
     expect(home.thoughtIds).toContain(position.id);
   });
 });
+
+describe("questions don't chain onto each other", () => {
+  test("a question asked beside an idea doesn't pull later look-alike questions from other conversations into it", () => {
+    const idea = th("A continuity layer for thinking should reconstruct the current state of thinking.", "new_idea", "g1", 0, 1);
+    const besideIt = th("What is the NOMOS paper about?", "question", "g1", 1, 1);
+    const later = [
+      th("What is the NOMOS file fundamentally about?", "question", "c2", 0, 9),
+      th("What does the NOMOS paper say about carrier indifference?", "question", "c3", 0, 20),
+    ];
+    const ideas = consolidate([idea, besideIt, ...later]);
+    const home = ideas.find((i) => i.thoughtIds.includes(idea.id))!;
+    for (const q of later) expect(home.thoughtIds).not.toContain(q.id);
+    // they still gather together, as questions waiting for an idea
+    const other = ideas.find((i) => i.thoughtIds.includes(later[0]!.id))!;
+    expect(other.thoughtIds).toContain(later[1]!.id);
+  });
+
+  test("and go to the idea they are actually about when one is stated", () => {
+    const thread = th("A continuity layer for thinking should reconstruct the current state of thinking.", "new_idea", "g1", 0, 1);
+    const besideIt = th("What is the NOMOS paper about?", "question", "g1", 1, 1);
+    const nomos = th("The NOMOS paper defines computable authority for agents.", "claim", "c5", 0, 3);
+    const later = th("What does the NOMOS paper say about computable authority limits?", "question", "c6", 0, 12);
+    const ideas = consolidate([thread, besideIt, nomos, later]);
+    expect(ideas.find((i) => i.thoughtIds.includes(nomos.id))!.thoughtIds).toContain(later.id);
+  });
+});
