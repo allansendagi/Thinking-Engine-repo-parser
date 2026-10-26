@@ -23,7 +23,8 @@ final class TeachTests: XCTestCase {
 
     func testInvitesAtMostOnceADayAndNeverOverAnotherNudge() throws {
         let l = try JSONDecoder().decode(Lesson.self, from: Data(Self.json.utf8))
-        let now = Date()
+        // Midday, so "an hour ago" is the same day whenever the suite runs (it failed after midnight).
+        let now = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
         XCTAssertTrue(shouldInviteLesson(l, lastOffered: nil, otherNudgeShowing: false, now: now))
         XCTAssertFalse(shouldInviteLesson(l, lastOffered: now.addingTimeInterval(-3600), otherNudgeShowing: false, now: now))
         XCTAssertTrue(shouldInviteLesson(l, lastOffered: now.addingTimeInterval(-26 * 3600), otherNudgeShowing: false, now: now))
