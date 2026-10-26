@@ -406,6 +406,7 @@ export function consolidate(thoughts: MiningThought[], options: ConsolidateOptio
   const isAnchor = (t: MiningThought) => ANCHOR_TYPES.has(t.type) && !answersAKnownQuestion(t);
   const anchors = thoughts.filter(isAnchor).map((t) => t.id);
   const groups = groupAnchors(anchors, sim, anchorThreshold, constraints);
+  const anchorSet = new Set(anchors);
 
   // Satellites attach to the group they're most about. Answers prefer the group holding the
   // question they answer, so a resolution lands where its question is.
@@ -432,8 +433,14 @@ export function consolidate(thoughts: MiningThought[], options: ConsolidateOptio
     let bestScore = 0;
     groups.forEach((g, i) => {
       if (g.some((x) => cannot.has(x < s.id ? `${x}|${s.id}` : `${s.id}|${x}`))) return;
-      // Max, not average: a question is about one specific anchor, not the group's centroid.
-      const score = Math.max(...g.map((x) => sim.between(s.id, x)));
+      // Max, not average: a question is about one specific anchor, not the group's centroid. And
+      // only against what the group STATES: comparing with the questions already placed there let
+      // questions chain onto each other (one NOMOS question asked beside a continuity-layer idea
+      // pulled every later NOMOS question, weeks apart, into that idea). A group of questions
+      // with nothing stated yet is matched on its questions, so related questions still gather.
+      // An answer is different: it is about a question, so it is matched against those too.
+      const stated = s.type === "resolution" ? [] : g.filter((x) => anchorSet.has(x));
+      const score = Math.max(...(stated.length > 0 ? stated : g).map((x) => sim.between(s.id, x)));
       if (score > bestScore) {
         best = i;
         bestScore = score;
