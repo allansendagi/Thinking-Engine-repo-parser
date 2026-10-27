@@ -259,6 +259,10 @@ struct MenuBarListView: View {
             }
             .scrollContentBackground(.hidden)
             .focusable()
+            // Arrow keys and Return still move through and open rows; the selected row's own
+            // highlight shows where you are. The system focus ring around the whole list drew a
+            // blue line under the tabs and above the footer (the panel clips its sides).
+            .focusEffectDisabled()
             .onKeyPress(.upArrow) { move(-1, proxy); return .handled }
             .onKeyPress(.downArrow) { move(1, proxy); return .handled }
             .onKeyPress(.return) { open(selection); return .handled }
