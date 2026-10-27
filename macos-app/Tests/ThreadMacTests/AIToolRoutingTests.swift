@@ -8,6 +8,9 @@ final class AIToolRoutingTests: XCTestCase {
     func testMatchesTheDisplayLabelProvenanceActuallyCarries() {
         XCTAssertEqual(AppState.AITool.from(source: "ChatGPT"), .chatgpt)
         XCTAssertEqual(AppState.AITool.from(source: "Claude"), .claude)
+        XCTAssertEqual(AppState.AITool.from(source: "Grok"), .grok)
+        XCTAssertEqual(AppState.AITool.from(source: "grok"), .grok)
+        XCTAssertEqual(AppState.AITool.grok.newChatURL?.host, "grok.com")
         XCTAssertEqual(AppState.AITool.from(source: "Gemini"), .gemini)
         XCTAssertEqual(AppState.AITool.from(source: "Cursor"), .cursor)
     }

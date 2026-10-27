@@ -5,7 +5,7 @@ export interface CapturedMessage {
   createdAt: string;
 }
 
-export type Source = "chatgpt" | "claude" | "gemini" | "perplexity";
+export type Source = "chatgpt" | "claude" | "gemini" | "perplexity" | "grok";
 
 /** Message shape sent from a content script to the background worker. */
 export interface CaptureMessage {

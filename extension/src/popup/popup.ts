@@ -40,8 +40,9 @@ const SOURCE_LABEL: Record<Source, string> = {
   claude: "Claude",
   gemini: "Gemini",
   perplexity: "Perplexity",
+  grok: "Grok",
 };
-const SOURCE_ORDER: Source[] = ["chatgpt", "claude", "gemini", "perplexity"];
+const SOURCE_ORDER: Source[] = ["chatgpt", "claude", "gemini", "perplexity", "grok"];
 
 function renderConnection(state: PairingState, account: AccountInfo | null): void {
   const paired = state.status === "paired";
