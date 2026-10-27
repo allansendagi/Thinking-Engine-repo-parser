@@ -9,6 +9,9 @@ import { chooseMeaningModel, consolidate, meaningWeightFor, nativeIsSufficient, 
 import { loadCorrections, type LearnedCorrections } from "./corrections";
 import { hasV1Backup, materializeV2, restoreV1, servesV2 } from "./serve";
 import { consolidateOffThread } from "./offThread";
+import { registryBudget, tidyAccount } from "./tidy";
+import { openRegistry } from "../api/auth";
+import { createExtractionProvider } from "../providers/anthropic";
 
 /**
  * v2 mining in SHADOW: recompute ideas from every stored thought with the v2 consolidation pass
@@ -191,6 +194,7 @@ async function minePass(userId: string, open: (userId: string) => Database, with
     console.log(`[Thread] shadow v2 mining ${userId}: ${run.ideas} ideas, ${run.sparks} sparks from ${run.thoughts} thoughts (${run.vectors} vectors) in ${run.ms}ms`);
     syncServing(userId, db, ideas);
     db.prepare("INSERT OR REPLACE INTO account_settings (key, value) VALUES ('grouping_version', ?)").run(groupingVersion());
+    await tidyAfterRegroup(userId, db);
   } catch (e) {
     console.error(`[Thread] shadow v2 mining failed for ${userId}:`, e);
   } finally {
@@ -284,4 +288,29 @@ export async function regroupStaleAccounts(userIds: string[], open: (userId: str
   }
   if (n > 0) console.log(`[Thread] regrouped ${n} account(s) under grouping rules ${groupingVersion()}`);
   return n;
+}
+
+/**
+ * The tidy pass (mining/tidy.ts) for this account, within the shared spending cap. Runs only when
+ * THREAD_TIDY_BUDGET_USD is set and the account is served by v2. If it changed any question, one
+ * more regroup applies it (the second pass finds nothing left to tidy, so this never loops).
+ */
+async function tidyAfterRegroup(userId: string, db: Database): Promise<void> {
+  const cap = Number(process.env.THREAD_TIDY_BUDGET_USD ?? 0);
+  if (!(cap > 0) || !servesV2(userId) || !process.env.ANTHROPIC_API_KEY) return;
+  let reg: Database | null = null;
+  try {
+    reg = openRegistry();
+    const budget = registryBudget(reg, cap);
+    if (budget.remaining() <= 0) return;
+    const r = await tidyAccount(db, createExtractionProvider(), budget);
+    if (r.reviewed + r.named > 0) {
+      console.log(`[Thread] tidy ${userId}: ${r.reviewed} questions reviewed (${r.rewritten} rewritten, ${r.setAside} set aside), ${r.named} ideas named${r.stoppedByBudget ? " -- stopped at the spending cap" : ""}; $${(cap - budget.remaining()).toFixed(4)} of $${cap} used`);
+    }
+    if (r.rewritten + r.setAside + r.named > 0 && !again.has(userId)) again.set(userId, false);
+  } catch (e) {
+    console.error(`[Thread] tidy failed for ${userId}:`, e);
+  } finally {
+    reg?.close();
+  }
 }
