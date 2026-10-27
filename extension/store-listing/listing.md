@@ -11,7 +11,7 @@ copy stays in one place. Nothing in this folder ships in the package.
 `Thread — Continuity Layer`
 
 **Summary** (≤ 132 chars)
-`Recover and continue the thinking you do in ChatGPT, Claude, Gemini, and Perplexity — the thought, not the chat log.`
+`Recover and continue the thinking you do in ChatGPT, Claude, Gemini, Perplexity and Grok — the thought, not the chat log.`
 
 **Category**
 `Productivity`
@@ -26,7 +26,7 @@ Thread keeps the ideas you develop while talking to AI.
 
 You have a long exchange in ChatGPT working out an approach. Three days later you need it back —
 not the transcript, the conclusion and the open questions. Normally that means scrolling a dead
-chat. Thread captures the idea as you go, across ChatGPT, Claude, Gemini, and Perplexity, and lets you
+chat. Thread captures the idea as you go, across ChatGPT, Claude, Gemini, Perplexity and Grok, and lets you
 pick it up where you left off.
 
 • Automatic capture — no button. When you develop an idea in a conversation, Thread records its
@@ -46,7 +46,7 @@ want to sign in elsewhere or go Pro.
 ```
 
 **Single purpose** (Developer Dashboard requires one sentence)
-`Capture the ideas a user develops in AI chat conversations (ChatGPT, Claude, Gemini, Perplexity) so they can be recalled and continued later.`
+`Capture the ideas a user develops in AI chat conversations (ChatGPT, Claude, Gemini, Perplexity, Grok) so they can be recalled and continued later.`
 
 ---
 
@@ -59,7 +59,7 @@ Paste each into the matching field. Keep them literal — reviewers reject vague
 | `storage` | Stores the user's pairing credential and local UI state (last-seen resume nudge, dismissed items). No browsing data. |
 | `sidePanel` | The extension's main UI — the user's list of ideas and each idea's evolution — is shown in the Chrome side panel. |
 | `alarms` | Periodically re-checks whether an unfinished thread on the current site is old enough to surface the "continue where you left off" nudge, without polling on every page event. |
-| `host_permissions: chatgpt.com, chat.openai.com, claude.ai, gemini.google.com, perplexity.ai, www.perplexity.ai` | Content scripts read the visible conversation on these four AI products to extract the idea being developed. No other sites are accessed automatically. |
+| `host_permissions: chatgpt.com, chat.openai.com, claude.ai, gemini.google.com, perplexity.ai, www.perplexity.ai, grok.com` | Content scripts read the visible conversation on these five AI products to extract the idea being developed. No other sites are accessed automatically. |
 | `scripting` | Re-injects the capture script into already-open tabs on these AI sites right after the extension installs or updates, so capture starts without the user reloading each tab; also reads the user's text selection for "Capture in Thread". |
 | `contextMenus` | Adds the single "Capture in Thread" item to the right-click menu on selected text, so the user can send a conversation from any site on purpose. |
 | `activeTab` | Granted only when the user clicks "Capture in Thread"; lets the extension read the selected text on that one page. No standing access to other sites. |
