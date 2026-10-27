@@ -137,3 +137,29 @@ describe("answers_event_id is stored and reaches mining", () => {
   });
 });
 
+
+describe("regrouping when the grouping rules change", () => {
+  test("an account grouped by older rules is regrouped at boot, once", async () => {
+    const { openDb } = await import("../db/client");
+    const { groupingVersion, needsRegroup, regroupStaleAccounts } = await import("./shadow");
+    process.env.THREAD_V2_SERVING_USERS = "*";
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx) VALUES ('r1', 'cr', 'chatgpt', 'user', 'Charge per seat.', '2026-09-01T00:00:00Z', 0)").run();
+    db.prepare("INSERT INTO cognitive_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote) VALUES ('cog_r1_0', 'new_idea', 'Charge per seat.', 0.9, 'high', 'r1', 'Charge per seat')").run();
+    const open = () => db;
+    // keep the in-memory db alive across the pass's close()
+    (db as { close: () => void }).close = () => {};
+    expect(needsRegroup(db)).toBe(true);
+    expect(await regroupStaleAccounts(["user_a"], open)).toBe(1);
+    expect(needsRegroup(db)).toBe(false);
+    expect((db.query("SELECT value FROM account_settings WHERE key = 'grouping_version'").get() as { value: string }).value).toBe(groupingVersion());
+    expect(await regroupStaleAccounts(["user_a"], open)).toBe(0); // already current
+    expect((db.query("SELECT COUNT(*) AS n FROM idea_nodes").get() as { n: number }).n).toBe(1);
+    delete process.env.THREAD_V2_SERVING_USERS;
+  });
+
+  test("the version is a fingerprint of the grouping code, not a hand-bumped number", async () => {
+    const { groupingVersion } = await import("./shadow");
+    expect(groupingVersion()).toMatch(/^[0-9a-f]{12}$/);
+  });
+});
