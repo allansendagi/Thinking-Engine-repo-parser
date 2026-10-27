@@ -141,18 +141,18 @@ struct IdeaRowGroup: Identifiable {
     var leadsSection = false
 }
 
-/// The "Still unanswered" section on the Recent tab, capped to `maxIdeas` ideas. The same rule the Open loops tab uses: while every idea
+/// The "Still unanswered" section on the Recent tab: one question by default. The same rule the Open loops tab uses: while every idea
 /// has at most one question the list stays flat (each row names its idea); once any idea has two or
 /// more, the questions are grouped under that idea's name, shown once, so the same title isn't
 /// printed under every question and several questions from one idea read as a set.
 /// Order is the server's (it ranks what to resurface); ideas appear where their first question does.
-func revisitGroups(_ all: [ThinkingStateResponse.Revisit], section: String = "Still unanswered", maxIdeas: Int = 3) -> [IdeaRowGroup] {
-    // A glance, not the full list (that is the Open loops tab): the server's top ideas only,
-    // keeping every question of each.
+func revisitGroups(_ all: [ThinkingStateResponse.Revisit], section: String = "Still unanswered", maxQuestions: Int = 1, maxIdeas: Int = 3) -> [IdeaRowGroup] {
+    // A glance, not the full list (that is the Open loops tab): on Recent, the one question the
+    // server ranks first. `maxIdeas` caps how many ideas a longer list may span.
     var firstSeen: [String] = []
     for r in all where !firstSeen.contains(r.ideaId) { firstSeen.append(r.ideaId) }
     let shown = Set(firstSeen.prefix(maxIdeas))
-    let revisit = all.filter { shown.contains($0.ideaId) }
+    let revisit = Array(all.filter { shown.contains($0.ideaId) }.prefix(maxQuestions))
     guard !revisit.isEmpty else { return [] }
 
     func row(_ r: ThinkingStateResponse.Revisit, showIdea: Bool) -> IdeaRow {
