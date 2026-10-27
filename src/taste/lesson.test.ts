@@ -51,7 +51,7 @@ describe("Teach Thread: which questions", () => {
     const db = seed(rows);
     for (let i = 0; i < 6; i++) recordKeep(db, `i_k${i}`, [`t_k${i}`], "lesson");
     for (let i = 0; i < 6; i++) recordCorrection(db, { kind: "not_idea", ideaId: `i_j${i}`, thoughtIds: [`t_j${i}`], origin: "lesson" });
-    db.exec("DELETE FROM idea_nodes WHERE id LIKE 'i_j%'; DELETE FROM evolution_steps WHERE idea_id LIKE 'i_j%'");
+    db.exec("DELETE FROM evolution_steps WHERE idea_id LIKE 'i_j%'; DELETE FROM idea_nodes WHERE id LIKE 'i_j%'"); // children first
     const l = buildLesson(db);
     expect(l.ready).toBe(true);
     const first = l.questions[0]!;
