@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { listThoughts, loadThoughtVectors, storeThoughtVectors, thoughtsNeedingVectors, vectorModels } from "../db/thoughts";
 import { VoyageEmbeddingProvider, voyageConfigured } from "../providers/voyage";
@@ -187,6 +190,7 @@ async function minePass(userId: string, open: (userId: string) => Database, with
     const { run, ideas } = await runShadowMiningOffThread(db);
     console.log(`[Thread] shadow v2 mining ${userId}: ${run.ideas} ideas, ${run.sparks} sparks from ${run.thoughts} thoughts (${run.vectors} vectors) in ${run.ms}ms`);
     syncServing(userId, db, ideas);
+    db.prepare("INSERT OR REPLACE INTO account_settings (key, value) VALUES ('grouping_version', ?)").run(groupingVersion());
   } catch (e) {
     console.error(`[Thread] shadow v2 mining failed for ${userId}:`, e);
   } finally {
@@ -227,4 +231,57 @@ export function syncServing(userId: string, db: Database, ideas: ConsolidatedIde
   } else if (hasV1Backup(db) && restoreV1(db)) {
     console.log(`[Thread] v2 switched off for ${userId}: v1 ideas restored`);
   }
+}
+
+/**
+ * Which version of the grouping rules an account was last grouped with. A change to how ideas are
+ * formed (consolidate) or served (serve) used to reach an account only after its next capture, so
+ * a fix could sit unseen for days. The version is the hash of those two files' source, so no
+ * number has to be remembered and bumped by hand.
+ */
+let cachedVersion: string | null = null;
+export function groupingVersion(): string {
+  if (cachedVersion) return cachedVersion;
+  try {
+    const src = ["consolidate.ts", "serve.ts"].map((f) => readFileSync(join(import.meta.dir, f), "utf8")).join("\n");
+    cachedVersion = createHash("sha256").update(src).digest("hex").slice(0, 12);
+  } catch {
+    cachedVersion = "unknown";
+  }
+  return cachedVersion;
+}
+
+/** True when this account's ideas were last grouped by older rules (or never by v2). */
+export function needsRegroup(db: Database): boolean {
+  const row = db.query("SELECT value FROM account_settings WHERE key = 'grouping_version'").get() as { value: string } | null;
+  return row?.value !== groupingVersion();
+}
+
+/**
+ * At boot: regroup, one account at a time, every v2 account grouped by older rules -- so a fix to
+ * how ideas are formed reaches existing ideas the moment it deploys. Words and stored vectors only
+ * (no Voyage call), off the request path. Returns how many it regrouped.
+ */
+export async function regroupStaleAccounts(userIds: string[], open: (userId: string) => Database): Promise<number> {
+  if (process.env.THREAD_SHADOW_MINER === "off") return 0;
+  let n = 0;
+  for (const userId of userIds) {
+    if (!servesV2(userId)) continue;
+    let stale = false;
+    try {
+      const db = open(userId);
+      try {
+        stale = needsRegroup(db);
+      } finally {
+        db.close();
+      }
+    } catch {
+      continue; // an account that can't be opened is the normal path's problem, not boot's
+    }
+    if (!stale) continue;
+    await minePass(userId, open, false);
+    n++;
+  }
+  if (n > 0) console.log(`[Thread] regrouped ${n} account(s) under grouping rules ${groupingVersion()}`);
+  return n;
 }
