@@ -21,11 +21,15 @@ const ADD_COLUMNS: [table: string, column: string][] = [
   ["cognitive_events", "adopted_quote TEXT"],
   ["cognitive_events", "answers_event_id TEXT"],
   ["cognitive_events", "title TEXT"],
+  ["cognitive_events", "statement_original TEXT"],
+  ["cognitive_events", "tidied INTEGER NOT NULL DEFAULT 0"],
   ["discarded_events", "role TEXT"],
   ["discarded_events", "adopted_source_event_id TEXT"],
   ["discarded_events", "adopted_quote TEXT"],
   ["discarded_events", "answers_event_id TEXT"],
   ["discarded_events", "title TEXT"],
+  ["discarded_events", "statement_original TEXT"],
+  ["discarded_events", "tidied INTEGER NOT NULL DEFAULT 0"],
   // Who set an open loop's current state: 'user' (a person ticked or unticked it) or 'thread' (the
   // analysis closed/left it open). NULL = from before this was recorded. A person's word wins and
   // is never overwritten; Thread's follows the evidence, so it can reverse itself.

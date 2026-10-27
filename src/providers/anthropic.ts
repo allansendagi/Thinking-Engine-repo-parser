@@ -70,6 +70,7 @@ export class AnthropicProvider implements CompletionProvider {
       messages: [{ role: "user", content }],
     });
     recordUsage(this.model, response.usage);
+    options?.onUsage?.({ input: response.usage?.input_tokens ?? 0, output: response.usage?.output_tokens ?? 0 });
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
       throw new Error("Anthropic response contained no text block");

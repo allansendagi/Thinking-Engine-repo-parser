@@ -10,6 +10,8 @@ export interface CompleteOptions {
    * ask the provider to cache it. Providers that can't, ignore it.
    */
   cachePrefixChars?: number;
+  /** Told the tokens this call used, so a caller can keep a spending cap. */
+  onUsage?: (usage: { input: number; output: number }) => void;
 }
 
 export interface CompletionProvider {

@@ -112,6 +112,10 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
     ).all() as { id: string; type: string; title: string | null }[];
     const modelTitleOf = new Map(named.filter((r) => r.title).map((r) => [r.id, r.title!]));
     const typeOf = new Map(named.map((r) => [r.id, r.type]));
+    // A name the tidy pass gave this idea's founding thought (mining/tidy.ts).
+    const storedName = new Map(
+      (db.query("SELECT founder_thought_id, name FROM idea_names").all() as { founder_thought_id: string; name: string }[]).map((r) => [r.founder_thought_id, r.name]),
+    );
     const usedTitles = new Set<string>();
     const free = (t: string) => !usedTitles.has(t.toLowerCase());
     /**
@@ -130,6 +134,8 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
         const t = deriveTitle(statementOf.get(id) ?? "", raw);
         if (isNamingTitle(t) && free(t)) return pick(t);
       }
+      const stored = storedName.get(founderId);
+      if (stored && free(stored)) return pick(stored);
       const v1 = v1IdeaOf.get(founderId);
       const old = v1 ? before.get(v1)?.title : undefined;
       if (old && isNamingTitle(old) && free(old)) return pick(old);

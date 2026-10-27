@@ -268,3 +268,11 @@ CREATE TABLE IF NOT EXISTS learn_skips (
   idea_id TEXT PRIMARY KEY,
   skipped_at TEXT NOT NULL
 );
+
+-- A short name for an idea (2-5 words), keyed by the thought that founded it so it survives every
+-- regroup. Written by the tidy pass (mining/tidy.ts) for ideas the extractor never named.
+CREATE TABLE IF NOT EXISTS idea_names (
+  founder_thought_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  named_at TEXT NOT NULL
+);

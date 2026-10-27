@@ -290,3 +290,16 @@ describe("how a served idea is named", () => {
     expect(fresh("They are naming 'computable Authority'", null)).toBe("Computable Authority");
   });
 });
+
+describe("a name the tidy pass gave", () => {
+  test("survives every regroup", () => {
+    process.env.THREAD_V2_SERVING_USERS = "*";
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx) VALUES ('t1', 'ct', 'chatgpt', 'user', 'Authority should be checked per act, not per agent, every time.', '2026-09-01T00:00:00Z', 0)").run();
+    db.prepare("INSERT INTO cognitive_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote) VALUES ('cog_t1_0', 'claim', 'Authority should be checked per act, not per agent, every time.', 0.9, 'high', 't1', 'Authority')").run();
+    db.prepare("INSERT INTO idea_names (founder_thought_id, name, named_at) VALUES ('cog_t1_0', 'Per-act authority', '2026-10-27')").run();
+    syncServing(USER, db, runShadowMining(db).ideas);
+    syncServing(USER, db, runShadowMining(db).ideas);
+    expect(loadIdeas(db)[0]!.title).toBe("Per-act authority");
+  });
+});
