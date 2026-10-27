@@ -208,6 +208,7 @@ const CONTENT_SCRIPT_TARGETS: { matches: string[]; file: string }[] = [
   { matches: ["https://claude.ai/*"], file: "dist/content-claude.js" },
   { matches: ["https://gemini.google.com/*"], file: "dist/content-gemini.js" },
   { matches: ["https://www.perplexity.ai/*", "https://perplexity.ai/*"], file: "dist/content-perplexity.js" },
+  { matches: ["https://grok.com/*"], file: "dist/content-grok.js" },
 ];
 
 async function reinjectOpenTabs(): Promise<void> {

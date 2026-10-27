@@ -14,6 +14,7 @@ const AI_ORIGINS = new Set([
   "https://gemini.google.com",
   "https://www.perplexity.ai",
   "https://perplexity.ai",
+  "https://grok.com",
 ]);
 
 /** Messages only the extension's own pages send. */

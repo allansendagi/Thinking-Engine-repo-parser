@@ -1883,13 +1883,14 @@ final class AppState: ObservableObject {
     @Published var handoff: HandoffOutcome = .none
 
     enum AITool: String, CaseIterable, Identifiable {
-        case claude, chatgpt, gemini, cursor
+        case claude, chatgpt, gemini, grok, cursor
         var id: String { rawValue }
         var label: String {
             switch self {
             case .claude: return "Claude"
             case .chatgpt: return "ChatGPT"
             case .gemini: return "Gemini"
+            case .grok: return "Grok"
             case .cursor: return "Cursor"
             }
         }
@@ -1899,6 +1900,7 @@ final class AppState: ObservableObject {
             case .claude: return URL(string: "https://claude.ai/new")
             case .chatgpt: return URL(string: "https://chatgpt.com/")
             case .gemini: return URL(string: "https://gemini.google.com/app")
+            case .grok: return URL(string: "https://grok.com/")
             case .cursor: return nil
             }
         }
@@ -1910,6 +1912,7 @@ final class AppState: ObservableObject {
             if s.contains("chatgpt") || s.contains("openai") || s.contains("codex") { return .chatgpt }
             if s.contains("claude") || s.contains("anthropic") { return .claude }
             if s.contains("gemini") || s.contains("bard") { return .gemini }
+            if s.contains("grok") || s.contains("x.ai") { return .grok }
             if s.contains("cursor") { return .cursor }
             return AITool(rawValue: s)
         }

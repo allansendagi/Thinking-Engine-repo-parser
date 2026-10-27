@@ -30,6 +30,7 @@ const contentResult = await build(
     "src/content-claude.ts",
     "src/content-gemini.ts",
     "src/content-perplexity.ts",
+    "src/content-grok.ts",
   ],
   "iife",
 );

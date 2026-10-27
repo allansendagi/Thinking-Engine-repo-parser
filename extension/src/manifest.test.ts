@@ -14,6 +14,7 @@ const AI_SITES = [
   "https://gemini.google.com/*",
   "https://www.perplexity.ai/*",
   "https://perplexity.ai/*",
+  "https://grok.com/*",
 ];
 
 describe("manifest", () => {
