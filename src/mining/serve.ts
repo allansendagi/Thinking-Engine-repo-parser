@@ -135,7 +135,7 @@ export function materializeV2(db: Database, ideas: ConsolidatedIdea[]): { served
         if (isNamingTitle(t) && free(t)) return pick(t);
       }
       const stored = storedName.get(founderId);
-      if (stored && free(stored)) return pick(stored);
+      if (stored && free(stored)) return pick(stored); // '' marks a naming that failed: skipped
       const v1 = v1IdeaOf.get(founderId);
       const old = v1 ? before.get(v1)?.title : undefined;
       if (old && isNamingTitle(old) && free(old)) return pick(old);
