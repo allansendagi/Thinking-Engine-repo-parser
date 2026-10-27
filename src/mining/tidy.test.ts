@@ -83,3 +83,17 @@ describe("tidy pass", () => {
     expect(acceptableRewrite("The user is asking whether authority should be checked per act.", "The user wants to know about pricing")).toBe(false);
   });
 });
+
+describe("a reply that is cut off", () => {
+  test("every whole item in it is used, the rest are tried once and never paid for again", async () => {
+    const db = account();
+    const cut = '{"items":[{"id":"q2","keep":false},{"id":"q3","keep":true},{"id":"q1","keep":true,"text":"Should auth';
+    const r = await tidyAccount(db, fake([cut, '{"items":[]}']), budget(1));
+    expect(r.setAside).toBe(1);
+    expect(row(db, "q3")).toMatchObject({ tidied: 1 });
+    expect(row(db, "q1")).toMatchObject({ tidied: -1, statement: "The user is asking whether authority should be checked per act." });
+    const again = fake([]);
+    await tidyAccount(db, again, budget(1));
+    expect(again.calls).toBe(0); // nothing left: no question and no name is retried
+  });
+});

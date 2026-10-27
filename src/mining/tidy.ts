@@ -23,7 +23,9 @@ import { isPersonTitle } from "../state/buildIdeaNode";
 /** claude-haiku-4-5 list prices, USD per million tokens. Conservative for cheaper models. */
 const PRICE_IN = 1;
 const PRICE_OUT = 5;
-const BATCH = 40;
+/** Small batches with room to answer: a cut-off reply loses the whole batch. */
+const QUESTION_BATCH = 15;
+const NAME_BATCH = 20;
 
 export interface TidyBudget {
   /** Dollars still available; the pass stops before a call when this is spent. */
@@ -50,15 +52,26 @@ Reply with JSON only: {"items":[{"id":"...","keep":true|false,"text":"... (optio
 const NAME_SYSTEM = `You name ideas. For each idea, give a 2-5 word noun phrase that names it the way a person would file it: specific, no trailing punctuation, not a sentence, no "The user", no "I". Use the person's own key terms.
 Reply with JSON only: {"items":[{"id":"...","name":"..."}]}`;
 
-function parseItems<T>(raw: string): T[] {
+/** The reply's items; from a reply cut off mid-way, every item that arrived whole. */
+export function parseItems<T>(raw: string): T[] {
   const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) return [];
-  try {
-    const v = JSON.parse(m[0]) as { items?: T[] };
-    return Array.isArray(v.items) ? v.items : [];
-  } catch {
-    return [];
+  if (m) {
+    try {
+      const v = JSON.parse(m[0]) as { items?: T[] };
+      if (Array.isArray(v.items)) return v.items;
+    } catch {
+      /* fall through to salvage */
+    }
   }
+  const out: T[] = [];
+  for (const piece of raw.match(/\{[^{}]*"id"[^{}]*\}/g) ?? []) {
+    try {
+      out.push(JSON.parse(piece) as T);
+    } catch {
+      /* a fragment */
+    }
+  }
+  return out;
 }
 
 async function call(provider: CompletionProvider, budget: TidyBudget, system: string, user: string, maxTokens: number): Promise<string | null> {
@@ -99,9 +112,9 @@ export async function tidyAccount(db: Database, provider: CompletionProvider, bu
          AND id NOT IN (SELECT id FROM cognitive_events)`,
     )
     .all() as { id: string; statement: string; tbl: "cognitive_events" | "discarded_events" }[];
-  for (let i = 0; i < pending.length; i += BATCH) {
-    const batch = pending.slice(i, i + BATCH);
-    const raw = await call(provider, budget, QUESTION_SYSTEM, JSON.stringify(batch.map(({ id, statement }) => ({ id, text: statement }))), 60 * batch.length + 200);
+  for (let i = 0; i < pending.length; i += QUESTION_BATCH) {
+    const batch = pending.slice(i, i + QUESTION_BATCH);
+    const raw = await call(provider, budget, QUESTION_SYSTEM, JSON.stringify(batch.map(({ id, statement }) => ({ id, text: statement }))), 150 * batch.length + 300);
     if (raw === null) {
       result.stoppedByBudget = true;
       break;
@@ -110,7 +123,12 @@ export async function tidyAccount(db: Database, provider: CompletionProvider, bu
     db.transaction(() => {
       for (const q of batch) {
         const v = verdicts.get(q.id);
-        if (!v) continue; // not answered: review again next time
+        if (!v) {
+          // Not answered (a cut-off or malformed reply): marked as tried, never retried, so a
+          // bad reply can't make every later pass pay for the same questions again.
+          db.prepare(`UPDATE ${q.tbl} SET tidied = -1 WHERE id = ?`).run(q.id);
+          continue;
+        }
         if (v.keep === false) {
           db.prepare(`UPDATE ${q.tbl} SET persistence = 'low', persistence_reason = 'tidy: a request for information, not a question the person is settling', tidied = 1 WHERE id = ?`).run(q.id);
           result.setAside++;
@@ -138,9 +156,9 @@ export async function tidyAccount(db: Database, provider: CompletionProvider, bu
     const named = new Set((db.query("SELECT founder_thought_id FROM idea_names").all() as { founder_thought_id: string }[]).map((r) => r.founder_thought_id));
     const modelTitled = new Set((db.query("SELECT id FROM cognitive_events WHERE title IS NOT NULL").all() as { id: string }[]).map((r) => r.id));
     const todo = unnamed.filter((i) => i.founder && !named.has(i.founder) && !modelTitled.has(i.founder));
-    for (let i = 0; i < todo.length; i += BATCH) {
-      const batch = todo.slice(i, i + BATCH);
-      const raw = await call(provider, budget, NAME_SYSTEM, JSON.stringify(batch.map((x) => ({ id: x.id, idea: x.current_formulation, currently: x.title }))), 20 * batch.length + 200);
+    for (let i = 0; i < todo.length; i += NAME_BATCH) {
+      const batch = todo.slice(i, i + NAME_BATCH);
+      const raw = await call(provider, budget, NAME_SYSTEM, JSON.stringify(batch.map((x) => ({ id: x.id, idea: x.current_formulation, currently: x.title }))), 40 * batch.length + 300);
       if (raw === null) {
         result.stoppedByBudget = true;
         break;
@@ -151,7 +169,11 @@ export async function tidyAccount(db: Database, provider: CompletionProvider, bu
         for (const x of batch) {
           const n = names.get(x.id);
           const words = n ? n.split(/\s+/).length : 0;
-          if (!n || words < 1 || words > 6 || isPersonTitle(n)) continue;
+          if (!n || words < 1 || words > 6 || isPersonTitle(n)) {
+            // Tried once; an empty name is never used as a title and stops a retry.
+            db.prepare("INSERT OR IGNORE INTO idea_names (founder_thought_id, name, named_at) VALUES (?, '', ?)").run(x.founder!, now);
+            continue;
+          }
           db.prepare("INSERT OR REPLACE INTO idea_names (founder_thought_id, name, named_at) VALUES (?, ?, ?)").run(x.founder!, n, now);
           db.prepare("UPDATE idea_nodes SET title = ? WHERE id = ?").run(n, x.id);
           result.named++;
