@@ -17,7 +17,7 @@ describe("grokAdapter", () => {
   test("the conversation id comes from /c/<id>", () => {
     setupDom("https://grok.com/c/66c0b3e3-2488-4f47-b2cb-b6430a41a2e7?rid=abc", "<main></main>");
     expect(grokAdapter.getConversationId()).toBe("66c0b3e3-2488-4f47-b2cb-b6430a41a2e7");
-    expect(grokAdapter.getConversationUrl()).toBe("https://grok.com/c/66c0b3e3-2488-4f47-b2cb-b6430a41a2e7");
+    expect(grokAdapter.getConversationUrl!()).toBe("https://grok.com/c/66c0b3e3-2488-4f47-b2cb-b6430a41a2e7");
   });
 
   test("no id on the start page", () => {
