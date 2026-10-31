@@ -94,3 +94,58 @@ describe("buildTasteReport", () => {
     expect(buildTasteReport([], labels([], []), vectors).acceptanceRate).toBeNull();
   });
 });
+
+describe("starter taste (before personal taste is ready)", () => {
+  // Starter examples in the same 2-D picture: real ideas along +x, not-ideas along +y.
+  const starter = { model: "test", idea: [[1, 0], [1, 0.05], [1, 0.1]], notIdea: [[0, 1], [0.05, 1], [0.1, 1], [0.02, 1], [0.08, 1]] };
+  const vectors = new Map<string, number[]>([["looksJunk", [0.03, 1]], ["looksReal", [1, 0.02]], ["kept", [0.04, 1]]]);
+  const ideas = [
+    { id: "junk", thoughtIds: ["looksJunk"] },
+    { id: "real", thoughtIds: ["looksReal"] },
+    { id: "noVector", thoughtIds: ["ghost"] },
+  ];
+
+  test("an idea that looks only like the not-an-idea examples goes to Maybe; the rest stay suggested, never likely", () => {
+    const r = buildTasteReport(ideas, labels([], []), vectors, starter);
+    expect(r.ready).toBe(false);
+    const tier = (id: string) => r.ideas.find((i) => i.ideaId === id)!.tier;
+    expect(tier("junk")).toBe("unlikely");
+    expect(tier("real")).toBe("suggested");
+    expect(tier("noVector")).toBe("suggested");
+  });
+
+  test("no starter vectors (missing file or a different model): every idea stays suggested", () => {
+    const r = buildTasteReport(ideas, labels([], []), vectors, null);
+    expect(r.ideas.every((i) => i.tier === "suggested")).toBe(true);
+  });
+
+  test("the person's Keep still wins over a starter guess", () => {
+    const l = labels([], []);
+    l.keptThoughtIds.add("looksJunk");
+    const r = buildTasteReport(ideas, l, vectors, starter);
+    expect(r.ideas.find((i) => i.ideaId === "junk")!.tier).toBe("confirmed");
+  });
+
+  test("once personal taste is ready, the starter examples are not used", () => {
+    const pos = Array.from({ length: MIN_LABELS_PER_CLASS }, (_, i) => `p${i}`);
+    const neg = Array.from({ length: MIN_LABELS_PER_CLASS }, (_, i) => `n${i}`);
+    const v = new Map(vectors);
+    // The person keeps things that look like the starter's not-ideas: their taste must win.
+    pos.forEach((t) => v.set(t, [0.03, 1]));
+    neg.forEach((t) => v.set(t, [1, 0.03]));
+    const r = buildTasteReport(ideas, labels(pos, neg), v, starter);
+    expect(r.ideas.find((i) => i.ideaId === "junk")!.tier).toBe("likely");
+  });
+});
+
+describe("shipped starter vectors", () => {
+  test("match the examples and the production model", async () => {
+    const { loadStarterVectors, STARTER_EXAMPLES } = await import("./starter");
+    const { VOYAGE_MODEL } = await import("../providers/voyage");
+    const s = loadStarterVectors();
+    expect(s).not.toBeNull();
+    expect(s!.model).toBe(`voyage:${VOYAGE_MODEL}`);
+    expect(s!.notIdea.length).toBe(STARTER_EXAMPLES.notIdea.length);
+    expect(s!.idea.length).toBe(STARTER_EXAMPLES.idea.length);
+  });
+});

@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { loadTasteLabels, type TasteLabels } from "../mining/corrections";
 import { chooseMeaningModel } from "../mining/consolidate";
 import { loadThoughtVectors, vectorModels } from "../db/thoughts";
+import { loadStarterVectors, STARTER_UNLIKELY_AT, starterScore, type StarterVectors } from "./starter";
 
 /**
  * Personal taste: what THIS person keeps. "Is this an idea worth having?" is a judgment about
@@ -26,6 +27,8 @@ export const UNLIKELY_AT = 0.2;
  * - confirmed: the person said Keep.
  * - likely / unsure / unlikely: taste's guess (unlikely goes to the Maybe tray).
  * - suggested: no guess yet (not enough labels, or no vectors) -- shown, labelled as a suggestion.
+ *   Before personal taste is ready, an idea that looks only like the generic not-an-idea examples
+ *   (starter.ts) is "unlikely" instead.
  */
 export type Tier = "confirmed" | "likely" | "unsure" | "unlikely" | "suggested";
 
@@ -98,6 +101,7 @@ export function buildTasteReport(
   ideas: { id: string; thoughtIds: string[] }[],
   labels: TasteLabels,
   vectors: Map<string, ArrayLike<number>>,
+  starter: StarterVectors | null = null,
 ): TasteReport {
   const keeps = labels.history.filter((h) => h.verdict === "keep").length + labels.reviewed.keeps + labels.taught.keeps;
   const notIdeas = labels.history.filter((h) => h.verdict === "not_idea").length + labels.reviewed.notIdeas + labels.taught.notIdeas;
@@ -110,7 +114,7 @@ export function buildTasteReport(
     if (labels.keptIdeaIds.has(idea.id) || idea.thoughtIds.some((t) => labels.keptThoughtIds.has(t))) {
       return { ideaId: idea.id, tier: "confirmed", score: 1 };
     }
-    if (!ready) return { ideaId: idea.id, tier: "suggested", score: null };
+    if (!ready) return starterTaste(idea, vectors, starter);
     const scores = idea.thoughtIds
       .map((t) => thoughtTaste(t, vectors, labels.positives, labels.negatives))
       .filter((s): s is number => s !== null);
@@ -118,6 +122,19 @@ export function buildTasteReport(
     return { ideaId: idea.id, tier: tierFor(score), score };
   });
   return { ready, keeps, notIdeas, acceptanceRate, acceptanceSample: recent.length, window: ACCEPTANCE_WINDOW, ideas: out };
+}
+
+/** Before personal taste is ready: Maybe tray when the idea's thoughts look like not-an-idea examples, else no guess. */
+function starterTaste(idea: { id: string; thoughtIds: string[] }, vectors: Map<string, ArrayLike<number>>, starter: StarterVectors | null): IdeaTaste {
+  const scores = starter
+    ? idea.thoughtIds.flatMap((t) => {
+        const v = vectors.get(t);
+        return v ? [starterScore(v, starter)] : [];
+      })
+    : [];
+  if (scores.length === 0) return { ideaId: idea.id, tier: "suggested", score: null };
+  const score = scores.reduce((a, b) => a + b, 0) / scores.length;
+  return { ideaId: idea.id, tier: score <= STARTER_UNLIKELY_AT ? "unlikely" : "suggested", score };
 }
 
 /** Database wrapper: this person's ideas, labels and the account's meaning vectors. */
@@ -129,5 +146,6 @@ export function tasteReport(db: Database): TasteReport {
   const byIdea = new Map<string, string[]>();
   for (const s of steps) (byIdea.get(s.idea_id) ?? byIdea.set(s.idea_id, []).get(s.idea_id)!).push(s.cognitive_event_id);
   const ideas = (db.query("SELECT id FROM idea_nodes").all() as { id: string }[]).map((i) => ({ id: i.id, thoughtIds: byIdea.get(i.id) ?? [] }));
-  return buildTasteReport(ideas, labels, vectors);
+  const starter = loadStarterVectors();
+  return buildTasteReport(ideas, labels, vectors, starter && starter.model === model ? starter : null);
 }
