@@ -276,3 +276,10 @@ CREATE TABLE IF NOT EXISTS idea_names (
   name TEXT NOT NULL,
   named_at TEXT NOT NULL
 );
+
+-- One-time data repairs (db/repairs.ts), each recorded once it has run on this database.
+CREATE TABLE IF NOT EXISTS data_repairs (
+  name TEXT PRIMARY KEY,
+  ran_at TEXT NOT NULL,
+  detail TEXT
+);

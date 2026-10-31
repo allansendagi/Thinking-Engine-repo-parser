@@ -18,6 +18,7 @@ import {
   type IdentityStatus,
 } from "../state/resolveConversationIdentity";
 import { recordEvidence } from "../db/evidence";
+import { textHash } from "../db/thoughts";
 
 /**
  * How many COMMITTED events a conversation needs before identity resolution stops re-running on
@@ -137,6 +138,46 @@ export function remapToExistingIds(
 }
 
 /**
+ * Provenance guard: a message id never changes what a thought was taken from.
+ *
+ * Messages are stored by id, latest text wins. That is right for a message whose text only grows
+ * or is re-sent, but an id that comes back carrying DIFFERENT words -- a legacy client that
+ * numbered messages by position, a re-paste under the same conversation id -- used to overwrite
+ * the stored text: the new words were never extracted (the id wasn't new), and every thought taken
+ * from the old words was left pointing at a message that no longer contains them. On one account
+ * 56 of 203 thoughts had lost their source this way.
+ *
+ * So when an incoming message reuses a stored id with different text, and some thought's quote
+ * (or adopted quote) from that message would no longer be in it, the incoming message gets its own
+ * id instead -- derived from the old id and its text, so a resend lands on the same id and dedupes.
+ * The stored message and its thoughts stay as they were; the new words are a new message. When
+ * every quote survives (the text grew, or nothing was taken from it), nothing changes.
+ */
+export function protectProvenance(db: Database, conversationId: string, messages: IncomingMessage[]): IncomingMessage[] {
+  const stored = new Map(
+    (db.query("SELECT id, text, text_removed_at FROM canonical_events WHERE conversation_id = ?").all(conversationId) as {
+      id: string; text: string; text_removed_at: string | null;
+    }[]).map((r) => [r.id, r]),
+  );
+  if (stored.size === 0) return messages;
+  const quotesFrom = db.prepare(
+    `SELECT evidence_quote AS q FROM cognitive_events WHERE source_event_id = ?1
+     UNION ALL SELECT evidence_quote FROM discarded_events WHERE source_event_id = ?1
+     UNION ALL SELECT adopted_quote FROM cognitive_events WHERE adopted_source_event_id = ?1
+     UNION ALL SELECT adopted_quote FROM discarded_events WHERE adopted_source_event_id = ?1`,
+  );
+  return messages.map((m) => {
+    const old = stored.get(m.id);
+    // A message the person's retention setting emptied is skipped by the writer anyway.
+    if (!old || old.text_removed_at || normText(old.text) === normText(m.text)) return m;
+    const text = m.text.toLowerCase();
+    const quotes = (quotesFrom.all(m.id) as { q: string | null }[]).flatMap((r) => (r.q ? [r.q.toLowerCase()] : []));
+    if (quotes.every((q) => text.includes(q))) return m;
+    return { ...m, id: `${m.id}~${textHash(m.text).slice(0, 8)}` };
+  });
+}
+
+/**
  * Incremental ingestion for one conversation. Safe to call repeatedly with a growing message list
  * -- e.g. every time a browser extension observes a new turn, it resends the full transcript it
  * has so far, not a diff. Already-seen messages (by content, matched against this user's DB) are
@@ -178,7 +219,7 @@ export async function ingestConversation(
   // tagged committed | provisional (canonicalize.ts / provisionalReason).
   // Content-stable ids: a turn re-sent under a different client id is recognized as the event it
   // already is, not re-extracted. A no-op for a brand-new conversation (nothing stored to match).
-  const messages = remapToExistingIds(db, input.conversationId, input.messages);
+  const messages = protectProvenance(db, input.conversationId, remapToExistingIds(db, input.conversationId, input.messages));
 
   const obs: RawObservation = {
     conversationId: input.conversationId,
