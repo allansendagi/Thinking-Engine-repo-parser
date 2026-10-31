@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 // Embedded at build time, not read from disk at start-up, so the engine also runs as a single
 // compiled binary (`bun build --compile`), where no source tree exists next to it.
 import SCHEMA_SQL from "./schema.sql" with { type: "text" };
+import { runDataRepairs } from "./repairs";
 
 const ADD_COLUMNS: [table: string, column: string][] = [
   ["cognitive_events", "persistence TEXT NOT NULL DEFAULT 'high'"],
@@ -79,6 +80,7 @@ export function openDb(path: string): Database {
     migrate(db);
     db.exec(SCHEMA_SQL);
     migrate(db); // a fresh file's tables only exist now
+    runDataRepairs(db);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
   return db;
