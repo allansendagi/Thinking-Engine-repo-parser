@@ -209,7 +209,8 @@ export const IDENTITY_RESOLUTION_MERGE_THRESHOLD = 0.75;
 // v2: a medium-persistence `new_idea` no longer auto-persists in lenient mode -- it routes to
 // needs-match like the leaky types, so a tentative early idea with nothing to attach to is
 // stored (replayable), not spawned as a thin node.
-export const SIGNAL_GATE_VERSION = 3;
+// v4: a medium `rejection` routes to needs-match too -- it persists only beside an idea it's about.
+export const SIGNAL_GATE_VERSION = 4;
 
 /**
  * A ranked candidate at or above this score counts as "this event attaches to an idea the user
