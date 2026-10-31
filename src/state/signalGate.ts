@@ -11,9 +11,9 @@ import { SIGNAL_GATE_STRONG_MATCH_SCORE } from "../types";
  *   - persistence "high"  -> persist
  *   - persistence "low"   -> discard
  *   - persistence "medium":
- *       state/fact types (decision / rejection / resolution / connection / contradiction /
- *         open_loop) -> persist -- structurally valuable even when minor
- *       new_idea + leaky types (claim / question / refinement) -> "needs-match": persist ONLY if
+ *       state/fact types (decision / resolution / connection / contradiction / open_loop)
+ *         -> persist -- structurally valuable even when minor
+ *       new_idea, rejection + leaky types (claim / question / refinement) -> "needs-match": persist ONLY if
  *         the event attaches to an idea the user is already developing (the pipeline checks the
  *         top candidate-rank score against strongMatchScore()). A medium new_idea with no such
  *         match is stored, not persisted -- it's a tentative early thought, replayable later.
@@ -36,10 +36,14 @@ import { SIGNAL_GATE_STRONG_MATCH_SCORE } from "../types";
  * a fresh node for every one of those is what clutters a backfilled graph. It still gets its
  * chance -- it routes to needs-match, so it persists if it attaches to an idea already being
  * developed and is stored (replayable) if it doesn't.
+ *
+ * v4: `rejection` left this set. A rejection is ABOUT an idea (mining treats it as a satellite,
+ * never an anchor), so a minor one only means something attached to an idea being developed.
+ * Measured on one person's 50 labelled thoughts: both medium rejections were not ideas
+ * ("I prefer the brevity of the previous version" -- feedback on the AI's draft), 0 kept lost.
  */
 const STRUCTURAL_TYPES: ReadonlySet<CognitiveEventType> = new Set<CognitiveEventType>([
   "decision",
-  "rejection",
   "resolution",
   "connection",
   "contradiction",

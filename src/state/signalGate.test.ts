@@ -30,9 +30,14 @@ describe("quickGate", () => {
   });
 
   test("medium + a state/fact type persists in lenient mode", () => {
-    for (const t of ["decision", "rejection", "resolution", "connection", "contradiction", "open_loop"] as const) {
+    for (const t of ["decision", "resolution", "connection", "contradiction", "open_loop"] as const) {
       expect(quickGate(ev("medium", t), "lenient").decision).toBe("persist");
     }
+  });
+
+  test("v4: medium + rejection needs a match (it's about an idea, so it needs one to attach to)", () => {
+    expect(quickGate(ev("medium", "rejection"), "lenient").decision).toBe("needs-match");
+    expect(quickGate(ev("high", "rejection"), "lenient").decision).toBe("persist");
   });
 
   test("v2: medium + new_idea needs a match (a tentative idea doesn't auto-spawn a node)", () => {
