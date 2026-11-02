@@ -36,5 +36,6 @@ final class SetupReportTests: XCTestCase {
         let json = String(decoding: try JSONEncoder().encode(r), as: UTF8.self)
         XCTAssertFalse(json.contains("/Users/"))
         XCTAssertTrue(json.contains("\"cursorHistoryFound\":true"))
+        XCTAssertTrue(json.contains("\"recoveryStarted\":false"))
     }
 }

@@ -341,6 +341,23 @@ func shouldShowWelcome(
     return !everConnectedBrowser && ideaCount == 0 && pendingCaptureCount == 0
 }
 
+/// The one thing the welcome asks a new user to do. A new panel is empty until Thread has
+/// something to remember, so the fastest route to a first idea wins:
+///  - Cursor's history is on this Mac and nothing has been brought in yet: bring it in -- ideas
+///    arrive in minutes, nothing to install or export.
+///  - otherwise, once the extension is public: connect the browser (its recovery then reads
+///    ChatGPT/Claude history in minutes, from the empty state).
+///  - otherwise: open recovery (an export file or paste).
+/// One primary action, never two competing first steps.
+enum FirstStep: Equatable {
+    case recoverCursor, connectBrowser, recoverHistory
+}
+
+func firstStep(cursorHistory: Bool, recoveryStarted: Bool, browserCapturePublic: Bool) -> FirstStep {
+    if cursorHistory && !recoveryStarted { return .recoverCursor }
+    return browserCapturePublic ? .connectBrowser : .recoverHistory
+}
+
 /// The banner line for a capture-health verdict, or nil when nothing needs saying. Pure so the
 /// wording is unit-tested without standing up AppState. A degraded sensor (Thread can't read a
 /// tool at all) takes priority over thinking that's merely held aside unresolved. `detail` is

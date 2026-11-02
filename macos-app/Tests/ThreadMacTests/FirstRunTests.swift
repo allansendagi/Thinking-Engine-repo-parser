@@ -16,3 +16,16 @@ final class FirstRunTests: XCTestCase {
         XCTAssertNil(extensionBrowserToOpen(defaultBrowser: nil, installed: { _ in false }))
     }
 }
+
+/// The welcome asks for exactly one first step -- the fastest route to a first idea.
+final class FirstStepTests: XCTestCase {
+    func testCursorHistoryComesFirstUntilARecoveryHasStarted() {
+        XCTAssertEqual(firstStep(cursorHistory: true, recoveryStarted: false, browserCapturePublic: true), .recoverCursor)
+        XCTAssertEqual(firstStep(cursorHistory: true, recoveryStarted: true, browserCapturePublic: true), .connectBrowser)
+    }
+
+    func testWithoutCursorTheBrowserIsTheStepOnceTheExtensionIsPublic() {
+        XCTAssertEqual(firstStep(cursorHistory: false, recoveryStarted: false, browserCapturePublic: true), .connectBrowser)
+        XCTAssertEqual(firstStep(cursorHistory: false, recoveryStarted: false, browserCapturePublic: false), .recoverHistory)
+    }
+}
