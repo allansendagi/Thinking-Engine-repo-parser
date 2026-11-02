@@ -221,7 +221,7 @@ export function persistCanonicalEvents(db: Database, canonicalEvents: CanonicalE
     if (old?.text_removed_at) continue;
     if (
       old &&
-      old.text === e.text && old.role === e.role && old.source === e.source && old.created_at === e.createdAt &&
+      old.text === e.text && old.role === e.role && old.source === e.source &&
       old.idx === e.index && old.status === (e.status ?? "committed") &&
       (e.sourceUrl == null || old.source_url === e.sourceUrl) &&
       (e.capture?.method == null || old.capture_method === e.capture.method) &&
@@ -236,7 +236,8 @@ export function persistCanonicalEvents(db: Database, canonicalEvents: CanonicalE
       e.source,
       e.role,
       e.text,
-      e.createdAt,
+      // A stored message keeps the time it was first stored (api/ingest.ts keepMessagesFixed).
+      old?.created_at ?? e.createdAt,
       e.index,
       e.sourceUrl ?? null,
       e.id,
