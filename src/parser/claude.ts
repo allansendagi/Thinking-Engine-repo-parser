@@ -1,4 +1,5 @@
 import type { CanonicalEvent, Role } from "../types";
+import { contentMessageIds } from "./messageId";
 
 /**
  * Raw Claude.ai export shapes (conversations.json). UNVERIFIED against a real export -- built
@@ -64,6 +65,7 @@ export function parseClaudeExport(raw: unknown): CanonicalEvent[] {
     const messages = conversation.chat_messages ?? conversation.messages ?? [];
 
     let index = 0;
+    const idFor = contentMessageIds(String(conversationId));
     let lastKnownTime = new Date(0).toISOString();
 
     for (const message of messages) {
@@ -77,7 +79,7 @@ export function parseClaudeExport(raw: unknown): CanonicalEvent[] {
       lastKnownTime = createdAt;
 
       events.push({
-        id: message.uuid ?? `${conversationId}::${index}`,
+        id: message.uuid ?? idFor(role, text),
         conversationId: String(conversationId),
         source: "claude",
         role,

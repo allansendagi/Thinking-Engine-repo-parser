@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseClaudeExport } from "./claude";
+import { contentMessageIds } from "./messageId";
 
 describe("parseClaudeExport", () => {
   test("parses a flat chat_messages list into canonical events", () => {
@@ -64,10 +65,15 @@ describe("parseClaudeExport", () => {
     expect(events[0]?.id).toBe("m3");
   });
 
-  test("synthesizes an id from conversationId+index when uuid is missing", () => {
-    const raw = [{ uuid: "conv-1", chat_messages: [{ sender: "human", text: "No uuid here." }] }];
+  test("synthesizes an id from what the message says (never its position) when uuid is missing", () => {
+    const raw = [{ uuid: "conv-1", chat_messages: [{ sender: "human", text: "No uuid here." }, { sender: "human", text: "No uuid here." }] }];
     const events = parseClaudeExport(raw);
-    expect(events[0]?.id).toBe("conv-1::0");
+    const idFor = contentMessageIds("conv-1");
+    expect(events[0]?.id).toBe(idFor("user", "No uuid here."));
+    expect(events[1]?.id).toBe(`${events[0]?.id}-2`); // a repeated turn stays distinct
+    // The same message keeps its id when an earlier one is added before it.
+    const shifted = parseClaudeExport([{ uuid: "conv-1", chat_messages: [{ sender: "human", text: "New first." }, ...raw[0]!.chat_messages] }]);
+    expect(shifted[1]?.id).toBe(events[0]?.id);
   });
 
   test("supports the messages field name variant alongside chat_messages", () => {
