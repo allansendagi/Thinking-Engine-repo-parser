@@ -68,4 +68,47 @@ final class SiteShotsTests: XCTestCase {
         host.cacheDisplay(in: host.bounds, to: rep)
         try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: out.appendingPathComponent("recent.png"))
     }
+
+    /// Renders one view to `<name>-<light|dark>.png` in THREAD_RENDER_DIR, on the window background,
+    /// for checking new first-run screens by eye.
+    @MainActor
+    private func render<V: View>(_ view: V, _ name: String, width: CGFloat, afterAppear: (() -> Void)? = nil) throws {
+        let out = URL(fileURLWithPath: ProcessInfo.processInfo.environment["THREAD_RENDER_DIR"]!)
+        for (suffix, appearance) in [("light", NSAppearance(named: .aqua)!), ("dark", NSAppearance(named: .darkAqua)!)] {
+            let host = NSHostingView(rootView: view.background(Color(nsColor: .windowBackgroundColor)))
+            host.appearance = appearance
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 10)
+            host.frame.size = host.fittingSize
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.appearance = appearance
+            window.contentView = host
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            if let afterAppear {
+                afterAppear()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+                host.frame.size = host.fittingSize
+            }
+            host.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: out.appendingPathComponent("\(name)-\(suffix).png"))
+        }
+    }
+
+    @MainActor
+    func testRenderRecoveryEmailStep() throws {
+        let s = AppState()
+        s.backfill = .needsEmail(.cursor)
+        try render(BackfillView().environmentObject(s), "recovery-email", width: 400)
+        try render(BackfillView().environmentObject(s), "recovery-email-taken", width: 400) {
+            s.claimEmailInUse = "taken@example.com"
+            s.authError = "That email is already on your other Thread account — sign in to it instead."
+        }
+    }
+
+    @MainActor
+    func testRenderWelcome() throws {
+        let s = AppState()
+        try render(WelcomeView(forcedMode: .ready).environmentObject(s), "welcome", width: 320)
+    }
 }

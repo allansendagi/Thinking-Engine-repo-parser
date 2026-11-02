@@ -14,6 +14,12 @@ struct EmailCodeForm: View {
     /// Filled into the email field on first appearance -- the last-known email, so signing back
     /// in after a sign-out is one tap.
     var prefillEmail: String = ""
+    /// When set, the form owns its own Cancel: shown left of the main button in one trailing row
+    /// (the macOS layout), with Escape bound to it. Nil keeps the original layout.
+    var cancel: (() -> Void)? = nil
+    /// Put the cursor in the first field as soon as the form appears.
+    var autofocus: Bool = false
+    @FocusState private var focused: Bool
 
     @State private var email = ""
     @State private var code = ""
@@ -22,25 +28,39 @@ struct EmailCodeForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.subheadline.weight(.medium))
+            if !title.isEmpty { Text(title).font(.subheadline.weight(.medium)) }
 
             if step == .email {
                 TextField("you@example.com", text: $email)
                     .textFieldStyle(.roundedBorder)
                     .textContentType(.emailAddress)
+                    .focused($focused)
                     .onSubmit(sendEmailCode)
-                Button(appState.authBusy ? "Sending…" : "Send Code", action: sendEmailCode)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canSend)
+                if let cancel {
+                    HStack {
+                        Spacer()
+                        Button("Not Now", action: cancel).keyboardShortcut(.cancelAction)
+                        Button(appState.authBusy ? "Sending…" : "Send Code", action: sendEmailCode)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!canSend)
+                    }
+                } else {
+                    Button(appState.authBusy ? "Sending…" : "Send Code", action: sendEmailCode)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canSend)
+                }
             } else {
                 Text("Code sent to \(email)").font(.subheadline).foregroundStyle(.secondary)
                 TextField("123456", text: $code)
                     .textFieldStyle(.roundedBorder)
+                    .textContentType(.oneTimeCode)
+                    .focused($focused)
                     .onChange(of: code) { code = String(code.filter(\.isNumber).prefix(6)) }
                     .onSubmit(verifyCode)
                 HStack {
                     Button("Back") { step = .email; code = ""; appState.authError = nil }
                     Spacer()
+                    if let cancel { Button("Not Now", action: cancel).keyboardShortcut(.cancelAction) }
                     Button(appState.authBusy ? "Verifying…" : "Verify", action: verifyCode)
                         .buttonStyle(.borderedProminent)
                         .disabled(!canVerify)
@@ -51,7 +71,12 @@ struct EmailCodeForm: View {
                 Text(e).font(.subheadline).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .onAppear { if email.isEmpty { email = prefillEmail } }
+        .onAppear {
+            if email.isEmpty { email = prefillEmail }
+            if autofocus { focused = true }
+        }
+        // The code field takes the cursor when it appears, so the code can be typed straight in.
+        .onChange(of: step) { if autofocus { focused = true } }
     }
 
     // Return in a field does what the button does, under the same conditions.

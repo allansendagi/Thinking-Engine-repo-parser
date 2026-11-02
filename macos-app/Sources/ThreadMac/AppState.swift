@@ -700,6 +700,16 @@ final class AppState: ObservableObject {
         /// Whole export processed. `capped` = stopped at the Free 25-idea limit part-way.
         case finished(BackfillSummary, capped: Bool)
         case failed(String)
+        /// Recovery was chosen on an account with no email yet: the email sets up the account,
+        /// then `request` runs on its own.
+        case needsEmail(RecoveryRequest)
+    }
+
+    /// What the person chose to recover -- held while they set up their account with an email.
+    enum RecoveryRequest: Equatable {
+        case cursor
+        case export(DetectedExport)
+        case browser(BackfillKind)
     }
 
     /// What the first-run "your thinking is taking shape" screen shows after a backfill: real
@@ -805,7 +815,35 @@ final class AppState: ObservableObject {
     /// Cursor's local history needs no export -- offered separately in the sheet.
     var cursorBackfillAvailable: Bool { CursorBackfill.available }
 
+    /// The account has an email -- recovery is open. Recovery is optional, and choosing it is
+    /// when Thread asks for an email: it sets up the account that keeps what's recovered (sign in
+    /// on another Mac, never lose it). An account that already has one is never asked.
+    var accountHasEmail: Bool {
+        !(account?.email ?? CredentialStore.credential?.email ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Recovery gate: true when it may run now; otherwise the sheet asks for the email first.
+    func readyToRecover(_ request: RecoveryRequest) -> Bool {
+        if accountHasEmail { return true }
+        backfill = .needsEmail(request)
+        backfillHidden = false
+        NotificationCenter.default.post(name: .threadPresentPanel, object: nil)
+        return false
+    }
+
+    /// The email step finished -- by adding the email to this account, or by signing in to the
+    /// account that already had it. Remember it, then run what was chosen: no second click.
+    func continueRecovery(_ request: RecoveryRequest) async {
+        await persistAccountEmailIfKnown()
+        switch request {
+        case .cursor: runCursorBackfill()
+        case .export(let e): runBackfill(e)
+        case .browser(let k): recoverViaBrowser(k)
+        }
+    }
+
     func runBackfill(_ export: DetectedExport) {
+        guard readyToRecover(.export(export)) else { return }
         let job = BackfillJob(
             kind: export.kind == .chatgpt ? .chatgpt : .claude,
             sourcePath: export.url.path,
@@ -821,6 +859,7 @@ final class AppState: ObservableObject {
     }
 
     func runCursorBackfill() {
+        guard readyToRecover(.cursor) else { return }
         let job = BackfillJob(
             kind: .cursor, sourcePath: nil, sourceModified: nil,
             conversationsTotal: 0, conversationsDone: 0,
