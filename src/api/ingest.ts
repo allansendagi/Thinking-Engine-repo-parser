@@ -138,7 +138,7 @@ export function remapToExistingIds(
 }
 
 /**
- * A person's message is fixed once stored: an id never changes what it says.
+ * A person's message is fixed once stored: an id never changes what it says, or when.
  *
  * Messages are stored by id, latest text winning. When an id came back carrying different words (a
  * client that numbered messages by position, a re-paste under the same conversation id), the new
@@ -154,20 +154,36 @@ export function remapToExistingIds(
  */
 export function keepMessagesFixed(db: Database, conversationId: string, messages: IncomingMessage[]): IncomingMessage[] {
   const stored = new Map(
-    (db.query("SELECT id, role, text, text_removed_at FROM canonical_events WHERE conversation_id = ?").all(conversationId) as {
-      id: string; role: string; text: string; text_removed_at: string | null;
+    (db.query("SELECT id, role, text, created_at, text_removed_at FROM canonical_events WHERE conversation_id = ?").all(conversationId) as {
+      id: string; role: string; text: string; created_at: string; text_removed_at: string | null;
     }[]).map((r) => [r.id, r]),
   );
-  if (stored.size === 0) return messages;
-  return messages.map((m) => {
+  return messages.map((raw) => {
+    const m = { ...raw, createdAt: canonicalTime(raw.createdAt) };
     const old = stored.get(m.id);
+    if (!old) return m;
+    // When a message was said is fixed too. A browser capture stamps every message on the page
+    // with the moment of capture, so without this, opening an old conversation re-dated all of
+    // it to "now" and it jumped to the top of Activity -- ordered by what was last looked at,
+    // not what was last thought. The first time a message is stored is its time.
+    const kept = { ...m, createdAt: old.created_at };
     // A message the person's retention setting emptied is skipped by the writer anyway.
-    if (!old || old.text_removed_at) return m;
+    if (old.text_removed_at) return kept;
     const was = normText(old.text), now = normText(m.text);
-    if (was === now) return m;
-    if (old.role === "assistant" && m.role === "assistant" && now.startsWith(was)) return m;
+    if (was === now) return kept;
+    if (old.role === "assistant" && m.role === "assistant" && now.startsWith(was)) return kept;
     return { ...m, id: `${m.id}~${textHash(m.text).slice(0, 8)}` };
   });
+}
+
+/**
+ * One exact format for every stored time -- `2026-11-02T09:15:00.000Z` -- so ordering by the
+ * stored text is ordering by time. Clients send ISO times in slightly different shapes (with or
+ * without milliseconds, sometimes an offset); a value that isn't a time is kept as it came.
+ */
+export function canonicalTime(t: string): string {
+  const ms = Date.parse(t);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : t;
 }
 
 /**

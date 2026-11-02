@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { openDb } from "../db/client";
-import { repairProvenance, runDataRepairs } from "../db/repairs";
+import { REPAIR_NAMES, repairMessageTimes, repairProvenance, runDataRepairs } from "../db/repairs";
 import { textHash } from "../db/thoughts";
 import { FakeProvider } from "../providers/fake";
 import { ingestConversation } from "./ingest";
@@ -106,7 +106,57 @@ describe("repairProvenance", () => {
     runDataRepairs(db);
     runDataRepairs(db);
     const rows = db.query("SELECT name, detail FROM data_repairs").all() as { name: string; detail: string }[];
-    expect(rows).toHaveLength(1);
-    expect(JSON.parse(rows[0]!.detail)).toEqual({ repointed: 1, unrecoverable: 1 });
+    expect(rows.map((r) => r.name).sort()).toEqual([...REPAIR_NAMES()].sort()); // each exactly once
+    expect(JSON.parse(rows.find((r) => r.name === "2026-11-provenance")!.detail)).toEqual({ repointed: 1, unrecoverable: 1 });
+  });
+});
+
+describe("when a message was said is fixed too", () => {
+  const ingest = (db: ReturnType<typeof openDb>, messages: ReturnType<typeof msg>[]) =>
+    ingestConversation(db, { conversationId: "c", source: "fixture", messages }, {
+      extraction: new FakeProvider([extraction([]), extraction([]), extraction([])]),
+      reasoning: new FakeProvider([]),
+    });
+  const timeOf = (db: ReturnType<typeof openDb>, id: string) =>
+    (db.query("SELECT created_at AS t FROM canonical_events WHERE id = ?").get(id) as { t: string }).t;
+
+  test("re-capturing a conversation (a browser re-stamps every message) never re-dates what's stored", async () => {
+    const db = openDb(":memory:");
+    await ingest(db, [{ ...msg("m1", "First thought."), createdAt: "2026-10-01T09:00:00Z" }]);
+    // Opened again a month later: the page is captured whole, every message stamped "now".
+    await ingest(db, [
+      { ...msg("m1", "First thought."), createdAt: "2026-11-01T09:00:00.000Z" },
+      { ...msg("m2", "A new thought."), createdAt: "2026-11-01T09:00:00.000Z" },
+    ]);
+    expect(timeOf(db, "m1")).toBe("2026-10-01T09:00:00.000Z"); // kept, in one exact format
+    expect(timeOf(db, "m2")).toBe("2026-11-01T09:00:00.000Z");
+  });
+
+  test("Activity is ordered by when you last wrote, not by an AI reply", async () => {
+    const { listConversations } = await import("../db/queries");
+    const db = openDb(":memory:");
+    await ingestConversation(db, { conversationId: "a", source: "fixture", messages: [
+      { id: "a1", role: "user", text: "Mine, recent.", createdAt: "2026-11-01T10:00:00Z" },
+    ] }, { extraction: new FakeProvider([extraction([])]), reasoning: new FakeProvider([]) });
+    await ingestConversation(db, { conversationId: "b", source: "fixture", messages: [
+      { id: "b1", role: "user", text: "Mine, older.", createdAt: "2026-10-01T10:00:00Z" },
+      { id: "b2", role: "assistant", text: "A late reply.", createdAt: "2026-11-02T10:00:00Z" },
+    ] }, { extraction: new FakeProvider([extraction([])]), reasoning: new FakeProvider([]) });
+    expect(listConversations(db).map((c) => c.conversationId)).toEqual(["a", "b"]);
+  });
+
+  test("the repair restores each message's first-seen time from the evidence log, never later", () => {
+    const db = openDb(":memory:");
+    const put = db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx, status) VALUES (?, 'c', 'chatgpt', 'user', ?, ?, ?, 'committed')");
+    put.run("m1", "old", "2026-11-01T09:00:00.000Z", 0); // re-dated by a later capture
+    put.run("m2", "new", "2026-11-01T09:00:00.000Z", 1);
+    const ev = db.prepare("INSERT INTO evidence (id, conversation_id, sensor, observed_at, observed_count, accepted_count, integrity_ok, payload) VALUES (?, 'c', 'browser_extension', ?, 1, 1, 1, ?)");
+    ev.run("e1", "2026-10-01T09:00:00.000Z", JSON.stringify({ form: "delta", messages: [{ id: "m1", role: "user", text: "old", createdAt: "2026-10-01T09:00:00Z" }] }));
+    ev.run("e2", "2026-11-01T09:00:00.000Z", JSON.stringify({ form: "delta", messages: [{ id: "m2", role: "user", text: "new", createdAt: "2026-11-01T09:00:00.000Z" }] }));
+    ev.run("e3", "2026-12-01T09:00:00.000Z", "not json");
+    expect(repairMessageTimes(db)).toEqual({ restored: 1 });
+    expect(timeOf(db, "m1")).toBe("2026-10-01T09:00:00.000Z");
+    expect(timeOf(db, "m2")).toBe("2026-11-01T09:00:00.000Z");
+    expect(repairMessageTimes(db)).toEqual({ restored: 0 }); // idempotent
   });
 });

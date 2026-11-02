@@ -364,14 +364,18 @@ export interface ConversationSummary {
   pendingMessages: number;
 }
 
-/** Every conversation Thread has captured, newest activity first -- the "Activity" feed. Two
+/** Every conversation Thread has captured, the one you last wrote in first -- the "Activity" feed. Two
  *  queries: one groups canonical_events per conversation, one resolves which ideas each moved. */
 export function listConversations(db: Database): ConversationSummary[] {
   const convs = db
     .query(
+      // Ordered by when the person last wrote in it -- their thinking, not an AI reply arriving
+      // later -- falling back to the latest message for a conversation with no turn of theirs.
       `SELECT conversation_id AS cid, MIN(source) AS source, COUNT(*) AS n,
-              MIN(created_at) AS first_at, MAX(created_at) AS last_at, MAX(source_url) AS source_url
-       FROM canonical_events GROUP BY conversation_id ORDER BY last_at DESC`,
+              MIN(created_at) AS first_at,
+              COALESCE(MAX(CASE WHEN role = 'user' THEN created_at END), MAX(created_at)) AS last_at,
+              MAX(source_url) AS source_url
+       FROM canonical_events GROUP BY conversation_id ORDER BY last_at DESC, cid`,
     )
     .all() as {
     cid: string;

@@ -2,12 +2,17 @@ import type { Database } from "bun:sqlite";
 
 /**
  * One-time data repairs, each run once per database and recorded in `data_repairs`. They run from
- * openDb when the schema fingerprint changes (adding the table that records them changed it), so
- * every account is repaired on its next request, never twice.
+ * openDb when the schema fingerprint changes -- and the repair names are part of that fingerprint,
+ * so adding a repair is enough: every account is repaired on its next request, never twice.
  */
 const REPAIRS: { name: string; run: (db: Database) => Record<string, number> }[] = [
   { name: "2026-11-provenance", run: repairProvenance },
+  { name: "2026-11-message-times", run: repairMessageTimes },
 ];
+
+/** Part of the schema fingerprint (db/client.ts): adding a repair re-runs openDb's migration
+ *  step on every database once, which is what runs the new repair. */
+export const REPAIR_NAMES = (): string[] => REPAIRS.map((r) => r.name);
 
 export function runDataRepairs(db: Database): void {
   const done = new Set((db.query("SELECT name FROM data_repairs").all() as { name: string }[]).map((r) => r.name));
@@ -58,4 +63,46 @@ export function repairProvenance(db: Database): { repointed: number; unrecoverab
     }
   }
   return { repointed, unrecoverable };
+}
+
+/**
+ * Messages re-dated by later captures (see keepMessagesFixed in api/ingest.ts): a browser capture
+ * stamped every message with the moment of capture and the store took the newest, so opening an
+ * old conversation moved all of it to "now". The evidence log keeps each observation's new turns
+ * with the time they were stamped when first seen -- the earliest of those is when the message
+ * was first captured. Restore it wherever the stored time is later. Never moves a time forward.
+ */
+export function repairMessageTimes(db: Database): { restored: number } {
+  const firstSeen = new Map<string, string>();
+  const toIso = (t: unknown): string | null => {
+    const ms = typeof t === "string" ? Date.parse(t) : NaN;
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  };
+  for (const row of db.query("SELECT observed_at, payload FROM evidence").all() as { observed_at: string; payload: string }[]) {
+    let messages: { id?: unknown; createdAt?: unknown }[] = [];
+    try {
+      messages = (JSON.parse(row.payload) as { messages?: typeof messages }).messages ?? [];
+    } catch {
+      continue;
+    }
+    for (const m of messages) {
+      if (typeof m.id !== "string") continue;
+      const at = toIso(m.createdAt) ?? toIso(row.observed_at);
+      if (!at) continue;
+      const prev = firstSeen.get(m.id);
+      if (!prev || at < prev) firstSeen.set(m.id, at);
+    }
+  }
+  const stored = db.query("SELECT id, created_at FROM canonical_events").all() as { id: string; created_at: string }[];
+  const set = db.prepare("UPDATE canonical_events SET created_at = ? WHERE id = ?");
+  let restored = 0;
+  for (const r of stored) {
+    const first = firstSeen.get(r.id);
+    const now = toIso(r.created_at);
+    if (first && now && first < now) {
+      set.run(first, r.id);
+      restored++;
+    }
+  }
+  return { restored };
 }
