@@ -11,7 +11,7 @@ const msg = (id: string, text: string) => ({ id, role: "user" as const, text, cr
 const textOf = (db: ReturnType<typeof openDb>, id: string) =>
   (db.query("SELECT text FROM canonical_events WHERE id = ?").get(id) as { text: string } | null)?.text;
 
-describe("provenance guard: a reused message id never changes what a thought was taken from", () => {
+describe("a stored message is fixed: a reused id never changes what it says", () => {
   const first = (db: ReturnType<typeof openDb>) =>
     ingestConversation(
       db,
@@ -45,15 +45,32 @@ describe("provenance guard: a reused message id never changes what a thought was
     expect(again.newCanonicalEvents).toBe(0);
   });
 
-  test("text that still holds every quote (it grew) updates in place, as before", async () => {
+  test("a person's message that grew is still a new message: its new words get extracted", async () => {
     const db = openDb(":memory:");
     await first(db);
     const grown = "Pricing should be per outcome, not per seat. Small teams overpay otherwise.";
-    await ingestConversation(db, { conversationId: "c", source: "fixture", messages: [msg("c::1", grown), msg("c::2", "And one more thing.")] }, {
+    const r = await ingestConversation(db, { conversationId: "c", source: "fixture", messages: [msg("c::1", grown)] }, {
       extraction: new FakeProvider([extraction([])]),
       reasoning: new FakeProvider([]),
     });
-    expect(textOf(db, "c::1")).toBe(grown);
+    expect(r.newCanonicalEvents).toBe(1);
+    expect(textOf(db, "c::1")).toBe("Pricing should be per outcome, not per seat.");
+    expect(textOf(db, `c::1~${textHash(grown).slice(0, 8)}`)).toBe(grown);
+  });
+
+  test("an AI reply that only grew (captured mid-stream, then finished) updates in place", async () => {
+    const db = openDb(":memory:");
+    const reply = (text: string) => ({ id: "c::a", role: "assistant" as const, text, createdAt: at });
+    await ingestConversation(db, { conversationId: "c", source: "fixture", messages: [reply("Here are three options:")] }, {
+      extraction: new FakeProvider([extraction([])]),
+      reasoning: new FakeProvider([]),
+    });
+    // The finished reply arrives with the person's next turn, as it does from every client.
+    await ingestConversation(db, { conversationId: "c", source: "fixture", messages: [reply("Here are three options: A, B and C."), msg("c::2", "Let's go with B.")] }, {
+      extraction: new FakeProvider([extraction([])]),
+      reasoning: new FakeProvider([]),
+    });
+    expect(textOf(db, "c::a")).toBe("Here are three options: A, B and C.");
   });
 });
 

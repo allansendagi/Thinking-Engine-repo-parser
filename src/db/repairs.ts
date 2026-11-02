@@ -22,7 +22,7 @@ export function runDataRepairs(db: Database): void {
 }
 
 /**
- * Thoughts whose source message no longer contains their quote (see protectProvenance in
+ * Thoughts whose source message no longer contains their quote (see keepMessagesFixed in
  * api/ingest.ts for how that happened): point each at a message the person wrote in the same
  * conversation that does contain the quote -- the earliest, if several do. A thought whose words
  * survive nowhere keeps its own quote and is left as it is; nothing is deleted.
