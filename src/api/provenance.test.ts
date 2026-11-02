@@ -160,3 +160,25 @@ describe("when a message was said is fixed too", () => {
     expect(repairMessageTimes(db)).toEqual({ restored: 0 }); // idempotent
   });
 });
+
+describe("Activity shows the person, not their tools", () => {
+  test("notices a coding assistant records as the person's turn don't become their latest words or move the order", async () => {
+    const { listConversations, previewLine } = await import("../db/queries");
+    const db = openDb(":memory:");
+    const send = (cid: string, messages: { id: string; role: "user" | "assistant"; text: string; createdAt: string }[]) =>
+      ingestConversation(db, { conversationId: cid, source: "fixture", messages }, { extraction: new FakeProvider([extraction([])]), reasoning: new FakeProvider([]) });
+    await send("cc", [
+      { id: "u1", role: "user", text: "Plan the launch email.", createdAt: "2026-11-01T08:00:00Z" },
+      { id: "u2", role: "user", text: "<task-notification> <task-id>b6my333dh</task-id> done", createdAt: "2026-11-02T08:00:00Z" },
+    ]);
+    await send("gpt", [{ id: "g1", role: "user", text: "Pricing per outcome?", createdAt: "2026-11-01T12:00:00Z" }]);
+    const list = listConversations(db);
+    expect(list.map((c) => c.conversationId)).toEqual(["gpt", "cc"]); // the notice isn't the person's last word
+    expect(list.find((c) => c.conversationId === "cc")!.latest).toBe("Plan the launch email.");
+
+    expect(previewLine('Prepare the same documents <pasted_content id="5cff"> Mohamed <x@y.com> </pasted_content> for Khatib'))
+      .toBe("Prepare the same documents [pasted] for Khatib");
+    expect(previewLine('Look at this <pasted_content id="a"> a very long paste that was cut')).toBe("Look at this [pasted]");
+    expect(previewLine("<system-reminder>whatever</system-reminder>")).toBeNull();
+  });
+});

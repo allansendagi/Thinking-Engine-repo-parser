@@ -353,8 +353,9 @@ export interface ConversationSummary {
   messageCount: number;
   firstAt: string;
   lastAt: string;
-  /** Ideas this conversation moved (via an evolution step or a decision). Newest-touched first. */
-  ideas: { id: string; title: string }[];
+  /** Ideas this conversation moved (via an evolution step or a decision), the one it moved most
+   *  recently first, each with where it stands now -- so an Activity row can lead with the idea. */
+  ideas: { id: string; title: string; formulation: string }[];
   /** The opening of the conversation (first thing the user said), one line -- so a row says what it was about. */
   preview: string;
   /** The most recent thing the user said, one line -- so a long-running conversation's row shows
@@ -362,6 +363,30 @@ export interface ConversationSummary {
   latest: string;
   /** Messages saved but not yet turned into ideas (AI unavailable or still working through them). */
   pendingMessages: number;
+}
+
+/** Text a coding assistant records as the person's turn but that isn't them: task and system
+ *  notices, slash-command echoes, shell transcripts, session banners. */
+const NOT_THE_PERSON = /^\s*(?:<(?:task-notification|system-reminder|command-name|command-message|local-command-stdout|local-command-stderr|bash-input|bash-stdout|bash-stderr)>|Caveat: The messages below were generated|This session is being continued from a previous conversation|\[Request interrupted by user)/;
+
+/** The same test as `NOT_THE_PERSON`, in SQL, so notices don't count as the person's last word. */
+const PERSON_SQL = `NOT (${[
+  "<task-notification>%", "<system-reminder>%", "<command-name>%", "<command-message>%", "<local-command-stdout>%",
+  "<local-command-stderr>%", "<bash-input>%", "<bash-stdout>%", "<bash-stderr>%", "Caveat: The messages below were generated%",
+  "This session is being continued from a previous conversation%", "[Request interrupted by user%",
+].map((p) => `ltrim(text) LIKE '${p}'`).join(" OR ")})`;
+
+/**
+ * One line of what the person said, for an Activity row -- or null when the message isn't theirs
+ * (`NOT_THE_PERSON`). A pasted block is shown as "[pasted]" rather than its raw wrapper tags.
+ */
+export function previewLine(text: string): string | null {
+  if (NOT_THE_PERSON.test(text)) return null;
+  const line = text
+    .replace(/<pasted_content\b[^>]*>[\s\S]*?(?:<\/pasted_content\b[^>]*>|$)/g, " [pasted] ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return line.length === 0 ? null : line.slice(0, 140);
 }
 
 /** Every conversation Thread has captured, the one you last wrote in first -- the "Activity" feed. Two
@@ -373,7 +398,7 @@ export function listConversations(db: Database): ConversationSummary[] {
       // later -- falling back to the latest message for a conversation with no turn of theirs.
       `SELECT conversation_id AS cid, MIN(source) AS source, COUNT(*) AS n,
               MIN(created_at) AS first_at,
-              COALESCE(MAX(CASE WHEN role = 'user' THEN created_at END), MAX(created_at)) AS last_at,
+              COALESCE(MAX(CASE WHEN role = 'user' AND ${PERSON_SQL} THEN created_at END), MAX(created_at)) AS last_at,
               MAX(source_url) AS source_url
        FROM canonical_events GROUP BY conversation_id ORDER BY last_at DESC, cid`,
     )
@@ -388,17 +413,18 @@ export function listConversations(db: Database): ConversationSummary[] {
 
   const links = db
     .query(
-      `SELECT ce.conversation_id AS cid, i.id AS idea_id, i.title AS title
+      `SELECT ce.conversation_id AS cid, i.id AS idea_id, i.title AS title, i.current_formulation AS formulation, ce.created_at AS at
        FROM evolution_steps es
        JOIN canonical_events ce ON ce.id = es.source_event_id
        JOIN idea_nodes i ON i.id = es.idea_id
        UNION
-       SELECT ce.conversation_id AS cid, i.id AS idea_id, i.title AS title
+       SELECT ce.conversation_id AS cid, i.id AS idea_id, i.title AS title, i.current_formulation AS formulation, ce.created_at AS at
        FROM decisions d
        JOIN canonical_events ce ON ce.id = d.source_event_id
-       JOIN idea_nodes i ON i.id = d.idea_id`,
+       JOIN idea_nodes i ON i.id = d.idea_id
+       ORDER BY at DESC, idea_id`,
     )
-    .all() as { cid: string; idea_id: string; title: string }[];
+    .all() as { cid: string; idea_id: string; title: string; formulation: string }[];
 
   const previews = new Map<string, string>();
   const latests = new Map<string, string>();
@@ -408,7 +434,8 @@ export function listConversations(db: Database): ConversationSummary[] {
        WHERE role = 'user' AND text_removed_at IS NULL AND text <> '' ORDER BY idx ASC`,
     )
     .all() as { cid: string; text: string }[]) {
-    const line = r.text.replace(/\s+/g, " ").trim().slice(0, 140);
+    const line = previewLine(r.text);
+    if (line === null) continue;
     if (!previews.has(r.cid)) previews.set(r.cid, line);
     latests.set(r.cid, line); // ascending order, so the last write is the newest
   }
@@ -419,10 +446,10 @@ export function listConversations(db: Database): ConversationSummary[] {
     }[]).map((r) => [r.cid, r.n]),
   );
 
-  const ideasByConv = new Map<string, { id: string; title: string }[]>();
+  const ideasByConv = new Map<string, { id: string; title: string; formulation: string }[]>();
   for (const l of links) {
     const list = ideasByConv.get(l.cid) ?? [];
-    if (!list.some((x) => x.id === l.idea_id)) list.push({ id: l.idea_id, title: l.title });
+    if (!list.some((x) => x.id === l.idea_id)) list.push({ id: l.idea_id, title: l.title, formulation: l.formulation });
     ideasByConv.set(l.cid, list);
   }
 
