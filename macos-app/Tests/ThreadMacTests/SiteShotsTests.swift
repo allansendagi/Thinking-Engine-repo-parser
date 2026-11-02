@@ -98,7 +98,7 @@ final class SiteShotsTests: XCTestCase {
     @MainActor
     func testRenderRecoveryEmailStep() throws {
         let s = AppState()
-        s.backfill = .needsEmail(.cursor)
+        s.backfill = .needsEmail(.cursor(.recent))
         try render(BackfillView().environmentObject(s), "recovery-email", width: 400)
         try render(BackfillView().environmentObject(s), "recovery-email-taken", width: 400) {
             s.claimEmailInUse = "taken@example.com"
@@ -110,5 +110,14 @@ final class SiteShotsTests: XCTestCase {
     func testRenderWelcome() throws {
         let s = AppState()
         try render(WelcomeView(forcedMode: .ready).environmentObject(s), "welcome", width: 320)
+    }
+
+    @MainActor
+    func testRenderRecoveryFinishedWithOlder() throws {
+        let s = AppState()
+        s.olderHistory = [AppState.OlderHistory(kind: .cursor, count: 340, sourcePath: nil)]
+        s.backfill = .finished(AppState.BackfillSummary(newIdeas: 18, totalIdeas: 18, openLoops: 4, decisions: 6,
+                                                        evolvedAcrossChats: 3, featured: nil), capped: false)
+        try render(BackfillView().environmentObject(s), "recovery-finished", width: 400)
     }
 }

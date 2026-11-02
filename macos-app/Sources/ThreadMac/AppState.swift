@@ -707,9 +707,17 @@ final class AppState: ObservableObject {
 
     /// What the person chose to recover -- held while they set up their account with an email.
     enum RecoveryRequest: Equatable {
-        case cursor
-        case export(DetectedExport)
+        case cursor(RecoveryScope)
+        case export(DetectedExport, RecoveryScope)
         case browser(BackfillKind)
+    }
+
+    /// Older conversations a recovery left for later, per source -- the quiet "Bring In" line.
+    struct OlderHistory: Codable, Equatable {
+        var kind: BackfillJob.Kind
+        var count: Int
+        /// The export file it came from (nil for Cursor, read live).
+        var sourcePath: String?
     }
 
     /// What the first-run "your thinking is taking shape" screen shows after a backfill: real
@@ -836,48 +844,129 @@ final class AppState: ObservableObject {
     func continueRecovery(_ request: RecoveryRequest) async {
         await persistAccountEmailIfKnown()
         switch request {
-        case .cursor: runCursorBackfill()
-        case .export(let e): runBackfill(e)
+        case .cursor(let scope): runCursorBackfill(scope)
+        case .export(let e, let scope): runBackfill(e, scope: scope)
         case .browser(let k): recoverViaBrowser(k)
         }
     }
 
-    func runBackfill(_ export: DetectedExport) {
-        guard readyToRecover(.export(export)) else { return }
+    func runBackfill(_ export: DetectedExport, scope: RecoveryScope = .recent) {
+        guard readyToRecover(.export(export, scope)) else { return }
+        startExportRecovery(export, scope: scope)
+    }
+
+    /// Starts without the email gate -- for a run the person already chose (a resume).
+    private func startExportRecovery(_ export: DetectedExport, scope: RecoveryScope) {
+        let plan: Backfill.Plan
+        do {
+            plan = try Backfill.plan(export, scope: scope)
+        } catch {
+            backfill = .failed((error as? LocalizedError)?.errorDescription ?? "That import didn't work.")
+            backfillHidden = false
+            return
+        }
+        let kind: BackfillJob.Kind = export.kind == .chatgpt ? .chatgpt : .claude
+        rememberOlder(kind: kind, count: scope == .recent ? plan.olderCount : 0, sourcePath: export.url.path)
         let job = BackfillJob(
-            kind: export.kind == .chatgpt ? .chatgpt : .claude,
+            kind: kind,
             sourcePath: export.url.path,
             sourceModified: export.modified,
-            conversationsTotal: export.conversationCount,
+            conversationsTotal: plan.ids.count,
             conversationsDone: 0,
             ideaCountAtStart: thinkingState?.currentIdeas.count ?? 0,
-            startedAt: Date(), updatedAt: Date()
+            startedAt: Date(), updatedAt: Date(),
+            scope: scope, plannedIds: plan.ids
         )
         runBackfillTask(job) { client, progress, startAt in
-            try await Backfill.run(export, client: client, progress: progress, startingAt: startAt)
+            try await Backfill.run(export, ids: plan.ids, client: client, progress: progress, startingAt: startAt)
         }
     }
 
-    func runCursorBackfill() {
-        guard readyToRecover(.cursor) else { return }
+    func runCursorBackfill(_ scope: RecoveryScope = .recent) {
+        guard readyToRecover(.cursor(scope)) else { return }
+        startCursorRecovery(scope)
+    }
+
+    private func startCursorRecovery(_ scope: RecoveryScope) {
+        let plan = Backfill.planCursor(scope: scope)
+        guard !plan.ids.isEmpty else {
+            backfill = .failed(scope == .older ? "There are no older Cursor conversations to bring in." : BackfillError.emptyExport.localizedDescription)
+            backfillHidden = false
+            return
+        }
+        rememberOlder(kind: .cursor, count: scope == .recent ? plan.olderCount : 0, sourcePath: nil)
         let job = BackfillJob(
             kind: .cursor, sourcePath: nil, sourceModified: nil,
-            conversationsTotal: 0, conversationsDone: 0,
+            conversationsTotal: plan.ids.count, conversationsDone: 0,
             ideaCountAtStart: thinkingState?.currentIdeas.count ?? 0,
-            startedAt: Date(), updatedAt: Date()
+            startedAt: Date(), updatedAt: Date(),
+            scope: scope, plannedIds: plan.ids
         )
         runBackfillTask(job) { client, progress, startAt in
-            try await Backfill.runCursor(client: client, progress: progress, startingAt: startAt)
+            try await Backfill.runCursor(ids: plan.ids, client: client, progress: progress, startingAt: startAt)
         }
     }
 
-    /// Pick a run left unfinished by a previous launch back up where it stopped.
+    // MARK: Older history -- one quiet line, never a question
+
+    /// A recovery is running now (a second one waits for it).
+    var recoveryRunning: Bool { if case .running = backfill { return true } else { return false } }
+
+    private static let olderHistoryKey = "thread.olderHistory"
+    @Published var olderHistory: [OlderHistory] = {
+        guard let d = UserDefaults.standard.data(forKey: "thread.olderHistory") else { return [] }
+        return (try? JSONDecoder().decode([OlderHistory].self, from: d)) ?? []
+    }()
+
+    private func rememberOlder(kind: BackfillJob.Kind, count: Int, sourcePath: String?) {
+        var list = olderHistory.filter { $0.kind != kind }
+        if count > 0 { list.append(OlderHistory(kind: kind, count: count, sourcePath: sourcePath)) }
+        olderHistory = list
+        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: Self.olderHistoryKey)
+    }
+
+    /// "Bring In" on the older-history line: the conversations the recent recovery left out.
+    func bringInOlder(_ older: OlderHistory) {
+        switch older.kind {
+        case .cursor:
+            runCursorBackfill(.older)
+        case .chatgpt, .claude:
+            guard let path = older.sourcePath, let export = Backfill.inspect(URL(fileURLWithPath: path)) else {
+                // The export moved or was deleted: say so instead of failing silently.
+                rememberOlder(kind: older.kind, count: 0, sourcePath: nil)
+                backfill = .failed("That \(older.kind == .chatgpt ? "ChatGPT" : "Claude") export isn't where it was. Choose it again to bring in older conversations.")
+                backfillHidden = false
+                return
+            }
+            runBackfill(export, scope: .older)
+        }
+    }
+
+    /// Pick a run left unfinished by a previous launch back up where it stopped. A run saved
+    /// before recovery became newest-first has no plan; it restarts with a fresh one (anything
+    /// already imported dedupes on the server, so nothing is paid for twice).
     func resumeBackfill(_ job: BackfillJob) {
+        let scope = job.scope ?? .recent
+        guard let ids = job.plannedIds else {
+            saveBackfillJob(nil)
+            switch job.kind {
+            case .cursor:
+                guard CursorBackfill.available else { backfill = .offered([]); return }
+                startCursorRecovery(scope)
+            case .chatgpt, .claude:
+                guard let path = job.sourcePath, let export = Backfill.inspect(URL(fileURLWithPath: path)) else {
+                    lookForExports()
+                    return
+                }
+                startExportRecovery(export, scope: scope)
+            }
+            return
+        }
         switch job.kind {
         case .cursor:
             guard CursorBackfill.available else { saveBackfillJob(nil); backfill = .offered([]); return }
             runBackfillTask(job) { client, progress, startAt in
-                try await Backfill.runCursor(client: client, progress: progress, startingAt: startAt)
+                try await Backfill.runCursor(ids: ids, client: client, progress: progress, startingAt: startAt)
             }
         case .chatgpt, .claude:
             guard let path = job.sourcePath,
@@ -889,13 +978,15 @@ final class AppState: ObservableObject {
                 lookForExports()
                 return
             }
-            // A file re-downloaded to the same path is a different export; resume from the top.
+            // A file re-downloaded to the same path is a different export: plan it afresh.
             let sameFile = job.sourceModified.map { abs(export.modified.timeIntervalSince($0)) < 2 } ?? false
-            var resumed = job
-            if !sameFile { resumed.conversationsDone = 0 }
-            resumed.conversationsTotal = export.conversationCount
-            runBackfillTask(resumed) { client, progress, startAt in
-                try await Backfill.run(export, client: client, progress: progress, startingAt: startAt)
+            guard sameFile else {
+                saveBackfillJob(nil)
+                startExportRecovery(export, scope: scope)
+                return
+            }
+            runBackfillTask(job) { client, progress, startAt in
+                try await Backfill.run(export, ids: ids, client: client, progress: progress, startingAt: startAt)
             }
         }
     }
@@ -911,11 +1002,20 @@ final class AppState: ObservableObject {
         saveBackfillJob(job)
         backfill = .running(BackfillProgress(conversationsDone: startAt, conversationsTotal: job.conversationsTotal, ideaCount: before))
         let c = client
+        var shownIdeas = before
+        var lastShown = Date.distantPast
         Task {
             do {
                 let (result, cappedAt) = try await work(c, { [weak self] p in
                     guard let self else { return }
                     self.backfill = .running(p)
+                    // First ideas within a minute: show new ones in the panel as they arrive
+                    // (at most every 8 s), so the person can start while the rest carries on.
+                    if p.ideaCount > shownIdeas, Date().timeIntervalSince(lastShown) > 8 {
+                        shownIdeas = p.ideaCount
+                        lastShown = Date()
+                        Task { await self.refresh() }
+                    }
                     // Persist the resume point after each batch. `saveBackfillJob` re-encodes the
                     // whole snapshot on the main actor -- fine here: batches are 15 conversations
                     // with a server round-trip between them, so this runs a few times a minute.

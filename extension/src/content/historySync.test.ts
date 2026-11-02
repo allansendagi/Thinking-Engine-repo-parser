@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runHistorySync } from "./historySync";
+import { runHistorySync, splitRecent } from "./historySync";
 import type { HistoryReader } from "./structured";
 
 function fakeReader(ids: string[], opts: { pageSize?: number; failOn?: string; ignoreOffset?: boolean } = {}): HistoryReader & { fetched: string[] } {
@@ -135,5 +135,75 @@ describe("checking for new after a full import", () => {
     const shuffled = dated([rows[0]!, rows[1]!, rows[5]!, rows[2]!, rows[3]!, rows[4]!]);
     await runHistorySync({ reader: shuffled, synced: { ...synced }, previouslyComplete: true, delayMs: 0, sendBatch: async () => ({}), markSynced: async () => {} });
     expect(shuffled.pages).toBe(3);
+  });
+});
+
+describe("what a recovery brings in by default (same rule as Thread for Mac)", () => {
+  const NOW = Date.parse("2026-11-02T00:00:00Z");
+  const daysAgo = (d: number) => new Date(NOW - d * 86_400_000).toISOString();
+  // A reader over dated conversations, listed newest first like the real sites.
+  function datedReader(n: number, spacingDays: number): HistoryReader & { fetched: string[] } {
+    const items = Array.from({ length: n }, (_, i) => ({ id: `c${i}`, updatedAt: daysAgo(i * spacingDays) }));
+    const fetched: string[] = [];
+    return {
+      format: "chatgpt",
+      fetched,
+      async listPage(page) {
+        const slice = items.slice(page * 50, page * 50 + 50);
+        return { items: slice, done: page * 50 + 50 >= items.length };
+      },
+      async fetchForImport(id) { fetched.push(id); return { id }; },
+      async fetchMessages() { return []; },
+    };
+  }
+
+  test("the newest 100 when little is recent, the rest counted as older and not fetched", async () => {
+    const reader = datedReader(150, 3); // ~30 within 90 days
+    const batches: number[] = [];
+    const p = await runHistorySync({
+      reader, synced: {}, delayMs: 0, now: NOW,
+      sendBatch: async (b) => { batches.push(b.length); return {}; }, markSynced: async () => {},
+    });
+    expect(p.state).toBe("done");
+    expect(reader.fetched.length).toBe(100);
+    expect(reader.fetched[0]).toBe("c0");
+    expect(p.older).toBe(50);
+    expect(batches[0]).toBe(5); // first ideas fast
+    expect(batches.slice(1).every((n) => n <= 15)).toBe(true);
+  });
+
+  test("everything from the last 90 days when that's more than 100", async () => {
+    const reader = datedReader(400, 0.5); // 181 within 90 days
+    const p = await runHistorySync({
+      reader, synced: {}, delayMs: 0, now: NOW,
+      sendBatch: async () => ({}), markSynced: async () => {},
+    });
+    expect(reader.fetched.length).toBe(181);
+    expect(p.older).toBe(219);
+  });
+
+  test("asking for older brings in everything, newest first", async () => {
+    const reader = datedReader(150, 3);
+    const p = await runHistorySync({
+      reader, synced: {}, delayMs: 0, now: NOW, includeOlder: true,
+      sendBatch: async () => ({}), markSynced: async () => {},
+    });
+    expect(reader.fetched.length).toBe(150);
+    expect(p.older).toBe(0);
+  });
+
+  test("what's already in counts toward the 100", async () => {
+    const reader = datedReader(150, 3);
+    const synced = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`c${i}`, daysAgo(i * 3)]));
+    await runHistorySync({
+      reader, synced, delayMs: 0, now: NOW,
+      sendBatch: async () => ({}), markSynced: async () => {},
+    });
+    expect(reader.fetched).toEqual(Array.from({ length: 40 }, (_, i) => `c${60 + i}`));
+  });
+
+  test("splitRecent keeps undated conversations last", () => {
+    const { recent } = splitRecent([{ id: "x", updatedAt: "?" }, { id: "y", updatedAt: daysAgo(1) }], NOW);
+    expect(recent.map((c) => c.id)).toEqual(["y", "x"]);
   });
 });

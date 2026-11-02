@@ -93,6 +93,12 @@ struct BackfillJob: Codable, Equatable {
     var ideaCountAtStart: Int
     var startedAt: Date
     var updatedAt: Date
+    /// What this run brings in (`RecoveryWindow`); nil on a run saved before recovery became
+    /// newest-first -- such a run restarts with a fresh plan.
+    var scope: RecoveryScope? = nil
+    /// The conversations this run brings in, in order, fixed when it started -- the resume index
+    /// counts into this list, so new conversations arriving meanwhile can't shift it.
+    var plannedIds: [String]? = nil
 
     /// The `format` string `/v1/import` expects; nil for Cursor (which uses `/v1/conversations`).
     var importFormat: String? { kind == .cursor ? nil : kind.rawValue }

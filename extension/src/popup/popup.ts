@@ -163,6 +163,19 @@ async function renderHistory(): Promise<void> {
     action.addEventListener("click", () => void startHistory(source));
     row.append(label, action);
     rows.appendChild(row);
+
+    // One quiet line for what the default recovery left out -- never a prompt.
+    const older = c && !("partial" in c) ? (c.older ?? 0) : 0;
+    if (older > 0) {
+      const olderRow = row.cloneNode(false) as HTMLElement;
+      const olderLabel = document.createElement("span");
+      olderLabel.textContent = `${older.toLocaleString()} older ${name} conversation${older === 1 ? "" : "s"}`;
+      const bring = action.cloneNode(false) as HTMLButtonElement;
+      bring.textContent = "Bring in";
+      bring.addEventListener("click", () => void startHistory(source, true));
+      olderRow.append(olderLabel, bring);
+      rows.appendChild(olderRow);
+    }
   }
 
   const lines = Object.entries(all).flatMap(([source, s]) => {
@@ -181,8 +194,8 @@ async function renderHistory(): Promise<void> {
   ($("historyStatus") as HTMLElement).style.whiteSpace = "pre-line";
 }
 
-async function startHistory(source: "chatgpt" | "claude"): Promise<void> {
-  const res = (await chrome.runtime.sendMessage({ type: "thread:history-start", source })) as
+async function startHistory(source: "chatgpt" | "claude", older = false): Promise<void> {
+  const res = (await chrome.runtime.sendMessage({ type: "thread:history-start", source, older })) as
     | { ok: boolean; error?: string }
     | undefined;
   if (!res?.ok) showError(res?.error ?? "Couldn't start the import.");
