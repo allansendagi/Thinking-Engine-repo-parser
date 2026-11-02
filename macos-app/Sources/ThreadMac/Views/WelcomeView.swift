@@ -100,28 +100,34 @@ struct WelcomeView: View {
 
     @ViewBuilder
     private var ready: some View {
-        if AppState.browserCapturePublic {
-            VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 16) {
+            switch firstStep(cursorHistory: appState.cursorBackfillAvailable,
+                             recoveryStarted: appState.recoveryStarted,
+                             browserCapturePublic: AppState.browserCapturePublic) {
+            case .recoverCursor:
+                header(
+                    "Start with what you've already thought",
+                    "Thread can rebuild the ideas in your Cursor conversations right now — no export, a few minutes. After that it keeps up on its own."
+                )
+                actions(primary: "Bring In My Cursor Thinking", { appState.dismissWelcome(); appState.runCursorBackfill() },
+                        secondary: "Not Now", { appState.dismissWelcome() })
+            case .connectBrowser:
                 header(
                     "Thread is ready",
-                    appState.cursorBackfillAvailable
-                        ? "It captures your thinking in Cursor on its own. Connect your browser to add ChatGPT, Claude and Gemini."
-                        : "Connect your browser and Thread captures your thinking in ChatGPT, Claude and Gemini as you go."
+                    "Connect your browser and Thread captures your thinking in ChatGPT, Claude and Gemini — and can bring in your past conversations there in minutes."
                 )
                 actions(primary: "Connect Browser", { appState.connectBrowser() }, secondary: "Not Now", { appState.dismissWelcome() })
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 16) {
+            case .recoverHistory:
                 header(
                     "Start with what you've already thought",
                     "Bring in your past Cursor, ChatGPT and Claude conversations. Thread rebuilds the ideas in them — so recall works from the first minute, not the first month."
                 )
-                Text("Press \(RecallShortcut.current.symbol) anywhere to recall what you've thought about, from any app.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 actions(primary: "Recover My Thinking", { appState.startRecovery() }, secondary: "Skip for Now", { appState.dismissWelcome() })
             }
+            Text("Press \(RecallShortcut.current.symbol) anywhere to recall what you've thought about, from any app.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

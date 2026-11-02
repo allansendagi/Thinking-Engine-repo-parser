@@ -45,7 +45,8 @@ describe("setup report", () => {
     const why = (over: object) => noCaptureReason({ report: sanitizeSetupReport({ ...base, ...over }) });
     expect(noCaptureReason(undefined)).toBe("no_report");
     expect(why({ extensionEverConnected: true, cursorHistoryFound: true })).toBe("extension_connected_no_chats");
-    expect(why({ cursorHistoryFound: true, extensionBrowsersInstalled: ["chrome"] })).toBe("cursor_found_nothing_new");
+    expect(why({ cursorHistoryFound: true, extensionBrowsersInstalled: ["chrome"] })).toBe("cursor_found_not_recovered");
+    expect(why({ cursorHistoryFound: true, recoveryStarted: true })).toBe("cursor_found_nothing_new");
     expect(why({ localSourcesFound: ["claude_code"] })).toBe("local_tool_found_nothing_new");
     expect(why({ aiAppsInstalled: ["chatgpt"] })).toBe("no_supported_browser");
     expect(why({ extensionBrowsersInstalled: ["chrome"], aiAppsInstalled: ["claude"] })).toBe("desktop_ai_apps_only");

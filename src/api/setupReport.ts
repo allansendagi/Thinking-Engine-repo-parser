@@ -30,6 +30,9 @@ export interface SetupReport {
   blockers: (typeof BLOCKERS)[number][];
   /** Captures saved on the Mac, waiting to send. */
   pendingCaptures: number;
+  /** "Recover my thinking" was started / ran to the end on this Mac. */
+  recoveryStarted: boolean;
+  recoveryFinished: boolean;
 }
 
 const pick = <T extends string>(allowed: readonly T[], v: unknown): T[] =>
@@ -51,6 +54,8 @@ export function sanitizeSetupReport(raw: unknown): SetupReport {
     accessibilityGranted: r.accessibilityGranted === true,
     blockers: pick(BLOCKERS, r.blockers),
     pendingCaptures: count(r.pendingCaptures, 100_000),
+    recoveryStarted: r.recoveryStarted === true,
+    recoveryFinished: r.recoveryFinished === true,
   };
 }
 
@@ -94,8 +99,10 @@ export function forgetSetupReport(userId: string): void {
  * Why an account that opened Thread has captured nothing, from its latest report. First match wins:
  *  - no_report: an app build that doesn't report (or it never reached the server).
  *  - extension_connected_no_chats: the browser is connected; no AI chat has been opened since.
- *  - cursor_found_nothing_new: Cursor's history is there, but Thread only captures Cursor turns
- *    made after it was installed (older history is the explicit "Recover my thinking"), and none yet.
+ *  - cursor_found_not_recovered: Cursor's history is there and was never brought in (Thread only
+ *    captures Cursor turns made after install; older history is "Recover my thinking").
+ *  - cursor_found_nothing_new: Cursor's history is there and recovery was started, but nothing
+ *    arrived (the run failed, or the history held no conversations).
  *  - local_tool_found_nothing_new: the same, for another tool with readable history.
  *  - no_supported_browser: no Chrome / Brave / Arc / Edge -- the extension can't run.
  *  - desktop_ai_apps_only: has ChatGPT or Claude desktop apps, no connected extension -- Thread
@@ -106,7 +113,7 @@ export function noCaptureReason(entry: { report: SetupReport } | undefined): str
   if (!entry) return "no_report";
   const r = entry.report;
   if (r.extensionEverConnected) return "extension_connected_no_chats";
-  if (r.cursorHistoryFound) return "cursor_found_nothing_new";
+  if (r.cursorHistoryFound) return r.recoveryStarted ? "cursor_found_nothing_new" : "cursor_found_not_recovered";
   if (r.localSourcesFound.length > 0) return "local_tool_found_nothing_new";
   if (r.extensionBrowsersInstalled.length === 0) return "no_supported_browser";
   if (r.aiAppsInstalled.some((a) => a === "chatgpt" || a === "claude")) return "desktop_ai_apps_only";

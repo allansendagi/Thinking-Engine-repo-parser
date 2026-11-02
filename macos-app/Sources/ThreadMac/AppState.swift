@@ -731,6 +731,10 @@ final class AppState: ObservableObject {
     private var downloadsWatch: DispatchSourceFileSystemObject?
     private let backfillDoneKey = "thread.backfillCompleted"
     var backfillCompleted: Bool { UserDefaults.standard.bool(forKey: backfillDoneKey) }
+    /// Any recovery was ever started on this Mac (Cursor, an export, or through the browser).
+    private static let recoveryStartedKey = "thread.recoveryStarted"
+    var recoveryStarted: Bool { UserDefaults.standard.bool(forKey: Self.recoveryStartedKey) }
+    func noteRecoveryStarted() { UserDefaults.standard.set(true, forKey: Self.recoveryStartedKey) }
     var showsBackfillSheet: Bool { backfill != .idle && !backfillHidden }
 
     /// Surface the "Recover my thinking" offer on first run. Does NOT touch the filesystem --
@@ -745,8 +749,9 @@ final class AppState: ObservableObject {
             if case .idle = backfill { backfill = .resumable(job) }
             return
         }
-        guard !backfillCompleted, !onboardingDismissed else { return }
-        if case .idle = backfill { backfill = .offered([]) }
+        // No first-run offer here any more: the welcome asks for exactly one first step
+        // (`firstStep`), and the empty state offers recovery after that. A sheet popping up as
+        // well gave a new user two competing first steps.
     }
 
     private func saveBackfillJob(_ job: BackfillJob?) {
@@ -861,6 +866,7 @@ final class AppState: ObservableObject {
         _ work: @escaping (APIClient, @escaping (BackfillProgress) -> Void, Int) async throws -> (summary: ImportSummary, cappedAt: Int?)
     ) {
         guard isPaired, reconnect == nil else { return }
+        noteRecoveryStarted()
         let before = job.ideaCountAtStart
         let startAt = job.conversationsDone
         saveBackfillJob(job)

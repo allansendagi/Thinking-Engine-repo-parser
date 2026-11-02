@@ -15,6 +15,9 @@ struct SetupReport: Encodable, Equatable {
     var accessibilityGranted: Bool
     var blockers: [String]
     var pendingCaptures: Int
+    /// "Recover my thinking" was started / ran to the end on this Mac.
+    var recoveryStarted: Bool = false
+    var recoveryFinished: Bool = false
 
     /// Browser bundle ids -> the names the server knows. Only the first three run the extension
     /// (`extensionBrowserBundleIDs`).
@@ -40,7 +43,9 @@ struct SetupReport: Encodable, Equatable {
         localSourcesFound: [String],
         accessibilityGranted: Bool,
         blockers: [String],
-        pendingCaptures: Int
+        pendingCaptures: Int,
+        recoveryStarted: Bool = false,
+        recoveryFinished: Bool = false
     ) -> SetupReport {
         let defaultName = defaultBrowserID.map { id in browserNames.first(where: { $0.id == id })?.name ?? "other" }
         return SetupReport(
@@ -53,7 +58,9 @@ struct SetupReport: Encodable, Equatable {
             localSourcesFound: localSourcesFound.sorted(),
             accessibilityGranted: accessibilityGranted,
             blockers: blockers.sorted(),
-            pendingCaptures: pendingCaptures
+            pendingCaptures: pendingCaptures,
+            recoveryStarted: recoveryStarted,
+            recoveryFinished: recoveryFinished
         )
     }
 
@@ -71,7 +78,9 @@ struct SetupReport: Encodable, Equatable {
             localSourcesFound: LocalHistorySources.all.filter { $0.roots.contains(where: { fm.fileExists(atPath: $0) }) }.map(\.source),
             accessibilityGranted: AXSensorRunner.accessibilityGranted,
             blockers: UserDefaults.standard.stringArray(forKey: SetupNotifier.deliveredKey) ?? [],
-            pendingCaptures: appState.pendingCaptures.count
+            pendingCaptures: appState.pendingCaptures.count,
+            recoveryStarted: appState.recoveryStarted,
+            recoveryFinished: appState.backfillCompleted
         )
     }
 }
