@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { analyticsStart, findBursts, launchedSince, notCountedInstall, notCountedUser, openMetrics, type Population } from "./metrics";
 import { excludedUserIds } from "./revenue";
 import { dbPathForUser } from "../db/tenancy";
+import { FREE_IDEA_CAP } from "./billing";
 
 /**
  * Growth: the whole path from a website visit to a paying, returning user, measured first-party.
@@ -19,8 +20,8 @@ import { dbPathForUser } from "../db/tenancy";
  * Apple gives no numbers for apps distributed outside the App Store; this is the substitute.
  */
 
-export type Milestone = "first_capture" | "first_idea" | "first_keep" | "extension_connected" | "pro";
-const KINDS: Milestone[] = ["first_capture", "first_idea", "first_keep", "extension_connected", "pro"];
+export type Milestone = "first_capture" | "first_idea" | "first_keep" | "extension_connected" | "first_continue" | "pro";
+const KINDS: Milestone[] = ["first_capture", "first_idea", "first_keep", "extension_connected", "first_continue", "pro"];
 
 function openGrowth(): Database {
   const db = openMetrics(); // the registry, with download_events / active_days ensured
@@ -75,15 +76,25 @@ export function forgetMilestones(userId: string): void {
 }
 
 /**
- * Once per deployment: fill milestones for accounts that existed before they were recorded, from
- * each account's own database (read-only; skipped when the file doesn't exist). Without this,
- * every earlier cohort would show 0% activation. Times are clamped to the account's creation:
- * an import brings messages older than the account, but it was captured after it.
+ * Milestones are facts about each account's own data, so they are reconciled FROM that data:
+ * first capture, first idea, first Keep and the extension are read from the account's database and
+ * any that are missing are filled in (INSERT OR IGNORE: a time recorded live always wins). The live
+ * notes are the timely record; this is what makes them complete. It used to run once, ever, behind
+ * a permanent flag -- so an account whose first idea appeared later in the background (a Cursor
+ * session extracted once it went quiet, a capture queued while the AI was unavailable, ideas formed
+ * by regrouping) never got `first_idea` at all. Now it runs at most every RECONCILE_EVERY_MS.
+ *
+ * Times are clamped to the account's creation: an import brings messages older than the account,
+ * but it was captured after it. A filled-in first-idea time is when the idea's earliest thought was
+ * said, not when the idea formed -- so for an imported history it reads as "right away".
  */
-export function backfillMilestones(force = false): number {
+export const RECONCILE_EVERY_MS = 10 * 60_000;
+
+export function reconcileMilestones(force = false, now: Date = new Date()): number {
   const reg = openGrowth();
   try {
-    if (!force && reg.query("SELECT 1 FROM growth_meta WHERE key = 'milestones_backfilled'").get()) return 0;
+    const last = (reg.query("SELECT value FROM growth_meta WHERE key = 'milestones_reconciled_at'").get() as { value: string } | null)?.value;
+    if (!force && last && now.getTime() - Date.parse(last) < RECONCILE_EVERY_MS) return 0;
     const users = reg.query("SELECT id, created_at, plan FROM users").all() as { id: string; created_at: string; plan: string | null }[];
     const put = reg.prepare("INSERT OR IGNORE INTO milestones (user_id, kind, at) VALUES (?, ?, ?)");
     let n = 0;
@@ -110,7 +121,7 @@ export function backfillMilestones(force = false): number {
         db?.close();
       }
     }
-    reg.prepare("INSERT OR REPLACE INTO growth_meta (key, value) VALUES ('milestones_backfilled', ?)").run(new Date().toISOString());
+    reg.prepare("INSERT OR REPLACE INTO growth_meta (key, value) VALUES ('milestones_reconciled_at', ?)").run(now.toISOString());
     return n;
   } finally {
     reg.close();
@@ -292,7 +303,7 @@ export function weekOf(iso: string): string {
 }
 
 export function growthSummary(windowDays = 30, now: Date = new Date()): Growth {
-  backfillMilestones();
+  reconcileMilestones();
   backfillDownloadSources();
   flagTestDownloads();
   classifyDownloads();
@@ -595,11 +606,86 @@ export interface AccountAudit {
     activeDays: number;
     lastActiveDay: string | null;
     reached: Milestone[];
+    /** The first step of capture -> idea -> continue this account hasn't reached, and why. */
+    stuck: Stuck;
   }[];
+}
+
+/**
+ * Where an account stopped, in fixed categories read from its own database -- never message text
+ * and never a provider's raw error (those carry request ids). Counts only.
+ *
+ *  - capture / no_capture: nothing has arrived from any AI tool.
+ *  - idea / waiting_ai_billing | waiting_ai_busy | waiting_ai_unreachable | waiting_error: captured,
+ *    extraction is queued behind that failure.
+ *  - idea / waiting: captured and queued with no failure (a coding session waiting to go quiet, or
+ *    old work held by the backlog pause).
+ *  - idea / all_set_aside: extraction ran and every thought was judged not worth keeping.
+ *  - idea / nothing_found: extraction ran and found no thoughts at all.
+ *  - idea / not_grouped_yet: thoughts exist but no idea has formed from them yet.
+ *  - continue / no_continue: has ideas, never handed one to an AI tool (only Mac and extension
+ *    builds that report a hand-off can clear this).
+ */
+export interface Stuck {
+  step: "capture" | "idea" | "continue" | null;
+  why: string | null;
+  counts: { messages: number; thoughts: number; setAside: number; waiting: number; ideas: number };
+  freeCapReached: boolean;
+}
+
+export function errorCategory(raw: string | null): string {
+  if (!raw) return "waiting";
+  if (/credit balance|billing|payment|insufficient.?funds|quota/i.test(raw)) return "waiting_ai_billing";
+  if (/rate.?limit|\b429\b|overloaded|\b529\b/i.test(raw)) return "waiting_ai_busy";
+  if (/timed? ?out|econn|fetch failed|network|socket|\b50[234]\b/i.test(raw)) return "waiting_ai_unreachable";
+  return "waiting_error";
+}
+
+/** Read-only look at one account's database. An account with no database has captured nothing. */
+export function diagnoseAccount(userId: string, plan: string, reached: Milestone[]): Stuck {
+  const counts = { messages: 0, thoughts: 0, setAside: 0, waiting: 0, ideas: 0 };
+  let lastError: string | null = null;
+  let path: string | null = null;
+  try {
+    path = dbPathForUser(userId);
+  } catch {
+    /* not a real account id (old test rows): nothing to read */
+  }
+  if (path && existsSync(path)) {
+    let db: Database | null = null;
+    try {
+      db = new Database(path, { readonly: true });
+      const n = (sql: string) => (db!.query(sql).get() as { n: number } | null)?.n ?? 0;
+      const has = (t: string) => !!db!.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t);
+      counts.messages = n("SELECT COUNT(*) AS n FROM canonical_events");
+      counts.thoughts = n("SELECT COUNT(*) AS n FROM cognitive_events");
+      counts.setAside = has("discarded_events") ? n("SELECT COUNT(*) AS n FROM discarded_events") : 0;
+      counts.ideas = n("SELECT COUNT(*) AS n FROM idea_nodes");
+      if (has("pending_extraction")) {
+        counts.waiting = n("SELECT COUNT(*) AS n FROM pending_extraction");
+        lastError = (db.query("SELECT last_error AS e FROM pending_extraction WHERE last_error IS NOT NULL ORDER BY last_attempt_at DESC LIMIT 1").get() as { e: string } | null)?.e ?? null;
+      }
+    } catch {
+      /* an unreadable or older database: report what was read */
+    } finally {
+      db?.close();
+    }
+  }
+  const freeCapReached = plan !== "pro" && counts.ideas >= FREE_IDEA_CAP;
+  const stuck = (step: Stuck["step"], why: string | null): Stuck => ({ step, why, counts, freeCapReached });
+  if (counts.messages === 0) return stuck("capture", "no_capture");
+  if (counts.ideas === 0) {
+    if (counts.waiting > 0) return stuck("idea", errorCategory(lastError));
+    if (counts.thoughts === 0) return stuck("idea", counts.setAside > 0 ? "all_set_aside" : "nothing_found");
+    return stuck("idea", "not_grouped_yet");
+  }
+  if (!reached.includes("first_continue")) return stuck("continue", "no_continue");
+  return stuck(null, null);
 }
 
 /** What stands behind "opened", "first capture" and the rest: every counted account, anonymously. */
 export function accountsAudit(): AccountAudit {
+  reconcileMilestones();
   const db = openGrowth();
   try {
     const pop = population(db);
@@ -622,14 +708,18 @@ export function accountsAudit(): AccountAudit {
     const counted = users
       .filter((u) => countedIds.has(u.id))
       .slice(0, 100)
-      .map((u) => ({
-        createdDay: u.created_at.slice(0, 10),
-        plan: u.plan ?? "free",
-        macLinked: !!u.install_id,
-        activeDays: dayBy.get(u.id)?.n ?? 0,
-        lastActiveDay: dayBy.get(u.id)?.last ?? null,
-        reached: ms.filter((m) => m.user_id === u.id).map((m) => m.kind),
-      }));
+      .map((u) => {
+        const reached = ms.filter((m) => m.user_id === u.id).map((m) => m.kind);
+        return {
+          createdDay: u.created_at.slice(0, 10),
+          plan: u.plan ?? "free",
+          macLinked: !!u.install_id,
+          activeDays: dayBy.get(u.id)?.n ?? 0,
+          lastActiveDay: dayBy.get(u.id)?.last ?? null,
+          reached,
+          stuck: diagnoseAccount(u.id, u.plan ?? "free", reached),
+        };
+      });
     return { totals, counted };
   } finally {
     db.close();

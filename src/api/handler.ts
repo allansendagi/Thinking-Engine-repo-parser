@@ -1181,14 +1181,17 @@ export function createRequestHandler(
       }
 
       if (req.method === "POST" && pathname === "/v1/continue") {
-        let body: { topic?: string; ideaId?: string };
+        let body: { topic?: string; ideaId?: string; intent?: string };
         try {
-          body = (await req.json()) as { topic?: string; ideaId?: string };
+          body = (await req.json()) as { topic?: string; ideaId?: string; intent?: string };
         } catch {
           return error(400, "Invalid JSON body");
         }
         if (!body.topic && !body.ideaId)
           return error(400, "topic or ideaId is required");
+        // The Mac also calls this when an idea is merely opened (to show its structure), so only a
+        // call that says it is handing the idea to an AI tool counts as a Continue.
+        if (body.intent === "handoff") noteMilestone(userId, "first_continue");
         // Returns { text, packet, tier }. `text` is the paste-ready render with a CONTINUE_TOKEN
         // where the "Continue from here" line goes -- a client fills it with packet.suggestedNext
         // or the user's edit (see resolveContinueToken) so the field stays editable offline.

@@ -8,6 +8,7 @@ import type { CognitiveEventType, IdeaNode } from "../types";
 import { chooseMeaningModel, consolidate, meaningWeightFor, nativeIsSufficient, type ConsolidatedIdea, type MiningThought } from "./consolidate";
 import { loadCorrections, type LearnedCorrections } from "./corrections";
 import { hasV1Backup, materializeV2, restoreV1, servesV2 } from "./serve";
+import { noteMilestone } from "../api/growth";
 import { consolidateOffThread } from "./offThread";
 import { registryBudget, tidyAccount } from "./tidy";
 import { openRegistry } from "../api/auth";
@@ -232,6 +233,8 @@ export function syncServing(userId: string, db: Database, ideas: ConsolidatedIde
   if (servesV2(userId)) {
     const r = materializeV2(db, ideas);
     console.log(`[Thread] serving v2 for ${userId}: ${r.served} ideas (${r.sparks} of them sparks)`);
+    // Ideas form here, in the background, as often as they do during a capture.
+    if (r.served > 0) noteMilestone(userId, "first_idea");
   } else if (hasV1Backup(db) && restoreV1(db)) {
     console.log(`[Thread] v2 switched off for ${userId}: v1 ideas restored`);
   }

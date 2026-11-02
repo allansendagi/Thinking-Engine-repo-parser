@@ -958,6 +958,24 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
       expect(cp.packet.suggestedNext.length).toBeGreaterThan(0);
       // The endpoint hands back the render with the token still in place; the client fills it.
       expect(cp.text).toContain("{{CONTINUE_FROM_HERE}}");
+
+      // Opening an idea fetches this too (the Mac shows its structure), so only a call that says
+      // it is handing the idea to an AI tool counts as a Continue.
+      const { openRegistry } = await import("./auth");
+      const continued = () => {
+        const reg = openRegistry();
+        try {
+          return !!reg.query("SELECT 1 FROM milestones WHERE user_id = ? AND kind = 'first_continue'").get(userId);
+        } finally {
+          reg.close();
+        }
+      };
+      expect(continued()).toBe(false);
+      const handoff = await handler(
+        new Request("http://x/v1/continue", { method: "POST", headers: authHeader, body: JSON.stringify({ ideaId: "idea_0", intent: "handoff" }) }),
+      );
+      expect(handoff.status).toBe(200);
+      expect(continued()).toBe(true);
       expect(cp.text).not.toContain(cp.packet.suggestedNext);
 
       const missing = await handler(

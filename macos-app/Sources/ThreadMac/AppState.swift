@@ -2039,7 +2039,7 @@ final class AppState: ObservableObject {
         continuationEngine = .none
 
         do {
-            let r = try await client.continueIdea(ideaId: trace.idea.id)
+            let r = try await client.continueIdea(ideaId: trace.idea.id, handoff: true)
             continuationPacket = r.packet
             continuationText = r.text
             nextStepDraft = OnDeviceModel.looksUnusable(r.packet.suggestedNext) ? Self.safeNextStep : r.packet.suggestedNext

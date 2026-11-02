@@ -295,8 +295,12 @@ final class APIClient {
     }
 
     /// Build the continuation packet for one specific idea (exact id -- what the app always has).
-    func continueIdea(ideaId: String) async throws -> ContinueResponse {
-        let body = try JSONEncoder().encode(["ideaId": ideaId])
+    /// `handoff` says the person is handing the idea to an AI tool now -- the only call that counts
+    /// as a Continue (opening an idea fetches the same packet to show its structure).
+    func continueIdea(ideaId: String, handoff: Bool = false) async throws -> ContinueResponse {
+        var fields = ["ideaId": ideaId]
+        if handoff { fields["intent"] = "handoff" }
+        let body = try JSONEncoder().encode(fields)
         return try await request("/v1/continue", method: "POST", body: body)
     }
 
