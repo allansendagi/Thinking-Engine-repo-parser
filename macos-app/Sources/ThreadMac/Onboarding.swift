@@ -40,6 +40,7 @@ extension AppState {
     /// there (signed-in session, no export email), importing it in minutes. The pairing window is
     /// held open so an extension installed a moment ago connects on its own first.
     func recoverViaBrowser(_ kind: BackfillKind) {
+        guard readyToRecover(.browser(kind)) else { return }
         noteRecoveryStarted()
         openPairingWindow(seconds: 300)
         let url = kind == .chatgpt

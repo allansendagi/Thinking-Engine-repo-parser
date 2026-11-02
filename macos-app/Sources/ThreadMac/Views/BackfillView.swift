@@ -19,6 +19,8 @@ struct BackfillView: View {
                 running(p)
             case .finished(let summary, let capped):
                 finished(summary, capped: capped)
+            case .needsEmail(let request):
+                RecoveryEmailStep(request: request)
             case .failed(let msg):
                 VStack(alignment: .leading, spacing: 10) {
                     Text("That import didn't finish").font(.headline)
@@ -291,5 +293,71 @@ struct BackfillView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// Recovery is optional; choosing it is when Thread sets up the account with an email, so what's
+/// recovered is never stranded on one Mac. Email, then the 6-digit code -- and the recovery the
+/// person chose starts on its own. If the email is already on another Thread account, sign in to
+/// that one instead and recover into it.
+private struct RecoveryEmailStep: View {
+    @EnvironmentObject var appState: AppState
+    let request: AppState.RecoveryRequest
+    @State private var signInInstead = false
+
+    private func notNow() {
+        appState.authError = nil
+        appState.dismissBackfillOffer()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(signInInstead ? "Sign in to your account" : "Set up your account").font(.headline)
+                Text(signInInstead
+                     ? "That email already has a Thread account. Sign in and Thread recovers your thinking into it."
+                     : "Thread keeps what it recovers in your account. Add your email so you can sign in on any Mac and never lose it.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if signInInstead {
+                EmailCodeForm(
+                    title: "",
+                    sendCode: { await appState.sendSignInCode(email: $0) },
+                    verify: { email, code in
+                        guard await appState.signIn(email: email, code: code) else { return false }
+                        await appState.continueRecovery(request)
+                        return true
+                    },
+                    prefillEmail: appState.claimEmailInUse ?? CredentialStore.lastKnownEmail ?? "",
+                    cancel: notNow,
+                    autofocus: true
+                )
+            } else {
+                EmailCodeForm(
+                    title: "",
+                    sendCode: { await appState.sendClaimCode(email: $0) },
+                    verify: { email, code in
+                        guard await appState.claimEmail(email: email, code: code) else { return false }
+                        await appState.continueRecovery(request)
+                        return true
+                    },
+                    prefillEmail: CredentialStore.lastKnownEmail ?? "",
+                    cancel: notNow,
+                    autofocus: true
+                )
+                if appState.claimEmailInUse != nil {
+                    Button("Sign In to That Account Instead") {
+                        appState.authError = nil
+                        signInInstead = true
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+        }
+        // A message left over from another sign-in screen must not show up here.
+        .onAppear { appState.authError = nil; appState.claimEmailInUse = nil }
     }
 }
