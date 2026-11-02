@@ -138,41 +138,34 @@ export function remapToExistingIds(
 }
 
 /**
- * Provenance guard: a message id never changes what a thought was taken from.
+ * A person's message is fixed once stored: an id never changes what it says.
  *
- * Messages are stored by id, latest text wins. That is right for a message whose text only grows
- * or is re-sent, but an id that comes back carrying DIFFERENT words -- a legacy client that
- * numbered messages by position, a re-paste under the same conversation id -- used to overwrite
- * the stored text: the new words were never extracted (the id wasn't new), and every thought taken
- * from the old words was left pointing at a message that no longer contains them. On one account
- * 56 of 203 thoughts had lost their source this way.
+ * Messages are stored by id, latest text winning. When an id came back carrying different words (a
+ * client that numbered messages by position, a re-paste under the same conversation id), the new
+ * words overwrote the stored message: they were never extracted, because the id wasn't new, and
+ * every thought taken from the old words was left pointing at a message that no longer said them.
+ * On one account 56 of 203 thoughts had lost their source this way.
  *
- * So when an incoming message reuses a stored id with different text, and some thought's quote
- * (or adopted quote) from that message would no longer be in it, the incoming message gets its own
- * id instead -- derived from the old id and its text, so a resend lands on the same id and dedupes.
- * The stored message and its thoughts stay as they were; the new words are a new message. When
- * every quote survives (the text grew, or nothing was taken from it), nothing changes.
+ * So an incoming message that reuses a stored id with different text is a new message, under an id
+ * derived from the old id and its text (a resend lands on the same id and dedupes) -- the stored
+ * message stays as it was, and the new words are extracted like any new turn. The one exception is
+ * an AI reply whose text only grew (a reply captured mid-stream, then finished): that updates in
+ * place, since the finished reply is the same turn.
  */
-export function protectProvenance(db: Database, conversationId: string, messages: IncomingMessage[]): IncomingMessage[] {
+export function keepMessagesFixed(db: Database, conversationId: string, messages: IncomingMessage[]): IncomingMessage[] {
   const stored = new Map(
-    (db.query("SELECT id, text, text_removed_at FROM canonical_events WHERE conversation_id = ?").all(conversationId) as {
-      id: string; text: string; text_removed_at: string | null;
+    (db.query("SELECT id, role, text, text_removed_at FROM canonical_events WHERE conversation_id = ?").all(conversationId) as {
+      id: string; role: string; text: string; text_removed_at: string | null;
     }[]).map((r) => [r.id, r]),
   );
   if (stored.size === 0) return messages;
-  const quotesFrom = db.prepare(
-    `SELECT evidence_quote AS q FROM cognitive_events WHERE source_event_id = ?1
-     UNION ALL SELECT evidence_quote FROM discarded_events WHERE source_event_id = ?1
-     UNION ALL SELECT adopted_quote FROM cognitive_events WHERE adopted_source_event_id = ?1
-     UNION ALL SELECT adopted_quote FROM discarded_events WHERE adopted_source_event_id = ?1`,
-  );
   return messages.map((m) => {
     const old = stored.get(m.id);
     // A message the person's retention setting emptied is skipped by the writer anyway.
-    if (!old || old.text_removed_at || normText(old.text) === normText(m.text)) return m;
-    const text = m.text.toLowerCase();
-    const quotes = (quotesFrom.all(m.id) as { q: string | null }[]).flatMap((r) => (r.q ? [r.q.toLowerCase()] : []));
-    if (quotes.every((q) => text.includes(q))) return m;
+    if (!old || old.text_removed_at) return m;
+    const was = normText(old.text), now = normText(m.text);
+    if (was === now) return m;
+    if (old.role === "assistant" && m.role === "assistant" && now.startsWith(was)) return m;
     return { ...m, id: `${m.id}~${textHash(m.text).slice(0, 8)}` };
   });
 }
@@ -219,7 +212,7 @@ export async function ingestConversation(
   // tagged committed | provisional (canonicalize.ts / provisionalReason).
   // Content-stable ids: a turn re-sent under a different client id is recognized as the event it
   // already is, not re-extracted. A no-op for a brand-new conversation (nothing stored to match).
-  const messages = protectProvenance(db, input.conversationId, remapToExistingIds(db, input.conversationId, input.messages));
+  const messages = keepMessagesFixed(db, input.conversationId, remapToExistingIds(db, input.conversationId, input.messages));
 
   const obs: RawObservation = {
     conversationId: input.conversationId,

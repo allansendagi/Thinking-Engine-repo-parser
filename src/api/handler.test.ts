@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequestHandler, sanitizeCapture } from "./handler";
 import { FakeProvider } from "../providers/fake";
+import { contentMessageIds } from "../parser/messageId";
 
 let tmpDir: string;
 
@@ -546,7 +547,7 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
             type: "new_idea",
             statement: "Authority needs explicit boundaries.",
             confidence: 0.9,
-            source_event_id: "conv_paste::0",
+            source_event_id: contentMessageIds("conv_paste")("user", "Authority needs explicit boundaries."),
             evidence_quote: "explicit boundaries",
           },
         ]),
@@ -577,7 +578,7 @@ describe("HTTP handler (fetch against the pure handler, no network port)", () =>
     expect(body.ideaCount).toBe(1);
     expect(body.conversationId).toBe("conv_paste");
 
-    // The idea id derives from a paste source id (`conv_paste::0`), so it contains `::` -- a
+    // The idea id derives from a paste source id (`conv_paste::u<hash>`), so it contains `::` -- a
     // strict HTTP client (the Mac app) can only send that percent-encoded. The handler must
     // decode the path segment back before the lookup.
     const state = (await (

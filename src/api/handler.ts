@@ -68,6 +68,7 @@ import { headlineThoughtIds, servesV2 } from "../mining/serve";
 import { buildThinkingMap, scqaHandoff, type ClaimRole } from "../mining/map";
 import { ideaThoughtIds, recordCorrection, recordKeep, recordThoughtReviews, type VerdictOrigin } from "../mining/corrections";
 import { buildLesson, pairKey } from "../taste/lesson";
+import { contentMessageIds } from "../parser/messageId";
 import { tasteReport } from "../taste/taste";
 import { redactDeep, redactSecrets } from "../capture/redact";
 import { parsePastedConversation } from "../import/pasteParser";
@@ -769,8 +770,9 @@ export function createRequestHandler(
 
         const conversationId = body.conversationId ?? `paste_${randomUUID()}`;
         const baseTime = Date.now();
+        const idFor = contentMessageIds(conversationId);
         const messages = parsed.map((m, i) => ({
-          id: `${conversationId}::${i}`,
+          id: idFor(m.role, m.text),
           role: m.role,
           text: m.text,
           // Synthesized, evenly spaced timestamps -- a paste has no real per-message timestamps.
