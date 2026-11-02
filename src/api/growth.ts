@@ -4,6 +4,7 @@ import { analyticsStart, findBursts, launchedSince, notCountedInstall, notCounte
 import { excludedUserIds } from "./revenue";
 import { dbPathForUser } from "../db/tenancy";
 import { FREE_IDEA_CAP } from "./billing";
+import { loadSetupReports, noCaptureReason, type SetupReport } from "./setupReport";
 
 /**
  * Growth: the whole path from a website visit to a paying, returning user, measured first-party.
@@ -608,6 +609,8 @@ export interface AccountAudit {
     reached: Milestone[];
     /** The first step of capture -> idea -> continue this account hasn't reached, and why. */
     stuck: Stuck;
+    /** The Mac's latest setup report (content-free), when its build sends one. */
+    setup: { at: string; report: SetupReport } | null;
   }[];
 }
 
@@ -639,6 +642,11 @@ export function errorCategory(raw: string | null): string {
   if (/rate.?limit|\b429\b|overloaded|\b529\b/i.test(raw)) return "waiting_ai_busy";
   if (/timed? ?out|econn|fetch failed|network|socket|\b50[234]\b/i.test(raw)) return "waiting_ai_unreachable";
   return "waiting_error";
+}
+
+/** "Nothing captured" is refined by the Mac's own setup report (setupReport.ts) into why. */
+export function withSetupReason(stuck: Stuck, setup: { report: SetupReport } | undefined): Stuck {
+  return stuck.why === "no_capture" ? { ...stuck, why: `no_capture:${noCaptureReason(setup)}` } : stuck;
 }
 
 /** Read-only look at one account's database. An account with no database has captured nothing. */
@@ -705,6 +713,7 @@ export function accountsAudit(): AccountAudit {
     const ms = db.query("SELECT user_id, kind FROM milestones").all() as { user_id: string; kind: Milestone }[];
     const days = db.query("SELECT user_id, COUNT(*) AS n, MAX(day) AS last FROM active_days GROUP BY user_id").all() as { user_id: string; n: number; last: string | null }[];
     const dayBy = new Map(days.map((d) => [d.user_id, d]));
+    const setups = loadSetupReports();
     const counted = users
       .filter((u) => countedIds.has(u.id))
       .slice(0, 100)
@@ -717,7 +726,8 @@ export function accountsAudit(): AccountAudit {
           activeDays: dayBy.get(u.id)?.n ?? 0,
           lastActiveDay: dayBy.get(u.id)?.last ?? null,
           reached,
-          stuck: diagnoseAccount(u.id, u.plan ?? "free", reached),
+          stuck: withSetupReason(diagnoseAccount(u.id, u.plan ?? "free", reached), setups.get(u.id)),
+          setup: setups.get(u.id) ?? null,
         };
       });
     return { totals, counted };

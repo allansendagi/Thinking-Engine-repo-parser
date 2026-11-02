@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var shareInbox: ShareInboxWatcher?
     let updater = Updater()
     private let setupNotifier = SetupNotifier()
+    private var setupReporter: SetupReporter?
     /// `thread://` URLs that arrived before the panel existed (cold launch via `open`).
     private var pendingURLs: [URL] = []
 
@@ -164,6 +165,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Tell the user exactly what's blocking setup (permission, account, a broken sensor) via
         // a macOS notification with the literal fix -- so a menu-bar app never leaves them guessing.
         setupNotifier.start()
+
+        // Why nothing has been captured yet, if that's the case: this Mac's setup state (browser
+        // connected, AI apps installed, permissions, blockers), content-free. See SetupReport.
+        let reporter = SetupReporter(appState: appState)
+        reporter.start()
+        setupReporter = reporter
 
         // Continuous capture from Cursor's local store (state.vscdb). Native AX read is dead for
         // Cursor, but its structured local store isn't -- this is the shipped Cursor read path.

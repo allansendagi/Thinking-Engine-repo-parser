@@ -445,6 +445,7 @@ describe("the audit behind the numbers", () => {
     const mine = a.counted.find((c) => c.createdDay === "2026-10-21" && c.plan === "pro");
     expect(mine).toMatchObject({ createdDay: "2026-10-21", plan: "pro", macLinked: false, activeDays: 1, lastActiveDay: "2026-10-21", reached: ["first_capture", "first_idea"] });
     expect(mine!.stuck.step).toBe("capture"); // no account database in this test: nothing captured on disk
+    expect(mine!.stuck.why).toBe("no_capture:no_report"); // and no setup report from its Mac
     expect(JSON.stringify(a)).not.toMatch(/aud_|user_|@/); // no ids, no emails
     expect(a.counted.some((c) => c.createdDay === "2026-10-20")).toBe(false); // the operator isn't listed
   });

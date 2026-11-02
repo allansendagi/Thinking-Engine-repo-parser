@@ -46,7 +46,9 @@ final class SetupNotifier {
         }
     }
 
-    private let deliveredKey = "thread.setup.deliveredBlockers"
+    /// The blockers currently being shown (also read by `SetupReport`).
+    static let deliveredKey = "thread.setup.deliveredBlockers"
+    private var deliveredKey: String { Self.deliveredKey }
 
     func start() {
         // Additive with AmbientNudge's request; harmless if it already granted.

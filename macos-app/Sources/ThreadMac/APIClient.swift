@@ -294,6 +294,12 @@ final class APIClient {
         let _: Empty = try await request("/v1/open-loops/\(Self.pathSegment(id))", method: "PATCH", body: body)
     }
 
+    /// This Mac's setup state (`SetupReport`): content-free, so the account can say why nothing
+    /// has been captured yet.
+    func sendSetupReport(_ body: Data) async throws {
+        _ = try await rawRequest("/v1/setup-report", method: "POST", body: body)
+    }
+
     /// Build the continuation packet for one specific idea (exact id -- what the app always has).
     /// `handoff` says the person is handing the idea to an AI tool now -- the only call that counts
     /// as a Continue (opening an idea fetches the same packet to show its structure).
