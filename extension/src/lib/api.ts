@@ -153,7 +153,7 @@ export function setOpenLoopResolved(id: string, resolved: boolean): Promise<void
 }
 
 export function continueThinking(topic: string): Promise<{ text: string }> {
-  return request("/v1/continue", { method: "POST", body: JSON.stringify({ topic }) });
+  return request("/v1/continue", { method: "POST", body: JSON.stringify({ topic, intent: "handoff" }) });
 }
 
 export interface ContinuePacketResponse {
@@ -171,7 +171,7 @@ export interface ContinuePacketResponse {
  * line was model-written ("pro") or templated ("free").
  */
 export function continueFromIdea(ideaId: string): Promise<ContinuePacketResponse> {
-  return request("/v1/continue", { method: "POST", body: JSON.stringify({ ideaId }) });
+  return request("/v1/continue", { method: "POST", body: JSON.stringify({ ideaId, intent: "handoff" }) });
 }
 
 const CONTINUE_TOKEN = "{{CONTINUE_FROM_HERE}}";

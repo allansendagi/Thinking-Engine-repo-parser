@@ -443,7 +443,8 @@ describe("the audit behind the numbers", () => {
     expect(a.totals.operators - before.operators).toBe(1);
     expect(a.totals.beforeLaunch - before.beforeLaunch).toBe(1);
     const mine = a.counted.find((c) => c.createdDay === "2026-10-21" && c.plan === "pro");
-    expect(mine).toEqual({ createdDay: "2026-10-21", plan: "pro", macLinked: false, activeDays: 1, lastActiveDay: "2026-10-21", reached: ["first_capture", "first_idea"] });
+    expect(mine).toMatchObject({ createdDay: "2026-10-21", plan: "pro", macLinked: false, activeDays: 1, lastActiveDay: "2026-10-21", reached: ["first_capture", "first_idea"] });
+    expect(mine!.stuck.step).toBe("capture"); // no account database in this test: nothing captured on disk
     expect(JSON.stringify(a)).not.toMatch(/aud_|user_|@/); // no ids, no emails
     expect(a.counted.some((c) => c.createdDay === "2026-10-20")).toBe(false); // the operator isn't listed
   });
@@ -483,5 +484,80 @@ describe("the audit behind the numbers", () => {
     const g = growthSummary(30, now);
     expect(g.funnel.opened - b.funnel.opened).toBe(1);
     expect(g.cohorts.reduce((n, c) => n + c.size, 0) - b.cohorts.reduce((n, c) => n + c.size, 0)).toBe(1);
+  });
+});
+
+describe("milestones come from each account's own data", () => {
+  beforeEach(() => { process.env.THREAD_ANALYTICS_START = "2026-01-01T00:00:00.000Z"; });
+  afterEach(() => { delete process.env.THREAD_ANALYTICS_START; });
+
+  const accountDb = async (id: string) => {
+    const { openDb } = await import("../db/client");
+    const { dbPathForUser } = await import("../db/tenancy");
+    return openDb(dbPathForUser(id));
+  };
+  const message = (db: import("bun:sqlite").Database, id: string, at: string) =>
+    db.prepare("INSERT INTO canonical_events (id, conversation_id, source, role, text, created_at, idx, status) VALUES (?, 'c', 'cursor', 'user', 'x', ?, 0, 'committed')").run(id, at);
+  const reachedBy = (id: string) => {
+    const reg = openRegistry();
+    try {
+      return (reg.query("SELECT kind FROM milestones WHERE user_id = ? ORDER BY kind").all(id) as { kind: string }[]).map((r) => r.kind);
+    } finally {
+      reg.close();
+    }
+  };
+
+  test("a first idea that forms in the background (no capture call returned it) is still recorded", async () => {
+    const { reconcileMilestones, RECONCILE_EVERY_MS } = await import("./growth");
+    const id = "user_aaaaaaaaaaaaaaaaaaaaaa01";
+    addUser(id, "2026-10-25T09:00:00Z");
+    const db = await accountDb(id);
+    message(db, "m1", "2026-10-25T09:05:00Z");
+    const t0 = new Date("2026-10-25T10:00:00Z");
+    reconcileMilestones(true, t0);
+    expect(reachedBy(id)).toEqual(["first_capture"]);
+
+    // Later the session goes quiet and its idea forms in the background.
+    db.prepare("INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES ('i1', 'Pricing', 'developing', 'x', ?, ?)").run("2026-10-25T09:05:00Z", "2026-10-25T10:30:00Z");
+    db.close();
+    expect(reconcileMilestones(false, new Date(t0.getTime() + 60_000))).toBe(0); // too soon: throttled
+    reconcileMilestones(false, new Date(t0.getTime() + RECONCILE_EVERY_MS + 1));
+    expect(reachedBy(id)).toEqual(["first_capture", "first_idea"]);
+  });
+
+  test("where each account stopped, and why, in fixed categories with no text from the account", async () => {
+    const { diagnoseAccount, errorCategory } = await import("./growth");
+    const none = "user_aaaaaaaaaaaaaaaaaaaaaa02";
+    expect(diagnoseAccount(none, "free", []).step).toBe("capture");
+
+    const queued = "user_aaaaaaaaaaaaaaaaaaaaaa03";
+    const q = await accountDb(queued);
+    message(q, "m1", "2026-10-25T09:05:00Z");
+    q.prepare("INSERT INTO pending_extraction (event_id, conversation_id, queued_at, attempts, last_error, last_attempt_at) VALUES ('m1', 'c', ?, 1, ?, ?)")
+      .run("2026-10-25T09:05:00Z", '400 {"error":{"message":"Your credit balance is too low to access the Anthropic API."},"request_id":"req_123"}', "2026-10-25T09:06:00Z");
+    q.close();
+    const d = diagnoseAccount(queued, "free", ["first_capture"]);
+    expect([d.step, d.why]).toEqual(["idea", "waiting_ai_billing"]);
+    expect(d.counts).toEqual({ messages: 1, thoughts: 0, setAside: 0, waiting: 1, ideas: 0 });
+    expect(JSON.stringify(d)).not.toMatch(/req_|credit|Anthropic/); // the raw error never leaves the account
+
+    const filtered = "user_aaaaaaaaaaaaaaaaaaaaaa04";
+    const f = await accountDb(filtered);
+    message(f, "m1", "2026-10-25T09:05:00Z");
+    f.prepare("INSERT INTO discarded_events (id, type, statement, confidence, persistence, source_event_id, evidence_quote, gate_reason, gate_version, discarded_at) VALUES ('d1', 'question', 's', 0.9, 'low', 'm1', 'x', 'low', 4, ?)").run("2026-10-25T09:06:00Z");
+    f.close();
+    expect(diagnoseAccount(filtered, "free", ["first_capture"]).why).toBe("all_set_aside");
+
+    const withIdea = "user_aaaaaaaaaaaaaaaaaaaaaa05";
+    const w = await accountDb(withIdea);
+    message(w, "m1", "2026-10-25T09:05:00Z");
+    w.prepare("INSERT INTO idea_nodes (id, title, state, current_formulation, created_at, updated_at) VALUES ('i1', 't', 'developing', 'x', ?, ?)").run("2026-10-25T09:05:00Z", "2026-10-25T09:05:00Z");
+    w.close();
+    expect(diagnoseAccount(withIdea, "free", ["first_capture", "first_idea"]).step).toBe("continue");
+    expect(diagnoseAccount(withIdea, "free", ["first_capture", "first_idea", "first_continue"]).step).toBeNull();
+
+    expect(errorCategory("429 rate_limit_error")).toBe("waiting_ai_busy");
+    expect(errorCategory("fetch failed: ECONNRESET")).toBe("waiting_ai_unreachable");
+    expect(errorCategory(null)).toBe("waiting");
   });
 });
