@@ -40,6 +40,7 @@ import { applyRetention, getRetentionDays, MAX_RETENTION_DAYS, retentionSummary,
 import { storageMode } from "../db/durability";
 import { BURST_WINDOW_MS, downloadWasBurst, openMetrics, appVersionFrom, downloadSummary, forgetActivity, installIdFrom, isAdmin, isBotUserAgent, noteActive, noteInstall, osVersionFrom, recordAccountCreated, recordDownload, usageSummary } from "./metrics";
 import { accountsAudit, activityFeed, forgetMilestones, githubDownloads, growthSummary, noteMilestone, population, settleHistory, sendGaDownload, sourceBucket, visitorKey } from "./growth";
+import { forgetSetupReport, saveSetupReport } from "./setupReport";
 import { gaReport } from "./ga";
 import { backfillBillingFromPaddle, revenueSummary } from "./revenue";
 import { accuracySummary } from "./accuracy";
@@ -685,6 +686,7 @@ export function createRequestHandler(
       const removedAccount = deleteAccountRecords(userId);
       forgetActivity(userId);
       forgetMilestones(userId);
+      forgetSetupReport(userId);
       return json({
         deleted: true,
         data: removedData,
@@ -1170,6 +1172,18 @@ export function createRequestHandler(
       // structurally sound observations and which are degraded. A degraded sensor otherwise
       // fails silently -- every observation parks provisional, no ideas appear, no error. The
       // Mac app reads this to show "some recent thinking couldn't be confidently connected".
+      // The Mac's setup state (setupReport.ts): content-free, latest only, so "opened but never
+      // captured" has a reason.
+      if (req.method === "POST" && pathname === "/v1/setup-report") {
+        let raw: unknown;
+        try {
+          raw = await req.json();
+        } catch {
+          return error(400, "Invalid JSON body");
+        }
+        return json({ ok: true, report: saveSetupReport(userId, raw) });
+      }
+
       if (req.method === "GET" && pathname === "/v1/capture-health") {
         const daysParam = Number(url.searchParams.get("days") ?? "7");
         const windowDays = Number.isFinite(daysParam) && daysParam > 0 && daysParam <= 90 ? daysParam : 7;
