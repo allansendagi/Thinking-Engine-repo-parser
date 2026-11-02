@@ -234,6 +234,13 @@ struct BackfillView: View {
             featuredIdea(f)
         }
 
+        if !capped && !appState.olderHistory.isEmpty {
+            Divider()
+            Text("These came from your recent conversations. Older ones can come in any time.")
+                .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            OlderHistoryRows()
+        }
+
         if capped {
             Divider()
             Text("You've hit the Free plan's 25-idea limit. Pro recovers the rest — upgrade and Thread picks up where it stopped.")
@@ -245,8 +252,12 @@ struct BackfillView: View {
                 Button("Later") { appState.dismissBackfillOffer() }
             }
         } else {
-            Button("Done") { appState.dismissBackfillOffer() }
-                .padding(.top, 2)
+            HStack {
+                Spacer()
+                Button("Done") { appState.dismissBackfillOffer() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 2)
         }
     }
 

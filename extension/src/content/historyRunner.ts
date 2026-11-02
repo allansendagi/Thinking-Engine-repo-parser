@@ -6,6 +6,8 @@ import type { SiteAdapter } from "./common/siteAdapter";
 
 /** The link that starts a sync on arrival -- what Thread for Mac's "Recover my thinking" opens. */
 export const HISTORY_HASH = "#thread-import";
+/** The same, bringing in the older conversations too -- the popup's "Bring in" on them. */
+export const HISTORY_OLDER_HASH = "#thread-import-older";
 
 const RUNNING_KEY = "__threadHistorySyncRunning";
 const PILL_ID = "thread-history-pill";
@@ -16,21 +18,23 @@ const PILL_ID = "thread-history-pill";
  */
 export function attachHistorySync(adapter: SiteAdapter, doc: Document = document): void {
   if (!adapter.history) return;
-  const start = () => void runInPage(adapter, doc);
+  const start = (includeOlder = false) => void runInPage(adapter, doc, includeOlder);
 
-  if (location.hash === HISTORY_HASH) {
+  if (location.hash === HISTORY_HASH || location.hash === HISTORY_OLDER_HASH) {
+    const older = location.hash === HISTORY_OLDER_HASH;
     history.replaceState(null, "", location.pathname + location.search);
-    start();
+    start(older);
   }
   chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-    if ((message as { type?: unknown } | null)?.type !== "thread:history-run") return false;
-    start();
+    const m = message as { type?: unknown; older?: unknown } | null;
+    if (m?.type !== "thread:history-run") return false;
+    start(m.older === true);
     sendResponse({ ok: true });
     return false;
   });
 }
 
-async function runInPage(adapter: SiteAdapter, doc: Document): Promise<void> {
+async function runInPage(adapter: SiteAdapter, doc: Document, includeOlder: boolean): Promise<void> {
   const w = window as unknown as Record<string, unknown>;
   if (w[RUNNING_KEY]) return;
   w[RUNNING_KEY] = true;
@@ -42,6 +46,7 @@ async function runInPage(adapter: SiteAdapter, doc: Document): Promise<void> {
     const result = await runHistorySync({
       reader,
       previouslyComplete: before !== null,
+      includeOlder,
       synced: await getHistorySynced(source),
       async sendBatch(conversations) {
         const msg: ImportBatchMessage = { type: "thread:import-batch", format: reader.format, conversations };
@@ -61,7 +66,10 @@ async function runInPage(adapter: SiteAdapter, doc: Document): Promise<void> {
     });
     if (result.state === "done") {
       const total = Object.keys(await getHistorySynced(source)).length;
-      await setHistoryComplete(source, { at: new Date().toISOString(), conversations: total });
+      // A "check for new" run only lists the newest pages, so it can't count what's older: keep
+      // the earlier count. Bringing in the older ones leaves none.
+      const older = includeOlder ? 0 : before !== null ? (before.older ?? 0) : result.older;
+      await setHistoryComplete(source, { at: new Date().toISOString(), conversations: total, older });
     }
   } finally {
     w[RUNNING_KEY] = false;

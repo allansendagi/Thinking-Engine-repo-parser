@@ -35,7 +35,7 @@ final class RecoveryEmailTests: XCTestCase {
         XCTAssertFalse(app.accountHasEmail)
 
         app.runCursorBackfill()
-        XCTAssertEqual(app.backfill, .needsEmail(.cursor))
+        XCTAssertEqual(app.backfill, .needsEmail(.cursor(.recent)))
         XCTAssertTrue(app.showsBackfillSheet)
         XCTAssertFalse(app.recoveryStarted, "nothing is sent before the account has an email")
 
@@ -47,7 +47,7 @@ final class RecoveryEmailTests: XCTestCase {
         CredentialStore.save(userId: "user_recmail000000000000000001", token: "t", email: "a@b.co")
         let app = AppState()
         XCTAssertTrue(app.accountHasEmail)
-        XCTAssertTrue(app.readyToRecover(.cursor))
+        XCTAssertTrue(app.readyToRecover(.cursor(.recent)))
         if case .needsEmail = app.backfill { XCTFail("asked for an email it already has") }
     }
 }

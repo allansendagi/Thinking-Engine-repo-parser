@@ -147,31 +147,89 @@ enum Backfill {
 
     // MARK: - Running an import
 
-    /// Feed `export` to the backend in batches. `progress` fires after each batch (main queue).
-    /// Returns the final summary. Stops early and returns what it got on a 402 (Free cap hit).
+    /// The conversations a recovery will bring in, newest first, and how many older ones it
+    /// leaves for later (`RecoveryWindow`). Planned once when a run starts and saved with it, so
+    /// a resume continues the same list even if the history changed in between.
+    struct Plan: Equatable {
+        let ids: [String]
+        let olderCount: Int
+    }
+
+    /// A ChatGPT conversation carries `id` (or `conversation_id`); a Claude one `uuid`. One with
+    /// neither keeps its position as its id -- stable for a given file.
+    static func exportConversationId(_ raw: Any, index: Int) -> String {
+        let o = raw as? [String: Any]
+        for k in ["id", "conversation_id", "uuid"] {
+            if let v = o?[k] as? String, !v.isEmpty { return v }
+        }
+        return "index:\(index)"
+    }
+
+    /// When a conversation was last active: ChatGPT gives epoch seconds (`update_time`, else
+    /// `create_time`), Claude ISO dates (`updated_at`, else `created_at`).
+    static func exportConversationDate(_ raw: Any) -> Date? {
+        guard let o = raw as? [String: Any] else { return nil }
+        for k in ["update_time", "create_time"] {
+            if let t = o[k] as? Double, t > 0 { return Date(timeIntervalSince1970: t) }
+            if let t = o[k] as? Int, t > 0 { return Date(timeIntervalSince1970: Double(t)) }
+        }
+        let iso = ISO8601DateFormatter()
+        let isoFrac = ISO8601DateFormatter()
+        isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        for k in ["updated_at", "created_at"] {
+            if let t = o[k] as? String, let d = isoFrac.date(from: t) ?? iso.date(from: t) { return d }
+        }
+        return nil
+    }
+
+    private static func loadConversations(_ export: DetectedExport) throws -> [Any] {
+        let jsonURL = try materializeConversationsJson(export.url)
+        defer { if jsonURL != export.url { try? FileManager.default.removeItem(at: jsonURL.deletingLastPathComponent()) } }
+        guard let data = try? Data(contentsOf: jsonURL) else { throw BackfillError.notReadable }
+        guard let all = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else { throw BackfillError.notAnExport }
+        guard !all.isEmpty else { throw BackfillError.emptyExport }
+        return all
+    }
+
+    /// Pure: which of `all` a recovery of `scope` brings in, newest first.
+    static func plan(conversations all: [Any], scope: RecoveryScope, now: Date) -> Plan {
+        let keyed = all.enumerated().map { (id: exportConversationId($1, index: $0), date: exportConversationDate($1)) }
+        let ordered = RecoveryWindow.ordered(keyed, date: { $0.date }, key: { $0.id })
+        let (recent, older) = RecoveryWindow.split(ordered, date: { $0.date }, now: now)
+        return scope == .recent
+            ? Plan(ids: recent.map(\.id), olderCount: older.count)
+            : Plan(ids: older.map(\.id), olderCount: 0)
+    }
+
+    static func plan(_ export: DetectedExport, scope: RecoveryScope, now: Date = Date()) throws -> Plan {
+        plan(conversations: try loadConversations(export), scope: scope, now: now)
+    }
+
+    /// Feed the planned conversations of `export` to the backend, in plan order: a small first
+    /// batch so the first ideas land within a minute, then `batchSize` at a time. `progress` fires
+    /// after each batch. Stops early and returns what it got on a 402 (Free cap hit).
     ///
-    /// `startingAt` resumes a run that was interrupted: the first N conversations are skipped
-    /// entirely (no request). Re-sending a batch that was already imported is cheap and correct --
-    /// `importIntoDb` dedupes on canonical event id -- so an approximate resume point is safe.
+    /// `startingAt` resumes an interrupted run: the first N planned conversations are skipped.
+    /// Re-sending one already imported is cheap and correct -- `importIntoDb` dedupes on
+    /// canonical event id.
     static func run(
         _ export: DetectedExport,
+        ids: [String],
         client: APIClient,
         progress: @escaping (BackfillProgress) -> Void,
         startingAt: Int = 0
     ) async throws -> (summary: ImportSummary, cappedAt: Int?) {
-        let jsonURL = try materializeConversationsJson(export.url)
-        defer { if jsonURL != export.url { try? FileManager.default.removeItem(at: jsonURL.deletingLastPathComponent()) } }
-
-        guard let data = try? Data(contentsOf: jsonURL) else { throw BackfillError.notReadable }
-        guard let all = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else { throw BackfillError.notAnExport }
-        guard !all.isEmpty else { throw BackfillError.emptyExport }
-
-        var index = max(0, min(startingAt, all.count))
-        var done = index
+        let all = try loadConversations(export)
+        var byId: [String: Any] = [:]
+        for (i, c) in all.enumerated() { byId[exportConversationId(c, index: i)] = c }
+        let planned = ids.compactMap { byId[$0] }
+        guard !planned.isEmpty else { throw BackfillError.emptyExport }
+        let start = max(0, min(startingAt, planned.count))
+        var done = start
         var latest = ImportSummary(newCanonicalEvents: 0, newCognitiveEvents: 0, rejectedExtractions: 0, ideaCount: 0)
-
-        while index < all.count {
-            let batch = Array(all[index ..< min(index + batchSize, all.count)])
+        let ranges = RecoveryWindow.batches(count: planned.count - start, size: batchSize, first: start == 0 ? RecoveryWindow.firstBatch : batchSize)
+        for r in ranges {
+            let batch = Array(planned[(start + r.lowerBound) ..< (start + r.upperBound)])
             do {
                 let s = try await client.importBatch(format: export.kind.apiFormat, conversations: batch)
                 latest = ImportSummary(
@@ -184,33 +242,40 @@ enum Backfill {
                 return (latest, done)
             }
             done += batch.count
-            index += batchSize
-            let snapshot = BackfillProgress(conversationsDone: done, conversationsTotal: all.count, ideaCount: latest.ideaCount)
+            let snapshot = BackfillProgress(conversationsDone: done, conversationsTotal: planned.count, ideaCount: latest.ideaCount)
             await MainActor.run { progress(snapshot) }
         }
         return (latest, nil)
     }
 
-    /// Cursor keeps its history in a local `state.vscdb`, so its backfill needs no export -- read
-    /// it and send each conversation to `/v1/conversations` (the backend dedupes on message id).
-    /// Same progress + 402 handling as `run`.
-    ///
-    /// `startingAt` resumes an interrupted run. `readConversations()` returns oldest-first by
-    /// `lastUpdatedAt` (composerId tie-break), so the sequence is stable across launches and
-    /// skipping the first N lands in the same place.
+    /// Cursor's plan: the same rule over its local history (`CursorBackfill.readConversations`).
+    static func planCursor(scope: RecoveryScope, now: Date = Date()) -> Plan {
+        let convs = CursorBackfill.readConversations()
+        let ordered = RecoveryWindow.ordered(convs, date: { $0.lastUpdatedAt }, key: { $0.composerId })
+        let (recent, older) = RecoveryWindow.split(ordered, date: { $0.lastUpdatedAt }, now: now)
+        return scope == .recent
+            ? Plan(ids: recent.map(\.composerId), olderCount: older.count)
+            : Plan(ids: older.map(\.composerId), olderCount: 0)
+    }
+
+    /// Cursor keeps its history in a local `state.vscdb`, so its recovery needs no export -- read
+    /// it and send each planned conversation to `/v1/conversations` (the backend dedupes on
+    /// message id), newest first. Same progress + 402 handling as `run`.
     static func runCursor(
+        ids: [String],
         client: APIClient,
         progress: @escaping (BackfillProgress) -> Void,
         startingAt: Int = 0
     ) async throws -> (summary: ImportSummary, cappedAt: Int?) {
-        let convs = CursorBackfill.readConversations()
+        let byId = Dictionary(CursorBackfill.readConversations().map { ($0.composerId, $0) }, uniquingKeysWith: { a, _ in a })
+        let convs = ids.compactMap { byId[$0] }
         guard !convs.isEmpty else { throw BackfillError.emptyExport }
 
         var done = max(0, min(startingAt, convs.count))
         var lastIdeaCount = 0
         for c in convs.dropFirst(done) {
             // Real bubble ids + real per-turn timestamps from the local store -- so a message
-            // dedupes identically whether it arrived via this backfill or a later live read.
+            // dedupes identically whether it arrived via this recovery or a later live read.
             let messages = c.messages.map {
                 (id: $0.bubbleId, role: $0.role, text: $0.text, createdAt: $0.createdAt)
             }

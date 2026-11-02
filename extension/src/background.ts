@@ -383,7 +383,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   }
 
   if (isHistoryStartMessage(message)) {
-    startHistorySync(message.source)
+    startHistorySync(message.source, message.older === true)
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ ok: false, error: String(err) }));
     return true;
@@ -423,19 +423,19 @@ const HISTORY_SITES: Record<"chatgpt" | "claude", { match: string[]; open: strin
 };
 
 /** Run history sync in an open tab of that site, or open one (the `#thread-import` link starts it). */
-async function startHistorySync(source: "chatgpt" | "claude"): Promise<void> {
+async function startHistorySync(source: "chatgpt" | "claude", older = false): Promise<void> {
   const site = HISTORY_SITES[source];
   const [tab] = await chrome.tabs.query({ url: site.match });
   if (tab?.id !== undefined) {
     try {
-      await chrome.tabs.sendMessage(tab.id, { type: "thread:history-run" });
+      await chrome.tabs.sendMessage(tab.id, { type: "thread:history-run", older });
       await chrome.tabs.update(tab.id, { active: true });
       return;
     } catch {
       // the tab predates the content script (or is mid-navigation) -- fall through and open fresh
     }
   }
-  await chrome.tabs.create({ url: `${site.open}#thread-import`, active: true });
+  await chrome.tabs.create({ url: `${site.open}${older ? "#thread-import-older" : "#thread-import"}`, active: true });
 }
 
 function isImportBatchMessage(message: unknown): message is ImportBatchMessage {
@@ -454,7 +454,7 @@ function isHistoryProgressMessage(
     typeof m.source === "string" && typeof m.status === "object" && m.status !== null;
 }
 
-function isHistoryStartMessage(message: unknown): message is { type: "thread:history-start"; source: "chatgpt" | "claude" } {
+function isHistoryStartMessage(message: unknown): message is { type: "thread:history-start"; source: "chatgpt" | "claude"; older?: boolean } {
   const m = message as { type?: unknown; source?: unknown } | null;
   return typeof m === "object" && m !== null && m.type === "thread:history-start" &&
     (m.source === "chatgpt" || m.source === "claude");

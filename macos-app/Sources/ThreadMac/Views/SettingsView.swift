@@ -44,6 +44,15 @@ struct SettingsView: View {
         accountSection
         GeneralSection()
         CaptureSection()
+        if !appState.olderHistory.isEmpty {
+            Section {
+                OlderHistoryRows()
+            } header: {
+                Text("Earlier conversations")
+            } footer: {
+                Text("Recover brings in your recent conversations first. These are the ones before that.")
+            }
+        }
         if appState.isPaired { DataSection() }
         AppearanceSection()
         extensionSection

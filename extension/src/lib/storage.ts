@@ -300,6 +300,8 @@ export async function setHistoryStatus(source: string, status: import("./types")
 export interface HistoryComplete {
   at: string;
   conversations: number;
+  /** Older conversations left out of the default recovery (brought in only on request). */
+  older?: number;
 }
 
 export async function getHistoryComplete(source: string): Promise<HistoryComplete | null> {

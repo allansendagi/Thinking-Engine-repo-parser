@@ -67,10 +67,11 @@ final class BackfillTests: XCTestCase {
 
         var last: BackfillProgress?
         let (summary, capped) = try await Backfill.run(
-            export, client: client, progress: { last = $0 }, startingAt: 15
+            export, ids: (0..<40).map { "c\($0)" }, client: client, progress: { last = $0 }, startingAt: 15
         )
 
-        // batchSize is 15: starting at 15 leaves [15..<30] and [30..<40] -- two requests, not four.
+        // A resume uses full batches of 15: starting at 15 leaves [15..<30] and [30..<40] -- two
+        // requests, not four.
         let importCalls = MockURLProtocol.capturedRequests.filter { $0.url?.path == "/v1/import" }
         XCTAssertEqual(importCalls.count, 2)
         XCTAssertNil(capped)
@@ -79,13 +80,32 @@ final class BackfillTests: XCTestCase {
         XCTAssertEqual(last?.conversationsTotal, 40)
     }
 
+    func testAFreshRunSendsASmallFirstBatchThenFullOnesInPlanOrder() async throws {
+        MockURLProtocol.reset()
+        MockURLProtocol.stubs["POST /v1/import"] = .init(
+            status: 200,
+            body: Data(#"{"newCanonicalEvents":0,"newCognitiveEvents":0,"rejectedExtractions":0,"ideaCount":1}"#.utf8)
+        )
+        let export = DetectedExport(url: claudeExport(40), kind: .claude, conversationCount: 40, modified: Date())
+        let client = APIClient(baseURL: "http://x", credentials: ("u", "t"), session: MockURLProtocol.makeSession())
+        // A plan of 22 conversations, newest first (here: reverse id order), from a file of 40.
+        let plan = (18..<40).reversed().map { "c\($0)" }
+        var seen: [BackfillProgress] = []
+        _ = try await Backfill.run(export, ids: plan, client: client, progress: { seen.append($0) })
+
+        // 5 first (first ideas fast), then 15, then the last 2 -- and only the planned 22.
+        XCTAssertEqual(seen.map(\.conversationsDone), [5, 20, 22])
+        XCTAssertEqual(seen.last?.conversationsTotal, 22)
+        XCTAssertEqual(MockURLProtocol.capturedRequests.filter { $0.url?.path == "/v1/import" }.count, 3)
+    }
+
     func testRunWithStartingAtBeyondTheEndDoesNoWork() async throws {
         MockURLProtocol.reset()
         let export = DetectedExport(url: claudeExport(3), kind: .claude, conversationCount: 3, modified: Date())
         let client = APIClient(baseURL: "http://x", credentials: ("u", "t"), session: MockURLProtocol.makeSession())
 
         let (_, capped) = try await Backfill.run(
-            export, client: client, progress: { _ in }, startingAt: 99
+            export, ids: ["c0", "c1", "c2"], client: client, progress: { _ in }, startingAt: 99
         )
         XCTAssertNil(capped)
         XCTAssertTrue(MockURLProtocol.capturedRequests.filter { $0.url?.path == "/v1/import" }.isEmpty)

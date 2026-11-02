@@ -1,8 +1,8 @@
 import type { HistoryReader } from "./structured";
 
 /**
- * "Bring in my history": walk every past conversation the user is signed in to, newest first,
- * and import it in small batches. Minutes instead of the hours a provider's data-export email
+ * "Bring in my history": walk the past conversations the user is signed in to, newest first,
+ * and import the recent ones (`splitRecent`; older ones on request) in small batches. Minutes instead of the hours a provider's data-export email
  * takes -- this is what makes a new user's first recall land on day one.
  *
  * Pure orchestration over injected I/O so it's fully testable (historySync.test.ts):
@@ -29,6 +29,10 @@ export interface SyncDeps {
   batchSize?: number;
   /** Safety valve against an endpoint that ignores paging. */
   maxPages?: number;
+  /** Bring in conversations older than the default window too (`splitRecent`). */
+  includeOlder?: boolean;
+  /** Clock, for tests. */
+  now?: number;
   /**
    * A full import has finished before. Then a run is a check for what's new: listing stops at the
    * first page that is entirely already imported -- provided the list really is newest-first,
@@ -43,8 +47,40 @@ export interface SyncProgress {
   skipped: number;
   failed: number;
   ideaCount: number | null;
+  /** Conversations left for later: older than the default window, not brought in this run. */
+  older: number;
   state: "listing" | "importing" | "done" | "capped" | "stopped" | "error";
   error?: string;
+}
+
+/**
+ * Which conversations a recovery brings in by default -- the same rule as Thread for Mac
+ * (RecoveryWindow.swift): newest first, the last RECOVERY_DAYS days or the newest RECOVERY_MIN
+ * conversations, whichever is more. The rest is "older", brought in only on request. A first
+ * recovery should show what the person is working on now; on the Free plan the 25-idea cap used
+ * to fill with their oldest conversations.
+ */
+export const RECOVERY_DAYS = 90;
+export const RECOVERY_MIN = 100;
+/** The first batch is small so the first ideas land within a minute. */
+export const FIRST_BATCH = 5;
+
+const timeOf = (updatedAt: string): number => {
+  const t = Date.parse(updatedAt);
+  return Number.isFinite(t) ? t : -Infinity;
+};
+
+/** Newest first (stable; undated last, in listing order), then split into default and older. */
+export function splitRecent<T extends { updatedAt: string }>(items: T[], now: number): { recent: T[]; older: T[] } {
+  const ordered = [...items].sort((a, b) => {
+    const x = timeOf(a.updatedAt), y = timeOf(b.updatedAt);
+    return x === y ? 0 : y > x ? 1 : -1;
+  });
+  const cutoff = now - RECOVERY_DAYS * 86_400_000;
+  let inWindow = 0;
+  while (inWindow < ordered.length && timeOf(ordered[inWindow]!.updatedAt) >= cutoff) inWindow++;
+  const n = Math.min(ordered.length, Math.max(inWindow, RECOVERY_MIN));
+  return { recent: ordered.slice(0, n), older: ordered.slice(n) };
 }
 
 const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
@@ -54,12 +90,13 @@ export async function runHistorySync(deps: SyncDeps): Promise<SyncProgress> {
   const delayMs = deps.delayMs ?? 350;
   const batchSize = deps.batchSize ?? 15;
   const maxPages = deps.maxPages ?? 200;
-  const progress: SyncProgress = { found: 0, imported: 0, skipped: 0, failed: 0, ideaCount: null, state: "listing" };
+  const progress: SyncProgress = { found: 0, imported: 0, skipped: 0, failed: 0, ideaCount: null, older: 0, state: "listing" };
   const report = () => deps.onProgress?.({ ...progress });
 
   try {
     // 1. List everything first (cheap), newest first, de-duplicated across pages.
-    const todo: { id: string; updatedAt: string }[] = [];
+    let todo: { id: string; updatedAt: string }[] = [];
+    const listed: { id: string; updatedAt: string }[] = [];
     const seen = new Set<string>();
     let newestFirst = true;
     let previous: string | null = null;
@@ -73,6 +110,7 @@ export async function runHistorySync(deps: SyncDeps): Promise<SyncProgress> {
         previous = c.updatedAt;
         if (seen.has(c.id)) continue;
         seen.add(c.id);
+        listed.push(c);
         fresh++;
         progress.found++;
         if (deps.synced[c.id] === c.updatedAt) progress.skipped++;
@@ -87,7 +125,16 @@ export async function runHistorySync(deps: SyncDeps): Promise<SyncProgress> {
       if (deps.previouslyComplete && newestFirst && allKnown) break;
     }
 
-    // 2. Fetch + import in batches.
+    // 2. What to bring in: the default window (counting what's already in), newest first --
+    //    or everything when asked for the older conversations too.
+    const { recent } = splitRecent(listed, deps.now ?? Date.now());
+    const wanted = deps.includeOlder ? null : new Set(recent.map((c) => c.id));
+    const ordered = splitRecent(todo, deps.now ?? Date.now());
+    const todoNewestFirst = [...ordered.recent, ...ordered.older];
+    todo = wanted ? todoNewestFirst.filter((c) => wanted.has(c.id)) : todoNewestFirst;
+    progress.older = wanted ? todoNewestFirst.length - todo.length : 0;
+
+    // 3. Fetch + import in batches: a small first one, then `batchSize`.
     progress.state = "importing";
     report();
     let batch: unknown[] = [];
@@ -116,7 +163,8 @@ export async function runHistorySync(deps: SyncDeps): Promise<SyncProgress> {
       } catch {
         progress.failed++; // one unreadable conversation never sinks the run
       }
-      if (batch.length >= batchSize && !(await flush())) return finish("capped");
+      const limit = progress.imported === 0 ? Math.min(FIRST_BATCH, batchSize) : batchSize;
+      if (batch.length >= limit && !(await flush())) return finish("capped");
       await sleep(delayMs);
     }
     if (!(await flush())) return finish("capped");
